@@ -1,0 +1,26 @@
+# Build output
+build/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Runtime databases
+*.db
+
+# Local test files
+test/
+
+# Backup files
+*.bak
+*.backup
