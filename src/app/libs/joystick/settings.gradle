@@ -1,0 +1,2 @@
+rootProject.name = 'JoyStick'
+include ':app', ':joysticklibrary'

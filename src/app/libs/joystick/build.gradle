@@ -1,0 +1,60 @@
+// Top-level build file where you can add configuration options common to all sub-projects/modules.
+
+buildscript {
+    repositories {
+        google()
+        mavenCentral()
+    }
+    dependencies {
+        classpath 'com.android.tools.build:gradle:8.2.2'
+
+        // NOTE: Do not place your application dependencies here; they belong
+        // in the individual module build.gradle files
+    }
+}
+
+def parseGitVersion() {
+    def major = 1
+    def minor = 2
+    def patch = 0
+    def postfix = '-UNKNOWN'
+    def hash = ''
+    def output = 'git describe --long --tags --dirty --always'.execute().text.trim()
+    project.logger.info("Ran git describe with the output: {}", output)
+    (output =~ /^v(\d+)\.(\d+)\.(\d+)-(\d+)-(\w+)/).each { match, majorVal, minorVal, patchVal, commitVal, hashVal ->
+        if (output.toLowerCase().endsWith('-dirty')) {
+            patchVal = (patchVal as int + 1) as String
+            postfix = '-DIRTY'
+        } else if(commitVal as int > 0) {
+            patchVal = (patchVal as int + 1) as String
+            postfix = '-SNAPSHOT'
+        } else {
+            postfix = ''
+        }
+
+        major = majorVal as int
+        minor = minorVal as int
+        patch = patchVal as int
+        hash = hashVal
+    }
+    def outputHash = [version: "${major}.${minor}.${patch}${postfix}", hash: hash]
+    project.logger.info("Parsed version: {}", outputHash.version)
+    return outputHash
+}
+
+def versionInfo = parseGitVersion()
+
+version = versionInfo.version
+def root = project
+
+subprojects { Project ch ->
+    ch.version = root.version
+    ch.repositories {
+        google()
+        mavenCentral()
+    }
+}
+
+tasks.register('clean', Delete) {
+    delete rootProject.buildDir
+}

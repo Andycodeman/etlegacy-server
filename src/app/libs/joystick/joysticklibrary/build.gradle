@@ -1,0 +1,85 @@
+plugins {
+    id 'com.android.library'
+    id 'maven-publish'
+}
+
+android {
+    namespace "com.erz.joysticklibrary"
+    compileSdk 33
+
+    defaultConfig {
+        minSdkVersion 26
+        targetSdk 33
+        versionCode 2
+        versionName "1.1"
+    }
+    buildTypes {
+        release {
+            minifyEnabled false
+            proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+        }
+    }
+    publishing {
+        singleVariant("release") {
+            withSourcesJar()
+        }
+    }
+}
+
+publishing {
+    publications {
+        maven(MavenPublication) {
+            groupId = 'com.etlegacy.android'
+            artifactId = 'joystick'
+            version = project.version
+
+            pom {
+                name = 'Android JoyStick library'
+                description = 'Android Library for JoyStick View'
+                url = 'https://github.com/etlegacy/JoyStick'
+                /*
+                developers {
+                    developer {
+                        id = 'johnd'
+                        name = 'John Doe'
+                        email = 'john.doe@etlegacy.com'
+                    }
+                }
+                 */
+                scm {
+                    connection = 'scm:git:git@github.com:etlegacy/JoyStick.git'
+                    url = 'https://github.com/etlegacy/JoyStick.git'
+                }
+            }
+
+            afterEvaluate {
+                from components.release
+            }
+        }
+    }
+
+    repositories {
+        if (System.getenv("GITHUB_ACTOR") != null) {
+            maven {
+                name = "GitHubPackages"
+                url = "https://maven.pkg.github.com/etlegacy/JoyStick"
+                credentials {
+                    username = System.getenv("GITHUB_ACTOR")
+                    password = System.getenv("GITHUB_TOKEN")
+                }
+            }
+        } else {
+            maven {
+                def releasesRepoUrl = layout.buildDirectory.dir('repos/releases')
+                def snapshotsRepoUrl = layout.buildDirectory.dir('repos/snapshots')
+                url = (project.version as String).endsWith("-SNAPSHOT") ? snapshotsRepoUrl : releasesRepoUrl
+            }
+        }
+    }
+}
+
+assemble {
+    doFirst {
+        println("Assembling version: ${project.version}")
+    }
+}
