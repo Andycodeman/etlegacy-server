@@ -8593,6 +8593,7 @@ void UI_Init(int etLegacyClient, int clientVersion)
 {
 	int x;
 	Com_Printf(S_COLOR_MDGREY "Initializing %s ui " S_COLOR_GREEN ETLEGACY_VERSION "\n", MODNAME);
+	Com_Printf(S_COLOR_CYAN "ETMan's Mod v1.0 - Double Jump, Low Gravity, Panzer War!\n");
 
 	UI_RegisterCvars();
 	UI_InitMemory();

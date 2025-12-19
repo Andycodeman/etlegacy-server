@@ -208,7 +208,7 @@ create_mod_pk3() {
 
     local pk3_dir="$OUTPUT_DIR/pk3"
     # zzz_ prefix ensures it loads AFTER legacy_v2.83.2.pk3 (alphabetical order)
-    local pk3_name="zzz_etman.pk3"
+    local pk3_name="zzz_etman_etlegacy.pk3"
 
     mkdir -p "$pk3_dir"
     cd "$pk3_dir"

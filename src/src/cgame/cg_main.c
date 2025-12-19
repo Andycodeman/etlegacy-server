@@ -2136,6 +2136,7 @@ void CG_Init(int serverMessageNum, int serverCommandSequence, int clientNum, qbo
 	//int startat = trap_Milliseconds();
 
 	Com_Printf(S_COLOR_MDGREY "Initializing %s cgame " S_COLOR_GREEN ETLEGACY_VERSION "\n", MODNAME);
+	Com_Printf(S_COLOR_CYAN "ETMan's Mod v1.0 - Double Jump, Low Gravity, Panzer War!\n");
 
 	// clean up the config backup if one exists
 	CG_RestoreProfile();

@@ -57,13 +57,14 @@ fi
 
 # Deploy legacy mod pk3 (from dist or from build)
 echo -e "${YELLOW}Deploying mod pk3s...${NC}"
-# Remove old etman pk3s (both old naming and new zzz_ naming)
+# Remove old etman pk3s (all naming variations)
 rm -f "$LEGACY_DIR/"etman_*.pk3
 rm -f "$LEGACY_DIR/"zzz_etman*.pk3
+rm -f "$LEGACY_DIR/"zzz-etman*.pk3
 # Copy new ones (zzz_ prefix loads AFTER legacy_v2.83.2.pk3)
 if ls "$DIST_DIR/"zzz_etman*.pk3 1>/dev/null 2>&1; then
     cp "$DIST_DIR/"zzz_etman*.pk3 "$LEGACY_DIR/"
-    echo "  - Custom mod pk3 deployed (zzz_etman.pk3)"
+    echo "  - Custom mod pk3 deployed (zzz_etman_etlegacy.pk3)"
 elif ls "$DIST_DIR/"etman_*.pk3 1>/dev/null 2>&1; then
     cp "$DIST_DIR/"etman_*.pk3 "$LEGACY_DIR/"
     echo "  - Custom mod pk3 deployed"
@@ -71,7 +72,7 @@ fi
 
 # IMPORTANT: Do NOT copy built legacy_*.pk3 - it's a "dirty" build that breaks sv_pure!
 # The official legacy_v2.83.2.pk3 must be manually installed and never overwritten.
-# Custom mods go in zzz_etman.pk3 (loads after base, overrides).
+# Custom mods go in zzz_etman_etlegacy.pk3 (loads after base, overrides).
 #
 # if [ -f "$BUILD_DIR/legacy/legacy_"*.pk3 ]; then
 #     cp "$BUILD_DIR/legacy/legacy_"*.pk3 "$LEGACY_DIR/"

@@ -8,9 +8,9 @@ Custom ET:Legacy server build with Lua scripting for gameplay modifications. Suc
 
 ```
 ~/projects/et/etlegacy/
-├── src/                    # ET:Legacy source (git submodule)
+├── src/                    # ET:Legacy source (directly tracked, forked from etlegacy/etlegacy)
 │   ├── easybuild.sh        # Official build script
-│   ├── src/                # C/C++ source code
+│   ├── src/                # C/C++ source code (includes custom jaymod-like modifications)
 │   └── ...
 │
 ├── build/                  # CMake build output (gitignored)
@@ -249,6 +249,12 @@ VPS services: `etserver` (game), `et-monitor` (ntfy notifications)
 3. **Player name empty at connect** - Use `et_ClientBegin` or userinfo fallback
 4. **pk3 overrides loose files** - Delete old pk3s when updating Lua
 5. **dofile() from CWD** - Use `dofile("legacy/lua/file.lua")`
+
+## Git Repository
+
+- **Remote**: `Andycodeman/etlegacy-server.git` (private)
+- **src/**: Directly tracked (was submodule, converted Dec 2024)
+- **Custom C code**: `src/src/game/g_etpanel.c/h`, modifications to `bg_pmove.c`, etc.
 
 ## Resources
 
