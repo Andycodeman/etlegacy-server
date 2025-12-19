@@ -3,31 +3,43 @@
     ETMan's Modded Server
 
     This is the entry point for all custom server functionality.
-    All modules are loaded from here.
+    Modules are loaded and callbacks are routed from here.
+
+    IMPORTANT NOTES:
+    - In Lua, 0 is TRUTHY! Only nil and false are falsy.
+    - ET:Legacy writes files to fs_homepath (~/.etlegacy/), not the server basepath.
+    - Player names may be empty at et_ClientConnect; use et_ClientBegin for reliable names.
 ]]--
 
 -- Module registration
-et.RegisterModname("ETMan Server v1.0.0")
+et.RegisterModname("ETMan Server v1.2.0")
 
--- Configuration
+--[[
+    MODULE LOADING
+]]--
+
+-- ETPanel stats are now handled natively in C (g_etpanel.c)
+-- No Lua module needed - events go directly to the API via fork+curl
+
+--[[
+    CONFIGURATION
+]]--
+
 local config = {
-    -- Web API (for future web control panel)
-    api_enabled = false,
-    api_url = "https://et.coolip.me/api",
-    api_key = "",
-    api_poll_interval = 30000,  -- 30 seconds
-
     -- Feature toggles
     crazy_mode = true,
     panzerfest_enabled = false,  -- TODO: implement
     survival_bonus_enabled = false,  -- TODO: implement
     killstreak_enabled = false,  -- TODO: implement
 
-    -- Debug
-    debug = true
+    -- Debug (set to false for production)
+    debug = false
 }
 
--- Utility functions
+--[[
+    UTILITY FUNCTIONS
+]]--
+
 local function log(msg)
     et.G_Print("[ETMan] " .. msg .. "\n")
 end
@@ -52,12 +64,11 @@ function et_InitGame(levelTime, randomSeed, restart)
         log("^3Crazy mode enabled")
     end
 
-    -- Future: Start web API polling
-    if config.api_enabled then
-        log("^3Web API enabled - polling " .. config.api_url)
-    end
-
     log("^2Initialization complete!")
+end
+
+function et_ShutdownGame(restart)
+    log("^1Server shutting down...")
 end
 
 --[[
@@ -65,9 +76,13 @@ end
 ]]--
 
 function et_ClientConnect(clientNum, firstTime, isBot)
-    local name = et.gentity_get(clientNum, "pers.netname")
+    -- IMPORTANT: In Lua, 0 is truthy! Must compare explicitly.
+    -- isBot is 0 for humans, 1 for bots
 
-    if firstTime and not isBot then
+    -- Welcome message for new human players
+    -- Note: firstTime in Lua can be 0 or 1, not boolean
+    if firstTime == 1 and isBot == 0 then
+        local name = et.gentity_get(clientNum, "pers.netname") or "Player"
         log("^7Player connected: ^3" .. name)
 
         -- Welcome message
@@ -78,13 +93,13 @@ function et_ClientConnect(clientNum, firstTime, isBot)
     return nil  -- Allow connection
 end
 
-function et_ClientDisconnect(clientNum)
-    local name = et.gentity_get(clientNum, "pers.netname")
-    debug("Player disconnected: " .. name)
+function et_ClientBegin(clientNum)
+    -- Player fully spawned into game - name is now reliably set
 end
 
-function et_ClientBegin(clientNum)
-    -- Player fully spawned into game
+function et_ClientDisconnect(clientNum)
+    local name = et.gentity_get(clientNum, "pers.netname") or "Unknown"
+    debug("Player disconnected: " .. name)
 end
 
 function et_ClientSpawn(clientNum, revived, teamChange, restoreHealth)
@@ -96,69 +111,165 @@ end
 ]]--
 
 function et_Obituary(victim, killer, meansOfDeath)
-    -- Player killed
-    -- meansOfDeath is the weapon/method ID
+    -- Stats are now tracked in C (g_etpanel.c)
 
-    if killer >= 0 and killer ~= victim and killer ~= 1022 then
-        -- Valid kill (not suicide, not world)
-        local killerName = et.gentity_get(killer, "pers.netname")
-        local victimName = et.gentity_get(victim, "pers.netname")
-
+    -- Additional logging for debugging
+    if config.debug and killer >= 0 and killer ~= victim and killer ~= 1022 then
+        local killerName = et.gentity_get(killer, "pers.netname") or "Unknown"
+        local victimName = et.gentity_get(victim, "pers.netname") or "Unknown"
         debug(killerName .. " killed " .. victimName .. " (MOD: " .. meansOfDeath .. ")")
-
-        -- Future: Track kills for panzerfest/killstreak
-        -- Future: POST to web API for stats
     end
 end
 
 function et_Print(text, level)
     -- Server console output
-    -- Can intercept and log to web
+    -- Could intercept and log to ETPanel if needed
 end
 
 --[[
-    FRAME PROCESSING
+    INTERMISSION / ROUND END
 ]]--
 
-local lastApiPoll = 0
+function et_IntermissionReady()
+    -- Called when intermission starts
+    debug("Intermission ready")
+end
 
 function et_RunFrame(levelTime)
     -- Called every server frame (~50ms)
-
-    -- Future: Poll web API for commands
-    if config.api_enabled then
-        if levelTime - lastApiPoll > config.api_poll_interval then
-            lastApiPoll = levelTime
-            -- pollWebApi()
-        end
-    end
-
-    -- Future: Update panzerfest timers
-    -- Future: Update survival bonus timers
+    -- Keep this lightweight!
 end
 
 --[[
-    COMMANDS
+    CHAT HANDLING
 ]]--
 
-function et_ClientCommand(clientNum, command)
-    -- Intercept player commands
-    local cmd = et.trap_Argv(0)
+-- Helper to send message to ETPanel via HTTP POST
+local function sendToPanel(eventType, data)
+    local apiUrl = et.trap_Cvar_Get("etpanel_api_url")
+    local apiKey = et.trap_Cvar_Get("etpanel_api_key")
 
+    if apiUrl == "" or apiKey == "" then
+        return false
+    end
+
+    -- Build JSON payload
+    local json = string.format(
+        '{"type":"%s","data":%s}',
+        eventType,
+        data
+    )
+
+    -- Use curl via console command (non-blocking)
+    -- This writes to a file that the panel can read
+    local logFile = "etpanel_messages.log"
+    local timestamp = os.time()
+    local logLine = string.format('[%d] %s: %s\n', timestamp, eventType, data)
+
+    -- Append to log file (panel will tail this)
+    local f = io.open("/home/andy/.etlegacy/legacy/" .. logFile, "a")
+    if f then
+        f:write(logLine)
+        f:close()
+    end
+
+    return true
+end
+
+-- Handle say commands (all chat)
+function et_ClientCommand(clientNum, command)
+    local cmd = et.trap_Argv(0):lower()
+    local name = et.gentity_get(clientNum, "pers.netname") or "Unknown"
+
+    -- Custom commands
     if cmd == "crazymode" then
-        -- Show crazy mode status
         local status = config.crazy_mode and "^2ON" or "^1OFF"
         et.trap_SendServerCommand(clientNum,
             'chat "^3Crazy Mode: ' .. status .. '"')
         return 1  -- Command handled
     end
 
+    if cmd == "etpanel" then
+        local enabled = et.trap_Cvar_Get("etpanel_enabled") == "1"
+        local status = enabled and "^2ENABLED" or "^1DISABLED"
+        et.trap_SendServerCommand(clientNum,
+            'chat "^3ETPanel Integration: ' .. status .. '"')
+        return 1
+    end
+
+    -- Handle /pm command for direct messaging to panel
+    -- Usage: /pm <message> - sends a DM to panel admins
+    if cmd == "pm" or cmd == "panel" then
+        local argc = et.trap_Argc()
+        if argc < 2 then
+            et.trap_SendServerCommand(clientNum,
+                'chat "^3Usage: /pm <message> - Send message to panel admins"')
+            return 1
+        end
+
+        -- Get the full message (all args after command)
+        local msg = ""
+        for i = 1, argc - 1 do
+            if i > 1 then msg = msg .. " " end
+            msg = msg .. et.trap_Argv(i)
+        end
+
+        -- Log to panel message file
+        local data = string.format(
+            '{"slot":%d,"name":"%s","message":"%s"}',
+            clientNum,
+            name:gsub('"', '\\"'),
+            msg:gsub('"', '\\"')
+        )
+        sendToPanel("player_dm", data)
+
+        -- Confirm to player
+        et.trap_SendServerCommand(clientNum,
+            'chat "^3Message sent to panel admins."')
+        log("^3[Panel DM] ^7" .. name .. ": " .. msg)
+
+        return 1
+    end
+
+    -- Handle /r command to reply to last panel DM
+    if cmd == "r" or cmd == "reply" then
+        local argc = et.trap_Argc()
+        if argc < 2 then
+            et.trap_SendServerCommand(clientNum,
+                'chat "^3Usage: /r <message> - Reply to panel"')
+            return 1
+        end
+
+        local msg = ""
+        for i = 1, argc - 1 do
+            if i > 1 then msg = msg .. " " end
+            msg = msg .. et.trap_Argv(i)
+        end
+
+        local data = string.format(
+            '{"slot":%d,"name":"%s","message":"%s","isReply":true}',
+            clientNum,
+            name:gsub('"', '\\"'),
+            msg:gsub('"', '\\"')
+        )
+        sendToPanel("player_dm", data)
+
+        et.trap_SendServerCommand(clientNum,
+            'chat "^3Reply sent to panel."')
+        log("^3[Panel Reply] ^7" .. name .. ": " .. msg)
+
+        return 1
+    end
+
     return 0  -- Let engine handle
 end
 
+--[[
+    CONSOLE COMMANDS
+]]--
+
 function et_ConsoleCommand()
-    -- Intercept server console commands
-    local cmd = et.trap_Argv(0)
+    local cmd = et.trap_Argv(0):lower()
 
     if cmd == "lua_reload" then
         log("^3Reloading Lua scripts on next map...")
@@ -169,35 +280,14 @@ function et_ConsoleCommand()
 end
 
 --[[
-    WEB API FUNCTIONS (Future)
+    WIN CONDITIONS / ROUND END
 ]]--
 
---[[
-local function pollWebApi()
-    if not config.api_enabled then return end
-
-    et.HTTPGet(config.api_url .. "/commands?key=" .. config.api_key,
-        function(response)
-            -- Parse JSON response and execute commands
-            -- local cmds = json.decode(response)
-            -- for _, cmd in ipairs(cmds) do
-            --     executeCommand(cmd)
-            -- end
-        end
-    )
+-- Called when a team wins the round (objective mode)
+function et_WinSide(side)
+    -- side: 0 = draw, 1 = axis, 2 = allies
+    -- Stats tracked in C (g_etpanel.c)
+    debug("Round ended, winner: " .. side)
 end
-
-local function reportStats(data)
-    if not config.api_enabled then return end
-
-    et.HTTPPost(config.api_url .. "/stats?key=" .. config.api_key,
-        json.encode(data),
-        "application/json",
-        function(response)
-            debug("Stats reported: " .. response)
-        end
-    )
-end
-]]--
 
 log("^2Main Lua module loaded!")

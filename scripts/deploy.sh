@@ -8,7 +8,8 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
-BUILD_DIR="$PROJECT_DIR/build"
+DIST_DIR="$PROJECT_DIR/dist"
+BUILD_DIR="$PROJECT_DIR/build/linux64-server"
 SERVER_DIR="$HOME/etlegacy"
 LEGACY_DIR="$SERVER_DIR/legacy"
 
@@ -23,8 +24,8 @@ echo -e "${GREEN}  ET:Legacy Server Deploy${NC}"
 echo -e "${GREEN}================================${NC}"
 
 # Check if build exists
-if [ ! -d "$BUILD_DIR" ]; then
-    echo -e "${RED}Build directory not found. Run ./scripts/build.sh first.${NC}"
+if [ ! -d "$DIST_DIR/server" ] && [ ! -d "$BUILD_DIR" ]; then
+    echo -e "${RED}Build not found. Run ./scripts/build-all.sh first.${NC}"
     exit 1
 fi
 
@@ -34,42 +35,56 @@ mkdir -p "$LEGACY_DIR"
 mkdir -p "$LEGACY_DIR/lua"
 mkdir -p "$SERVER_DIR/omni-bot/et/nav"
 
-# Deploy binaries
-echo -e "${YELLOW}Deploying binaries...${NC}"
-if [ -f "$BUILD_DIR/etlded" ]; then
-    cp "$BUILD_DIR/etlded" "$SERVER_DIR/"
-    echo "  - etlded (server executable)"
+# Deploy server executable
+echo -e "${YELLOW}Deploying server executable...${NC}"
+if [ -f "$DIST_DIR/server/etlded.x86_64" ]; then
+    cp "$DIST_DIR/server/etlded.x86_64" "$SERVER_DIR/"
+    echo "  - etlded.x86_64"
+elif [ -f "$BUILD_DIR/etlded.x86_64" ]; then
+    cp "$BUILD_DIR/etlded.x86_64" "$SERVER_DIR/"
+    echo "  - etlded.x86_64"
 fi
-if [ -f "$BUILD_DIR/etl" ]; then
-    cp "$BUILD_DIR/etl" "$SERVER_DIR/"
-    echo "  - etl (client executable)"
-fi
-
-# Deploy legacy mod files
-echo -e "${YELLOW}Deploying mod files...${NC}"
-for pk3 in "$BUILD_DIR/legacy/"*.pk3; do
-    if [ -f "$pk3" ]; then
-        cp "$pk3" "$LEGACY_DIR/"
-        echo "  - $(basename "$pk3")"
-    fi
-done
 
 # Deploy qagame (server module)
-if [ -f "$BUILD_DIR/legacy/qagame.mp.x86_64.so" ]; then
+echo -e "${YELLOW}Deploying server module...${NC}"
+if [ -f "$DIST_DIR/server/qagame.mp.x86_64.so" ]; then
+    cp "$DIST_DIR/server/qagame.mp.x86_64.so" "$LEGACY_DIR/"
+    echo "  - qagame.mp.x86_64.so"
+elif [ -f "$BUILD_DIR/legacy/qagame.mp.x86_64.so" ]; then
     cp "$BUILD_DIR/legacy/qagame.mp.x86_64.so" "$LEGACY_DIR/"
     echo "  - qagame.mp.x86_64.so"
-elif [ -f "$BUILD_DIR/legacy/qagame.mp.i386.so" ]; then
-    cp "$BUILD_DIR/legacy/qagame.mp.i386.so" "$LEGACY_DIR/"
-    echo "  - qagame.mp.i386.so"
 fi
+
+# Deploy legacy mod pk3 (from dist or from build)
+echo -e "${YELLOW}Deploying mod pk3s...${NC}"
+# Remove old etman pk3s (both old naming and new zzz_ naming)
+rm -f "$LEGACY_DIR/"etman_*.pk3
+rm -f "$LEGACY_DIR/"zzz_etman*.pk3
+# Copy new ones (zzz_ prefix loads AFTER legacy_v2.83.2.pk3)
+if ls "$DIST_DIR/"zzz_etman*.pk3 1>/dev/null 2>&1; then
+    cp "$DIST_DIR/"zzz_etman*.pk3 "$LEGACY_DIR/"
+    echo "  - Custom mod pk3 deployed (zzz_etman.pk3)"
+elif ls "$DIST_DIR/"etman_*.pk3 1>/dev/null 2>&1; then
+    cp "$DIST_DIR/"etman_*.pk3 "$LEGACY_DIR/"
+    echo "  - Custom mod pk3 deployed"
+fi
+
+# IMPORTANT: Do NOT copy built legacy_*.pk3 - it's a "dirty" build that breaks sv_pure!
+# The official legacy_v2.83.2.pk3 must be manually installed and never overwritten.
+# Custom mods go in zzz_etman.pk3 (loads after base, overrides).
+#
+# if [ -f "$BUILD_DIR/legacy/legacy_"*.pk3 ]; then
+#     cp "$BUILD_DIR/legacy/legacy_"*.pk3 "$LEGACY_DIR/"
+#     echo "  - legacy_*.pk3 (base assets)"
+# fi
 
 # Deploy configs from project
 echo -e "${YELLOW}Deploying configs...${NC}"
 if [ -d "$PROJECT_DIR/configs" ]; then
-    cp -r "$PROJECT_DIR/configs/"*.cfg "$LEGACY_DIR/" 2>/dev/null || true
+    cp "$PROJECT_DIR/configs/"*.cfg "$LEGACY_DIR/" 2>/dev/null || true
     if [ -d "$PROJECT_DIR/configs/mapconfigs" ]; then
         mkdir -p "$LEGACY_DIR/mapconfigs"
-        cp -r "$PROJECT_DIR/configs/mapconfigs/"*.cfg "$LEGACY_DIR/mapconfigs/" 2>/dev/null || true
+        cp "$PROJECT_DIR/configs/mapconfigs/"*.cfg "$LEGACY_DIR/mapconfigs/" 2>/dev/null || true
     fi
     echo "  - Config files synced"
 fi
@@ -77,7 +92,7 @@ fi
 # Deploy Lua scripts
 echo -e "${YELLOW}Deploying Lua scripts...${NC}"
 if [ -d "$PROJECT_DIR/lua" ] && [ "$(ls -A "$PROJECT_DIR/lua" 2>/dev/null)" ]; then
-    cp -r "$PROJECT_DIR/lua/"*.lua "$LEGACY_DIR/lua/" 2>/dev/null || true
+    cp "$PROJECT_DIR/lua/"*.lua "$LEGACY_DIR/lua/" 2>/dev/null || true
     echo "  - Lua scripts synced"
 fi
 
@@ -112,4 +127,4 @@ echo ""
 echo "Server directory: $SERVER_DIR"
 echo ""
 echo "To start server:"
-echo "  cd $SERVER_DIR && ./etlded +set fs_game legacy +exec server.cfg"
+echo "  cd $SERVER_DIR && ./etlded.x86_64 +set fs_game legacy +exec server.cfg"

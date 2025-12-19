@@ -1,13 +1,16 @@
 #!/bin/bash
 #
 # ET:Legacy Server - Publish Script
-# Builds, deploys locally, syncs to remote VM, and restarts server
+# Deploys locally, syncs to remote VM, and restarts server
+#
+# This replaces the OLD JayMod server with the NEW ET:Legacy server
 #
 
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
+DIST_DIR="$PROJECT_DIR/dist"
 
 # Remote server details
 REMOTE_HOST="andy@5.78.83.59"
@@ -19,49 +22,118 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m'
 
-echo -e "${GREEN}================================${NC}"
-echo -e "${GREEN}  ET:Legacy Server Publish${NC}"
-echo -e "${GREEN}================================${NC}"
+echo -e "${GREEN}╔══════════════════════════════════════════════════════════════╗${NC}"
+echo -e "${GREEN}║          ET:Legacy Server Publish to VPS                     ║${NC}"
+echo -e "${GREEN}╚══════════════════════════════════════════════════════════════╝${NC}"
 
-# Step 1: Build
-echo -e "${YELLOW}Step 1: Building...${NC}"
-"$SCRIPT_DIR/build.sh"
+# Check if dist exists
+if [ ! -d "$DIST_DIR/server" ]; then
+    echo -e "${RED}Build not found. Run ./scripts/build-all.sh first.${NC}"
+    exit 1
+fi
 
-# Step 2: Deploy locally
-echo -e "${YELLOW}Step 2: Deploying locally...${NC}"
+# Step 1: Deploy locally first
+echo -e "${YELLOW}Step 1: Deploying locally...${NC}"
 "$SCRIPT_DIR/deploy.sh"
-
-# Step 3: Sync to remote
-echo -e "${YELLOW}Step 3: Syncing to remote server...${NC}"
 
 LOCAL_SERVER="$HOME/etlegacy"
 
-# Sync binaries
+# Step 2: Sync server binary
+echo -e "${YELLOW}Step 2: Syncing server binary to VPS...${NC}"
 rsync -avz --progress \
-    "$LOCAL_SERVER/etlded" \
+    "$LOCAL_SERVER/etlded.x86_64" \
     "$REMOTE_HOST:$REMOTE_DIR/"
 
-# Sync legacy mod folder (includes pk3s, configs, lua)
+# Step 3: Sync legacy mod folder (configs, pk3s, lua, qagame)
+# CRITICAL: Never sync legacy_v2.83.2_dirty.pk3 or delete official legacy_v2.83.2.pk3
+#           The official pk3 MUST match client version for sv_pure to work!
+echo -e "${YELLOW}Step 3: Syncing legacy mod folder...${NC}"
 rsync -avz --progress --delete \
     --exclude='*.log' \
     --exclude='*.db' \
     --exclude='profiles/' \
+    --exclude='etpanel_events.json' \
+    --exclude='legacy_v2.83.2.pk3' \
+    --exclude='legacy_v2.83.2_dirty.pk3' \
     "$LOCAL_SERVER/legacy/" \
     "$REMOTE_HOST:$REMOTE_DIR/legacy/"
 
-# Sync omni-bot waypoints
+# Step 4: Sync omni-bot waypoints
+echo -e "${YELLOW}Step 4: Syncing omni-bot waypoints...${NC}"
 rsync -avz --progress \
     "$LOCAL_SERVER/omni-bot/et/nav/" \
-    "$REMOTE_HOST:$REMOTE_DIR/omni-bot/et/nav/"
+    "$REMOTE_HOST:$REMOTE_DIR/omni-bot/et/nav/" 2>/dev/null || echo "  (No waypoints to sync)"
 
-# Step 4: Restart remote server
-echo -e "${YELLOW}Step 4: Restarting remote server...${NC}"
-ssh "$REMOTE_HOST" "sudo systemctl restart etserver || (cd $REMOTE_DIR && ./restart-server.sh)"
+# Step 4b: Sync server-monitor.sh
+echo -e "${YELLOW}Step 4b: Syncing server-monitor.sh...${NC}"
+rsync -avz --progress \
+    "$PROJECT_DIR/scripts/server-monitor.sh" \
+    "$REMOTE_HOST:$REMOTE_DIR/server-monitor.sh"
+ssh "$REMOTE_HOST" "chmod +x $REMOTE_DIR/server-monitor.sh"
+
+# Step 5: Update systemd service file on VPS
+echo -e "${YELLOW}Step 5: Updating etserver.service on VPS...${NC}"
+ssh "$REMOTE_HOST" "cat > /tmp/etserver.service << 'EOF'
+[Unit]
+Description=ET:Legacy Server
+After=network.target
+
+[Service]
+Type=simple
+User=andy
+WorkingDirectory=/home/andy/etlegacy
+ExecStart=/home/andy/etlegacy/etlded.x86_64 +set fs_game legacy +exec server.cfg +set net_port 27960
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+sudo mv /tmp/etserver.service /etc/systemd/system/etserver.service && sudo systemctl daemon-reload"
+
+echo "  - etserver.service updated for ET:Legacy (64-bit)"
+
+# Step 6: Restart server and monitor
+echo -e "${YELLOW}Step 6: Restarting services...${NC}"
+ssh "$REMOTE_HOST" "
+    echo '  Restarting etserver...'
+    sudo systemctl restart etserver
+    sleep 2
+
+    echo '  Restarting et-monitor...'
+    sudo systemctl restart et-monitor 2>/dev/null || echo '    (et-monitor service not found)'
+
+    echo '  Service status:'
+    sudo systemctl status etserver --no-pager -l | head -5
+" || {
+    echo -e "${RED}Service restart may have failed. Check manually.${NC}"
+}
+
+# Verify services are running
+echo -e "${YELLOW}Step 7: Verifying services...${NC}"
+sleep 2
+ssh "$REMOTE_HOST" "
+    if pgrep -f etlded.x86_64 > /dev/null; then
+        echo '  ✓ etserver running'
+    else
+        echo '  ✗ etserver NOT running'
+    fi
+
+    if pgrep -f server-monitor.sh > /dev/null; then
+        echo '  ✓ et-monitor running'
+    else
+        echo '  ✗ et-monitor NOT running'
+    fi
+"
 
 echo ""
-echo -e "${GREEN}================================${NC}"
-echo -e "${GREEN}  Publish Complete!${NC}"
-echo -e "${GREEN}================================${NC}"
+echo -e "${GREEN}╔══════════════════════════════════════════════════════════════╗${NC}"
+echo -e "${GREEN}║                    Publish Complete!                         ║${NC}"
+echo -e "${GREEN}╚══════════════════════════════════════════════════════════════╝${NC}"
 echo ""
 echo "Remote server: $REMOTE_HOST"
 echo "Connect: /connect et.coolip.me:27960"
+echo ""
+echo "Commands:"
+echo "  ssh $REMOTE_HOST 'sudo systemctl status etserver'   # Check status"
+echo "  ssh $REMOTE_HOST 'journalctl -u etserver -f'        # View logs"

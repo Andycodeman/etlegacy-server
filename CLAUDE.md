@@ -236,6 +236,20 @@ tail -f ~/etlegacy/legacy/server.log
 - Verify pk3 checksums match
 - Check firewall: `sudo ufw status`
 
+## ETPanel Integration
+
+Events flow: Lua → `~/.etlegacy/legacy/legacy/etpanel_events.json` → `etpanel-relay.sh` → API
+
+VPS services: `etserver` (game), `et-monitor` (ntfy notifications)
+
+## 🚨 Lua Gotchas
+
+1. **0 is TRUTHY** - Use `if isBot == 1 then` NOT `if isBot then`
+2. **Files write to fs_homepath** - `~/.etlegacy/legacy/`, not server basepath
+3. **Player name empty at connect** - Use `et_ClientBegin` or userinfo fallback
+4. **pk3 overrides loose files** - Delete old pk3s when updating Lua
+5. **dofile() from CWD** - Use `dofile("legacy/lua/file.lua")`
+
 ## Resources
 
 - ET:Legacy GitHub: https://github.com/etlegacy/etlegacy
