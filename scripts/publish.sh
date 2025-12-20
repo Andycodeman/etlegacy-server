@@ -126,6 +126,24 @@ ssh "$REMOTE_HOST" "
     fi
 "
 
+# Step 8: Validate pk3 checksums match across all locations
+echo -e "${YELLOW}Step 8: Validating pk3 checksums...${NC}"
+PK3_NAME="zzz_etman_etlegacy.pk3"
+DIST_MD5=$(md5sum "$DIST_DIR/$PK3_NAME" 2>/dev/null | cut -d' ' -f1)
+LOCAL_MD5=$(md5sum "$LOCAL_SERVER/legacy/$PK3_NAME" 2>/dev/null | cut -d' ' -f1)
+REMOTE_MD5=$(ssh "$REMOTE_HOST" "md5sum $REMOTE_DIR/legacy/$PK3_NAME 2>/dev/null | cut -d' ' -f1")
+
+echo "  Dist:   $DIST_MD5"
+echo "  Local:  $LOCAL_MD5"
+echo "  VPS:    $REMOTE_MD5"
+
+if [ "$DIST_MD5" = "$LOCAL_MD5" ] && [ "$LOCAL_MD5" = "$REMOTE_MD5" ]; then
+    echo -e "  ${GREEN}✓ All pk3 checksums match!${NC}"
+else
+    echo -e "  ${RED}✗ CHECKSUM MISMATCH! Players may get kicked by sv_pure.${NC}"
+    echo -e "  ${RED}  Run this script again or manually sync the pk3 files.${NC}"
+fi
+
 echo ""
 echo -e "${GREEN}╔══════════════════════════════════════════════════════════════╗${NC}"
 echo -e "${GREEN}║                    Publish Complete!                         ║${NC}"

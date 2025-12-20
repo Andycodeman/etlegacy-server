@@ -7,8 +7,8 @@
 #   - Linux 64-bit server (etlded.x86_64)
 #   - Linux 32-bit client modules (cgame.mp.i386.so, ui.mp.i386.so)
 #   - Linux 64-bit client modules (cgame.mp.x86_64.so, ui.mp.x86_64.so)
-#   - Windows 32-bit client modules (cgame.mp.i386.dll, ui.mp.i386.dll)
-#   - Windows 64-bit client modules (cgame.mp.x86_64.dll, ui.mp.x86_64.dll)
+#   - Windows 32-bit client modules (cgame_mp_x86.dll, ui_mp_x86.dll)
+#   - Windows 64-bit client modules (cgame_mp_x64.dll, ui_mp_x64.dll)
 #
 # Usage:
 #   ./build-all.sh              # Build all targets
@@ -172,9 +172,14 @@ build_mod_windows() {
         processor="x86_64"
     fi
 
+    # For 64-bit, explicitly disable CROSS_COMPILE32
+    local cross32_flag="OFF"
+    [ "$arch" = "32" ] && cross32_flag="ON"
+
     cmake "$SRC_DIR" \
         -DCMAKE_BUILD_TYPE=Release \
         -DCMAKE_TOOLCHAIN_FILE="$toolchain" \
+        -DCROSS_COMPILE32=$cross32_flag \
         -DBUILD_SERVER=OFF \
         -DBUILD_CLIENT=OFF \
         -DBUILD_MOD=ON \
@@ -188,15 +193,16 @@ build_mod_windows() {
 
     make -j$(nproc)
 
-    # Copy output (ET:Legacy uses _mp_x86 naming for Windows)
+    # Copy output - Windows uses _mp_x86 and _mp_x64 naming (NOT .mp.i386 like Linux!)
     mkdir -p "$OUTPUT_DIR/mod/windows"
     if [ "$arch" = "32" ]; then
-        # Rename to match expected pk3 naming convention
-        [ -f legacy/cgame_mp_x86.dll ] && cp -v legacy/cgame_mp_x86.dll "$OUTPUT_DIR/mod/windows/cgame.mp.i386.dll"
-        [ -f legacy/ui_mp_x86.dll ] && cp -v legacy/ui_mp_x86.dll "$OUTPUT_DIR/mod/windows/ui.mp.i386.dll"
+        # Windows 32-bit: cgame_mp_x86.dll, ui_mp_x86.dll
+        [ -f legacy/cgame_mp_x86.dll ] && cp -v legacy/cgame_mp_x86.dll "$OUTPUT_DIR/mod/windows/"
+        [ -f legacy/ui_mp_x86.dll ] && cp -v legacy/ui_mp_x86.dll "$OUTPUT_DIR/mod/windows/"
     else
-        [ -f legacy/cgame_mp_x86.dll ] && cp -v legacy/cgame_mp_x86.dll "$OUTPUT_DIR/mod/windows/cgame.mp.x86_64.dll"
-        [ -f legacy/ui_mp_x86.dll ] && cp -v legacy/ui_mp_x86.dll "$OUTPUT_DIR/mod/windows/ui.mp.x86_64.dll"
+        # Windows 64-bit: cgame_mp_x64.dll, ui_mp_x64.dll
+        [ -f legacy/cgame_mp_x64.dll ] && cp -v legacy/cgame_mp_x64.dll "$OUTPUT_DIR/mod/windows/"
+        [ -f legacy/ui_mp_x64.dll ] && cp -v legacy/ui_mp_x64.dll "$OUTPUT_DIR/mod/windows/"
     fi
 
     log_info "Windows ${arch}-bit client modules built successfully!"
@@ -222,11 +228,11 @@ create_mod_pk3() {
     [ -f "$OUTPUT_DIR/mod/linux/ui.mp.i386.so" ] && cp "$OUTPUT_DIR/mod/linux/ui.mp.i386.so" .
     [ -f "$OUTPUT_DIR/mod/linux/ui.mp.x86_64.so" ] && cp "$OUTPUT_DIR/mod/linux/ui.mp.x86_64.so" .
 
-    # Windows modules
-    [ -f "$OUTPUT_DIR/mod/windows/cgame.mp.i386.dll" ] && cp "$OUTPUT_DIR/mod/windows/cgame.mp.i386.dll" .
-    [ -f "$OUTPUT_DIR/mod/windows/cgame.mp.x86_64.dll" ] && cp "$OUTPUT_DIR/mod/windows/cgame.mp.x86_64.dll" .
-    [ -f "$OUTPUT_DIR/mod/windows/ui.mp.i386.dll" ] && cp "$OUTPUT_DIR/mod/windows/ui.mp.i386.dll" .
-    [ -f "$OUTPUT_DIR/mod/windows/ui.mp.x86_64.dll" ] && cp "$OUTPUT_DIR/mod/windows/ui.mp.x86_64.dll" .
+    # Windows modules - use correct _mp_x86/_mp_x64 naming convention
+    [ -f "$OUTPUT_DIR/mod/windows/cgame_mp_x86.dll" ] && cp "$OUTPUT_DIR/mod/windows/cgame_mp_x86.dll" .
+    [ -f "$OUTPUT_DIR/mod/windows/cgame_mp_x64.dll" ] && cp "$OUTPUT_DIR/mod/windows/cgame_mp_x64.dll" .
+    [ -f "$OUTPUT_DIR/mod/windows/ui_mp_x86.dll" ] && cp "$OUTPUT_DIR/mod/windows/ui_mp_x86.dll" .
+    [ -f "$OUTPUT_DIR/mod/windows/ui_mp_x64.dll" ] && cp "$OUTPUT_DIR/mod/windows/ui_mp_x64.dll" .
 
     # Copy Lua scripts
     if [ -d "$PROJECT_DIR/lua" ]; then
@@ -239,6 +245,10 @@ create_mod_pk3() {
     fi
 
     # Create pk3 with modules at root level
+    # List what we're packaging
+    log_info "Packaging the following files:"
+    ls -la *.so *.dll 2>/dev/null || true
+
     rm -f "$OUTPUT_DIR/$pk3_name"
     zip -r "$OUTPUT_DIR/$pk3_name" *.so *.dll lua/ weapons/ 2>/dev/null || zip -r "$OUTPUT_DIR/$pk3_name" *.so *.dll lua/ 2>/dev/null || zip -r "$OUTPUT_DIR/$pk3_name" *.so *.dll
 

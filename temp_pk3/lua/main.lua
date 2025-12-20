@@ -135,18 +135,9 @@ function et_IntermissionReady()
     debug("Intermission ready")
 end
 
--- Track level time for ETPanel (updated every second, not every frame)
-local lastLevelTimeUpdate = 0
-
 function et_RunFrame(levelTime)
     -- Called every server frame (~50ms)
     -- Keep this lightweight!
-
-    -- Update etpanel_leveltime CVAR once per second for panel to read
-    if levelTime - lastLevelTimeUpdate >= 1000 then
-        et.trap_Cvar_Set("etpanel_leveltime", tostring(levelTime))
-        lastLevelTimeUpdate = levelTime
-    end
 end
 
 --[[
