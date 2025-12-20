@@ -4,6 +4,30 @@
 
 Custom ET:Legacy server build with Lua scripting for gameplay modifications. Successor to the JayMod-based server, using modern 64-bit architecture and Lua for extensibility.
 
+## Recent Fixes (Dec 2024)
+
+### Windows Client pk3 Checksum Fix
+**Problem:** Windows clients couldn't connect - got kicked with sv_pure checksum mismatch.
+
+**Root Cause:** The build script was naming Windows DLLs incorrectly:
+- Wrong: `cgame.mp.i386.dll`, `cgame.mp.x86_64.dll` (Linux-style naming)
+- Correct: `cgame_mp_x86.dll`, `cgame_mp_x64.dll` (Windows convention)
+
+Windows clients couldn't find the custom modules in the pk3 (wrong filename), so they fell back to official `legacy_v2.83.2.pk3` modules which had different checksums → sv_pure mismatch → kicked.
+
+**Fix:** Updated `scripts/build-all.sh` to use correct Windows naming convention.
+
+**Key insight:** ET:Legacy uses different naming conventions per platform:
+- Linux: `cgame.mp.i386.so`, `cgame.mp.x86_64.so` (dots)
+- Windows: `cgame_mp_x86.dll`, `cgame_mp_x64.dll` (underscores)
+
+### Monitoring System Split
+**Problem:** Bash script for player notifications was unreliable due to subshell variable issues.
+
+**Solution:** Split responsibilities:
+- `server-monitor.sh` (Bash) - Health check & auto-restart only (must run externally to detect crashes)
+- `lua/main.lua` (Lua) - Player connect/disconnect ntfy notifications (runs inside game, instant detection)
+
 ## Directory Structure
 
 ```
@@ -236,11 +260,40 @@ tail -f ~/etlegacy/legacy/server.log
 - Verify pk3 checksums match
 - Check firewall: `sudo ufw status`
 
+### sv_pure Checksum Mismatch (nChkSum1 errors)
+
+If you see `nChkSum1 XXXX == YYYY` in logs and clients get kicked:
+
+1. **Check pk3 DLL naming:** Windows uses `_mp_x86.dll`/`_mp_x64.dll`, Linux uses `.mp.i386.so`/`.mp.x86_64.so`
+2. **Verify pk3 contents:** `unzip -l zzz_etman_etlegacy.pk3 | grep -E '\.(dll|so)'`
+3. **Rebuild if needed:** `./scripts/build-all.sh mod` then `./scripts/publish.sh`
+
+### HTTP Download Failures
+
+If clients get "Client download failed" immediately:
+- This is usually client-side (firewall, antivirus)
+- Have player try `/cl_wwwDownload 0` then `/reconnect` to use in-game download
+- Verify HTTP server works: `curl -I http://etdl.coolip.me/legacy/zzz_etman_etlegacy.pk3`
+
 ## ETPanel Integration
 
 Events flow: Lua → `~/.etlegacy/legacy/legacy/etpanel_events.json` → `etpanel-relay.sh` → API
 
-VPS services: `etserver` (game), `et-monitor` (ntfy notifications)
+## Monitoring & Notifications
+
+**Two-part system (both needed):**
+
+| Service | Purpose | Location |
+|---------|---------|----------|
+| `etserver` | Game server | systemd service |
+| `et-monitor` | Health check & auto-restart | Bash script (external) |
+| Lua notifications | Player connect/disconnect ntfy | Inside game (main.lua) |
+
+**Why split?** Lua runs inside the game - if server crashes, Lua dies too. Bash script runs externally so it can detect crashes and restart.
+
+**ntfy topics:**
+- `etman-server` - Server health alerts (down/restart)
+- `etman-server-player-connected` - Player join/leave notifications
 
 ## 🚨 Lua Gotchas
 
@@ -249,6 +302,8 @@ VPS services: `etserver` (game), `et-monitor` (ntfy notifications)
 3. **Player name empty at connect** - Use `et_ClientBegin` or userinfo fallback
 4. **pk3 overrides loose files** - Delete old pk3s when updating Lua
 5. **dofile() from CWD** - Use `dofile("legacy/lua/file.lua")`
+6. **Lua can't monitor server crashes** - It dies with the game process. Use external bash script for health monitoring.
+7. **os.execute() for notifications** - Use `os.execute("curl ... &")` with `&` for non-blocking HTTP calls
 
 ## Git Repository
 
