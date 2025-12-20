@@ -12,7 +12,25 @@
 ]]--
 
 -- Module registration
-et.RegisterModname("ETMan Server v1.3.0")
+et.RegisterModname("ETMan Server v1.4.0 - Rick Roll Edition")
+
+--[[
+    RICK ROLL MODE - The ultimate lottery system
+    Randomly triggers "Never Gonna Give You Up" with spinning wheels!
+]]--
+local rickrollEnabled = true
+local rickroll = nil
+
+-- Load Rick Roll Mode (wrapped in pcall for safety)
+if rickrollEnabled then
+    local success, err = pcall(function()
+        rickroll = dofile("legacy/lua/rickroll/init.lua")
+    end)
+    if not success then
+        et.G_Print("^1[ERROR] ^7Failed to load Rick Roll Mode: " .. tostring(err) .. "\n")
+        rickrollEnabled = false
+    end
+end
 
 --[[
     MODULE LOADING
@@ -131,11 +149,21 @@ function et_InitGame(levelTime, randomSeed, restart)
         log("^3Crazy mode enabled")
     end
 
+    -- Initialize Rick Roll Mode
+    if rickrollEnabled and rickroll then
+        rickroll.init(levelTime, randomSeed)
+    end
+
     log("^2Initialization complete!")
 end
 
 function et_ShutdownGame(restart)
     log("^1Server shutting down...")
+
+    -- Shutdown Rick Roll Mode
+    if rickrollEnabled and rickroll then
+        rickroll.shutdown()
+    end
 end
 
 --[[
@@ -262,6 +290,11 @@ function et_RunFrame(levelTime)
         et.trap_Cvar_Set("etpanel_leveltime", tostring(levelTime))
         lastLevelTimeUpdate = levelTime
     end
+
+    -- Update Rick Roll Mode
+    if rickrollEnabled and rickroll then
+        rickroll.runFrame(levelTime)
+    end
 end
 
 --[[
@@ -311,6 +344,18 @@ function et_ClientCommand(clientNum, command)
         et.trap_SendServerCommand(clientNum,
             'chat "^3Crazy Mode: ' .. status .. '"')
         return 1  -- Command handled
+    end
+
+    -- Rick Roll trigger command (for testing)
+    if cmd == "rickroll" then
+        if rickrollEnabled and rickroll then
+            local levelTime = et.trap_Milliseconds()
+            rickroll.trigger.force(levelTime)
+            et.trap_SendServerCommand(clientNum, 'chat "^5Rick Roll triggered!"')
+        else
+            et.trap_SendServerCommand(clientNum, 'chat "^1Rick Roll mode is disabled"')
+        end
+        return 1
     end
 
     if cmd == "etpanel" then
@@ -398,6 +443,13 @@ function et_ConsoleCommand()
     if cmd == "lua_reload" then
         log("^3Reloading Lua scripts on next map...")
         return 1
+    end
+
+    -- Rick Roll Mode console commands
+    if rickrollEnabled and rickroll then
+        if rickroll.consoleCommand(cmd) then
+            return 1
+        end
     end
 
     return 0

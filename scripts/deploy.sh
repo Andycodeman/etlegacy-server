@@ -90,11 +90,28 @@ if [ -d "$PROJECT_DIR/configs" ]; then
     echo "  - Config files synced"
 fi
 
-# Deploy Lua scripts
+# Deploy Lua scripts (including subdirectories like rickroll/)
 echo -e "${YELLOW}Deploying Lua scripts...${NC}"
 if [ -d "$PROJECT_DIR/lua" ] && [ "$(ls -A "$PROJECT_DIR/lua" 2>/dev/null)" ]; then
+    # Copy root lua files
     cp "$PROJECT_DIR/lua/"*.lua "$LEGACY_DIR/lua/" 2>/dev/null || true
+    # Copy subdirectories (like rickroll/)
+    for subdir in "$PROJECT_DIR/lua"/*/; do
+        if [ -d "$subdir" ]; then
+            dirname=$(basename "$subdir")
+            mkdir -p "$LEGACY_DIR/lua/$dirname"
+            cp "$subdir"*.lua "$LEGACY_DIR/lua/$dirname/" 2>/dev/null || true
+            echo "  - lua/$dirname/ synced"
+        fi
+    done
     echo "  - Lua scripts synced"
+fi
+
+# Deploy rickroll pk3 (assets for HTTP download)
+echo -e "${YELLOW}Deploying Rick Roll assets...${NC}"
+if [ -f "$DIST_DIR/etman_rickroll.pk3" ]; then
+    cp "$DIST_DIR/etman_rickroll.pk3" "$LEGACY_DIR/"
+    echo "  - etman_rickroll.pk3 deployed"
 fi
 
 # Deploy maps

@@ -4047,6 +4047,17 @@ typedef enum
 
 #define IS_MOUNTED_TANK_BROWNING(entNum) (cg_entities[cg_entities[cg_entities[entNum].tagParent].tankparent].currentState.density & 8)
 
+// cg_rickroll.c - Rick Roll Mode
+void CG_RickRoll_Init(void);
+void CG_RickRoll_Start(void);
+void CG_RickRoll_Wheel1(void);
+void CG_RickRoll_Wheel2(void);
+void CG_RickRoll_Wheel3(void);
+void CG_RickRoll_Result(void);
+void CG_RickRoll_End(void);
+void CG_RickRoll_Draw(void);
+qboolean CG_RickRoll_IsActive(void);
+
 extern qboolean resetmaxspeed; // CG_DrawSpeed
 
 /* HUD exports */

@@ -244,17 +244,29 @@ create_mod_pk3() {
         cp -r "$PROJECT_DIR/weapons" .
     fi
 
+    # Copy Rick Roll assets (gfx, scripts, sound)
+    if [ -d "$PROJECT_DIR/rickroll" ]; then
+        log_info "Including Rick Roll assets..."
+        [ -d "$PROJECT_DIR/rickroll/gfx" ] && cp -r "$PROJECT_DIR/rickroll/gfx" .
+        [ -d "$PROJECT_DIR/rickroll/scripts" ] && cp -r "$PROJECT_DIR/rickroll/scripts" .
+        [ -d "$PROJECT_DIR/rickroll/sound" ] && cp -r "$PROJECT_DIR/rickroll/sound" .
+    fi
+
     # Create pk3 with modules at root level
     # List what we're packaging
     log_info "Packaging the following files:"
     ls -la *.so *.dll 2>/dev/null || true
 
     rm -f "$OUTPUT_DIR/$pk3_name"
-    zip -r "$OUTPUT_DIR/$pk3_name" *.so *.dll lua/ weapons/ 2>/dev/null || zip -r "$OUTPUT_DIR/$pk3_name" *.so *.dll lua/ 2>/dev/null || zip -r "$OUTPUT_DIR/$pk3_name" *.so *.dll
+    # Include all available directories: modules + lua + weapons + rickroll assets
+    zip -r "$OUTPUT_DIR/$pk3_name" *.so *.dll lua/ weapons/ gfx/ scripts/ sound/ 2>/dev/null \
+        || zip -r "$OUTPUT_DIR/$pk3_name" *.so *.dll lua/ gfx/ scripts/ sound/ 2>/dev/null \
+        || zip -r "$OUTPUT_DIR/$pk3_name" *.so *.dll lua/ 2>/dev/null \
+        || zip -r "$OUTPUT_DIR/$pk3_name" *.so *.dll
 
     # Cleanup
     rm -f *.so *.dll
-    rm -rf lua weapons
+    rm -rf lua weapons gfx scripts sound
 
     log_info "Created $OUTPUT_DIR/$pk3_name"
 }

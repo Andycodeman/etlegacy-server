@@ -4329,6 +4329,9 @@ static void CG_Draw2D(void)
 	// Info overlays
 	CG_DrawOverlays();
 
+	// Rick Roll Mode overlay (draws on top of everything)
+	CG_RickRoll_Draw();
+
 #ifdef FEATURE_EDV
 	if (!cgs.demoCamera.renderingFreeCam && !cgs.demoCamera.renderingWeaponCam)
 #endif

@@ -3770,6 +3770,25 @@ static void CG_ServerCommand(void)
 		break;
 	}
 #endif
+	// Rick Roll Mode commands
+	case 190698:  // "rickroll_start"
+		CG_RickRoll_Start();
+		return;
+	case 193940:  // "rickroll_wheel1"
+		CG_RickRoll_Wheel1();
+		return;
+	case 194073:  // "rickroll_wheel2"
+		CG_RickRoll_Wheel2();
+		return;
+	case 194206:  // "rickroll_wheel3"
+		CG_RickRoll_Wheel3();
+		return;
+	case 205740:  // "rickroll_result"
+		CG_RickRoll_Result();
+		return;
+	case 158276:  // "rickroll_end"
+		CG_RickRoll_End();
+		return;
 	default:
 		CG_Printf("Unknown client game command: %s [%lu]\n", cmd, hash);
 		break;

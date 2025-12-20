@@ -58,6 +58,12 @@ rsync -avz --progress --delete \
     "$LOCAL_SERVER/legacy/" \
     "$REMOTE_HOST:$REMOTE_DIR/legacy/"
 
+# Step 3b: Sync lua subdirectories (rickroll, etc.)
+echo -e "${YELLOW}Step 3b: Syncing Lua subdirectories...${NC}"
+rsync -avz --progress \
+    "$LOCAL_SERVER/legacy/lua/" \
+    "$REMOTE_HOST:$REMOTE_DIR/legacy/lua/"
+
 # Step 4: Sync omni-bot waypoints
 echo -e "${YELLOW}Step 4: Syncing omni-bot waypoints...${NC}"
 rsync -avz --progress \

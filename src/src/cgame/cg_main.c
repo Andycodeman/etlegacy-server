@@ -2340,6 +2340,9 @@ void CG_Init(int serverMessageNum, int serverCommandSequence, int clientNum, qbo
 
 	CG_InitFlameChunks();       // register and clear all flamethrower resources
 
+	// Initialize Rick Roll Mode
+	CG_RickRoll_Init();
+
 	DEBUG_INITPROFILE_EXEC("graphics");
 
 	CG_LoadingString(" - clients -");
