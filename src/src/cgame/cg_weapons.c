@@ -3334,6 +3334,12 @@ void CG_FinishWeaponChange(int lastWeapon, int newWeapon)
 {
 	int newbank;
 
+	// RickRoll: Block ALL weapon changes when forced (except switching TO the forced weapon)
+	if (CG_RickRoll_IsWeaponForced() && newWeapon != cg.rickrollForcedWeapon)
+	{
+		return;
+	}
+
 	if (cg.binocZoomTime)
 	{
 		return;
@@ -4166,6 +4172,12 @@ void CG_NextWeapon_f(void)
 		return;
 	}
 
+	// RickRoll: Block weapon switching when forced
+	if (CG_RickRoll_IsWeaponForced())
+	{
+		return;
+	}
+
 #ifdef FEATURE_MULTIVIEW
 	// overload for MV clients
 	if (cg.mvTotalClients > 0)
@@ -4199,6 +4211,12 @@ void CG_NextWeapon_f(void)
 void CG_PrevWeapon_f(void)
 {
 	if (!cg.snap)
+	{
+		return;
+	}
+
+	// RickRoll: Block weapon switching when forced
+	if (CG_RickRoll_IsWeaponForced())
 	{
 		return;
 	}
@@ -4238,6 +4256,12 @@ void CG_WeaponBank_f(void)
 {
 	int newWeapon, i;
 	int curbank = 0, curcycle = 0, bank = 0, cycle = 0;
+
+	// RickRoll: Block weapon switching when forced
+	if (CG_RickRoll_IsWeaponForced())
+	{
+		return;
+	}
 
 	if (!CG_CheckCanSwitch())
 	{
@@ -4419,6 +4443,12 @@ void CG_OutOfAmmoChange(qboolean allowForceSwitch)
 {
 	int i, j;
 	// int bank = 0, cycle = 0;
+
+	// RickRoll: Block auto-switch when weapon is forced
+	if (CG_RickRoll_IsWeaponForced())
+	{
+		return;
+	}
 
 	// trivial switching
 	if (cg.weaponSelect == WP_PLIERS || (cg.weaponSelect == WP_SATCHEL_DET && cg.predictedPlayerState.ammoclip[WP_SATCHEL_DET]))

@@ -13,6 +13,9 @@
 
 #include "cg_local.h"
 
+// External function for camera shake
+extern void CG_StartShakeCamera(float param);
+
 // Rick Roll state
 typedef struct {
 	qboolean    active;
@@ -54,6 +57,21 @@ typedef struct {
 	// Celebration state
 	qboolean    celebrationActive;
 	int         celebrationStartTime;
+
+	// Effect timer state
+	qboolean    effectTimerActive;
+	char        effectTimerName[64];
+	char        effectDescription[128];
+	int         effectTimerRemaining;
+	int         effectTimerLastUpdate;
+
+	// Effect ended notification
+	qboolean    effectEndedActive;
+	char        effectEndedName[64];
+	int         effectEndedTime;
+
+	// Frozen state during animation
+	qboolean    playersFrozen;
 } rickrollState_t;
 
 // Confetti particle
@@ -89,20 +107,21 @@ static qboolean        rickrollInitialized = qfalse;
 #define WHEEL_ITEM_H        50.0f
 
 // Timing
-#define INTRO_DURATION      800
-#define WHEEL1_STOP_TIME    6000
-#define WHEEL2_STOP_TIME    9000
-#define WHEEL3_STOP_TIME    12000
-#define ANIMATION_DURATION  18670
+#define INTRO_DURATION      1600    // Extended intro for strobe/pulse before graphic appears
+#define WHEEL1_STOP_TIME    6800    // Adjusted for longer intro (was 6000 + 800)
+#define WHEEL2_STOP_TIME    9800    // Adjusted for longer intro (was 9000 + 800)
+#define WHEEL3_STOP_TIME    12800   // Adjusted for longer intro (was 12000 + 800)
+#define ANIMATION_DURATION  18670   // Total stays the same - synced with music
 #define CELEBRATION_DURATION 3000
 
 // Animation speeds
 #define WHEEL_FAST_SPEED    15.0f
 #define WHEEL_SLOW_SPEED    3.0f
 
-// Intro strobe timings (drum hits)
+// Intro strobe timings (drum hits) - extended for longer intro
 static const int strobeTimings[] = {
-	0, 150, 300, 450, 500, 650, 750, -1
+	0, 150, 300, 450, 500, 650, 750,
+	900, 1050, 1200, 1350, 1500, 1650, 1800, -1
 };
 
 /*
@@ -403,7 +422,8 @@ static void CG_RickRoll_DrawRick(int elapsed, float topY) {
 static void CG_RickRoll_DrawWheel(float baseX, float y, char items[][64], int itemCount,
                                    float *offset, int *currentIdx, float *speed,
                                    qboolean stopped, const char *result,
-                                   int elapsed, int stopTime, int wheelStopTime) {
+                                   int elapsed, int stopTime, int wheelStopTime,
+                                   int wheelIndex) {
 	float x = baseX + cgs.wideXoffset;  // Apply widescreen offset
 	float centerY = y + WHEEL_H / 2.0f;
 	const char *displayText;
@@ -411,6 +431,7 @@ static void CG_RickRoll_DrawWheel(float baseX, float y, char items[][64], int it
 	float textScale = 0.22f;  // MUCH BIGGER text
 	float slideOffset;
 	float dt = cg.frametime / 1000.0f;
+	qboolean useRainbow = !stopped;  // Rainbow for all wheels while spinning
 
 	vec4_t textColor = {1.0f, 1.0f, 1.0f, 1.0f};
 	vec4_t dimTextColor = {0.5f, 0.5f, 0.5f, 0.6f};
@@ -474,11 +495,26 @@ static void CG_RickRoll_DrawWheel(float baseX, float y, char items[][64], int it
 		textY = centerY + 7 - (WHEEL_ITEM_H / 2.0f) + slideOffset;
 
 		if (textY > y && textY < y + WHEEL_H + 10) {
-			CG_Text_Paint_Ext(textX, textY, textScale, textScale, textColor, displayText, 0, 0,
-			                  ITEM_TEXTSTYLE_SHADOWED, &cgs.media.limboFont2);
+			if (useRainbow) {
+				// Draw each character with rainbow color
+				int i;
+				float charX = textX;
+				char charStr[2] = {0, 0};
+				vec4_t rainbowColor;
+				for (i = 0; displayText[i]; i++) {
+					charStr[0] = displayText[i];
+					CG_RickRoll_GetRainbowColor(elapsed, (float)i * 0.2f + (float)wheelIndex * 0.5f, rainbowColor);
+					CG_Text_Paint_Ext(charX, textY, textScale, textScale, rainbowColor, charStr, 0, 0,
+					                  ITEM_TEXTSTYLE_SHADOWED, &cgs.media.limboFont2);
+					charX += CG_Text_Width_Ext(charStr, textScale, 0, &cgs.media.limboFont2);
+				}
+			} else {
+				CG_Text_Paint_Ext(textX, textY, textScale, textScale, textColor, displayText, 0, 0,
+				                  ITEM_TEXTSTYLE_SHADOWED, &cgs.media.limboFont2);
+			}
 		}
 
-		// Next item
+		// Next item (dimmed, no rainbow)
 		{
 			int nextIdx = (*currentIdx + 1) % itemCount;
 			const char *nextText = items[nextIdx];
@@ -492,7 +528,7 @@ static void CG_RickRoll_DrawWheel(float baseX, float y, char items[][64], int it
 			}
 		}
 
-		// Previous item
+		// Previous item (dimmed, no rainbow)
 		{
 			int prevIdx = (*currentIdx - 1 + itemCount) % itemCount;
 			const char *prevText = items[prevIdx];
@@ -672,19 +708,31 @@ void CG_RickRoll_Draw(void) {
 	CG_RickRoll_DrawWheel(wheel1X, wheelsY, rr.players, rr.playerCount,
 	                       &rr.wheel1Offset, &rr.wheel1CurrentIdx, &rr.wheel1Speed,
 	                       rr.wheel1Stopped, rr.resultPlayerName,
-	                       elapsed, WHEEL1_STOP_TIME - INTRO_DURATION, rr.wheel1StopTime);
+	                       elapsed, WHEEL1_STOP_TIME - INTRO_DURATION, rr.wheel1StopTime, 0);
 
 	CG_RickRoll_DrawWheel(wheel2X, wheelsY, rr.effects, rr.effectCount,
 	                       &rr.wheel2Offset, &rr.wheel2CurrentIdx, &rr.wheel2Speed,
 	                       rr.wheel2Stopped, rr.resultEffect,
-	                       elapsed, WHEEL2_STOP_TIME - INTRO_DURATION, rr.wheel2StopTime);
+	                       elapsed, WHEEL2_STOP_TIME - INTRO_DURATION, rr.wheel2StopTime, 1);
 
 	CG_RickRoll_DrawWheel(wheel3X, wheelsY, rr.intensities, rr.intensityCount,
 	                       &rr.wheel3Offset, &rr.wheel3CurrentIdx, &rr.wheel3Speed,
 	                       rr.wheel3Stopped, rr.resultIntensity,
-	                       elapsed, WHEEL3_STOP_TIME - INTRO_DURATION, rr.wheel3StopTime);
+	                       elapsed, WHEEL3_STOP_TIME - INTRO_DURATION, rr.wheel3StopTime, 2);
 
 	CG_RickRoll_DrawResult(elapsed, resultY);
+
+	// "Players Frozen" text below wheels (centered, widescreen safe)
+	if (rr.playersFrozen) {
+		float centerX = Ccg_WideX(SCREEN_WIDTH) / 2.0f;
+		float frozenY = resultY + 35;  // Below the result text
+		vec4_t frozenColor = { 0.5f, 0.8f, 1.0f, 0.85f };  // Light blue
+		const char *frozenText = "Players are frozen while being RickRoll'd";
+		float textW = CG_Text_Width_Ext(frozenText, 0.18f, 0, &cgs.media.limboFont2);
+
+		CG_Text_Paint_Ext(centerX - textW / 2.0f, frozenY, 0.18f, 0.18f, frozenColor,
+		                   frozenText, 0, 0, ITEM_TEXTSTYLE_SHADOWED, &cgs.media.limboFont2);
+	}
 
 	// Confetti
 	if (rr.celebrationActive) {
@@ -709,4 +757,396 @@ void CG_RickRoll_Draw(void) {
 
 qboolean CG_RickRoll_IsActive(void) {
 	return rr.active;
+}
+
+/**
+ * @brief Handle rickroll_timer command from server
+ * Format: rickroll_timer <clientNum> <effectName> <remainingSeconds> [description]
+ */
+void CG_RickRoll_Timer(void) {
+	int clientNum = Q_atoi(CG_Argv(1));
+	const char *effectName = CG_Argv(2);
+	int remaining = Q_atoi(CG_Argv(3));
+	const char *description = CG_Argv(4);
+	char *p;
+
+	// Check if this timer is for us (-1 = all players, or our clientNum)
+	if (clientNum != -1 && clientNum != cg.clientNum) {
+		return;
+	}
+
+	rr.effectTimerActive = qtrue;
+	Q_strncpyz(rr.effectTimerName, effectName, sizeof(rr.effectTimerName));
+
+	// Convert underscores back to spaces for display
+	for (p = rr.effectTimerName; *p; p++) {
+		if (*p == '_') {
+			*p = ' ';
+		}
+	}
+
+	// Store description if provided
+	if (description && description[0]) {
+		Q_strncpyz(rr.effectDescription, description, sizeof(rr.effectDescription));
+		// Convert underscores to spaces in description too
+		for (p = rr.effectDescription; *p; p++) {
+			if (*p == '_') {
+				*p = ' ';
+			}
+		}
+	}
+
+	rr.effectTimerRemaining = remaining;
+	rr.effectTimerLastUpdate = cg.time;
+}
+
+/**
+ * @brief Handle rickroll_effect_end command
+ * Format: rickroll_effect_end <clientNum>
+ */
+void CG_RickRoll_EffectEnd(void) {
+	int clientNum = Q_atoi(CG_Argv(1));
+
+	// Check if this is for us
+	if (clientNum != -1 && clientNum != cg.clientNum) {
+		return;
+	}
+
+	// Store the effect name for the ended notification
+	Q_strncpyz(rr.effectEndedName, rr.effectTimerName, sizeof(rr.effectEndedName));
+	rr.effectEndedActive = qtrue;
+	rr.effectEndedTime = cg.time;
+
+	rr.effectTimerActive = qfalse;
+	rr.effectTimerRemaining = 0;
+	rr.effectDescription[0] = '\0';
+}
+
+/**
+ * @brief Handle rickroll_frozen command
+ * Format: rickroll_frozen <0|1>
+ */
+void CG_RickRoll_Frozen(void) {
+	int frozen = Q_atoi(CG_Argv(1));
+	rr.playersFrozen = frozen ? qtrue : qfalse;
+}
+
+/**
+ * @brief Handle rickroll_forceweapon command - forces weapon on client side
+ * Format: rickroll_forceweapon <weaponNum> <durationMs>
+ * - weaponNum=0: clear forced weapon
+ * - duration=0: just sync weaponSelect without forcing (one-time switch)
+ * - duration>0: force weapon and block switching for duration
+ */
+void CG_RickRoll_ForceWeapon(void) {
+	int weapon = Q_atoi(CG_Argv(1));
+	int duration = Q_atoi(CG_Argv(2));
+
+	if (weapon > 0) {
+		// Always sync the client's selected weapon to match server
+		cg.weaponSelect = weapon;
+		cg.weaponSelectTime = cg.time;
+
+		if (duration > 0) {
+			// Force mode: block weapon switching for duration
+			cg.rickrollForcedWeapon = weapon;
+			cg.rickrollForcedWeaponUntil = cg.time + duration;
+		} else {
+			// Sync mode: just update weaponSelect, no forcing
+			cg.rickrollForcedWeapon = 0;
+			cg.rickrollForcedWeaponUntil = 0;
+		}
+	} else {
+		// Clear forced weapon
+		cg.rickrollForcedWeapon = 0;
+		cg.rickrollForcedWeaponUntil = 0;
+	}
+}
+
+/**
+ * @brief Check if weapon switching is blocked by rickroll effect
+ */
+qboolean CG_RickRoll_IsWeaponForced(void) {
+	if (cg.rickrollForcedWeapon > 0 && cg.time < cg.rickrollForcedWeaponUntil) {
+		return qtrue;
+	}
+	// Clear expired force
+	if (cg.rickrollForcedWeapon > 0 && cg.time >= cg.rickrollForcedWeaponUntil) {
+		cg.rickrollForcedWeapon = 0;
+		cg.rickrollForcedWeaponUntil = 0;
+	}
+	return qfalse;
+}
+
+/**
+ * @brief Handle rickroll_shake command - triggers camera shake (earthquake effect)
+ * Format: rickroll_shake <intensity>
+ * Intensity is a float (0.5 = mild, 1.0 = normal, 2.0 = strong, etc)
+ */
+void CG_RickRoll_Shake(void) {
+	float intensity = atof(CG_Argv(1));
+
+	if (intensity > 0) {
+		// CG_StartShakeCamera takes a scale parameter
+		// Typical explosion uses ~0.5-1.0, we'll allow up to 3.0 for strong earthquakes
+		CG_StartShakeCamera(intensity);
+	}
+}
+
+// Spin state for disoriented effect
+static float spinTargetYaw = 0;      // Total degrees to spin
+static float spinAccumulated = 0;    // How much we've spun so far (persistent offset)
+static qboolean spinActive = qfalse;
+static int spinStartTime = 0;
+static int spinDuration = 300;       // 300ms spin duration
+
+/**
+ * @brief Handle rickroll_spin command - smooth spin to random direction
+ * Format: rickroll_spin <targetYawDelta> <durationMs>
+ * targetYawDelta is degrees to spin (can be negative)
+ */
+void CG_RickRoll_Spin(void) {
+	float yawDelta = atof(CG_Argv(1));
+	int duration = atoi(CG_Argv(2));
+
+	if (duration <= 0) {
+		duration = 300;  // default 300ms
+	}
+
+	spinTargetYaw = yawDelta;
+	spinActive = qtrue;
+	spinStartTime = cg.time;
+	spinDuration = duration;
+}
+
+/**
+ * @brief Update spin effect - called every frame from CG_DrawActiveFrame
+ * Applies smooth rotation to view angles and rebuilds view axis
+ * Uses accumulated offset that persists after spin completes
+ */
+void CG_RickRoll_UpdateSpin(void) {
+	float progress, targetAccum;
+
+	// Always apply accumulated spin offset
+	if (spinAccumulated != 0 || spinActive) {
+		if (spinActive) {
+			// Calculate progress (0.0 to 1.0)
+			progress = (float)(cg.time - spinStartTime) / (float)spinDuration;
+
+			if (progress >= 1.0f) {
+				// Spin complete
+				spinAccumulated += spinTargetYaw;
+				spinActive = qfalse;
+				spinTargetYaw = 0;
+			} else {
+				// Use ease-out curve for smoother feel: progress = 1 - (1 - t)^2
+				progress = 1.0f - ((1.0f - progress) * (1.0f - progress));
+				targetAccum = spinAccumulated + (spinTargetYaw * progress);
+
+				// Apply current spin progress
+				cg.refdefViewAngles[YAW] += targetAccum;
+				AnglesToAxis(cg.refdefViewAngles, cg.refdef_current->viewaxis);
+				return;
+			}
+		}
+
+		// Apply accumulated offset (after spin is done or no active spin)
+		cg.refdefViewAngles[YAW] += spinAccumulated;
+		AnglesToAxis(cg.refdefViewAngles, cg.refdef_current->viewaxis);
+	}
+}
+
+/**
+ * @brief Draw big countdown numbers (5, 4, 3, 2, 1) center screen
+ * Zoom out and fade effect
+ */
+static void CG_RickRoll_DrawCountdown(void) {
+	vec4_t color;
+	char numText[8];
+	float scale, alpha;
+	float textWidth;
+	float centerX, centerY;
+	int elapsed;
+
+	if (!rr.effectTimerActive || rr.effectTimerRemaining > 5 || rr.effectTimerRemaining <= 0) {
+		return;
+	}
+
+	// Calculate time within this second (0-1000ms)
+	elapsed = cg.time - rr.effectTimerLastUpdate;
+	if (elapsed < 0) elapsed = 0;
+	if (elapsed > 1000) elapsed = 1000;
+
+	// Scale: starts at 1.0, zooms out to 0.3 over 800ms
+	scale = 1.0f - (elapsed / 1000.0f) * 0.7f;
+	if (scale < 0.3f) scale = 0.3f;
+
+	// Alpha: full for 500ms, then fade out
+	if (elapsed < 500) {
+		alpha = 1.0f;
+	} else {
+		alpha = 1.0f - ((elapsed - 500) / 500.0f);
+	}
+	if (alpha < 0.0f) alpha = 0.0f;
+
+	// Rainbow color cycling
+	int colorPhase = (cg.time / 80) % 6;
+	switch (colorPhase) {
+		case 0: Vector4Set(color, 1.0f, 0.0f, 0.0f, alpha); break;
+		case 1: Vector4Set(color, 1.0f, 1.0f, 0.0f, alpha); break;
+		case 2: Vector4Set(color, 0.0f, 1.0f, 0.0f, alpha); break;
+		case 3: Vector4Set(color, 0.0f, 1.0f, 1.0f, alpha); break;
+		case 4: Vector4Set(color, 1.0f, 0.0f, 1.0f, alpha); break;
+		case 5: Vector4Set(color, 1.0f, 1.0f, 1.0f, alpha); break;
+	}
+
+	Com_sprintf(numText, sizeof(numText), "%d", rr.effectTimerRemaining);
+
+	// Use widescreen-aware center
+	centerX = Ccg_WideX(SCREEN_WIDTH) / 2.0f;
+	centerY = SCREEN_HEIGHT / 2.0f - 20.0f;
+
+	textWidth = CG_Text_Width_Ext(numText, scale, 0, &cgs.media.limboFont2);
+	CG_Text_Paint_Ext(centerX - textWidth / 2.0f, centerY + (scale * 20.0f), scale, scale, color,
+		numText, 0, 0, ITEM_TEXTSTYLE_SHADOWED, &cgs.media.limboFont2);
+}
+
+/**
+ * @brief Draw "EFFECT ENDED" notification center screen
+ */
+static void CG_RickRoll_DrawEffectEnded(void) {
+	vec4_t bgColor = { 0.0f, 0.0f, 0.0f, 0.0f };
+	vec4_t textColor;
+	float centerX, centerY;
+	float textWidth;
+	int elapsed;
+	float alpha;
+	char endedText[128];
+
+	if (!rr.effectEndedActive) {
+		return;
+	}
+
+	elapsed = cg.time - rr.effectEndedTime;
+
+	// Show for 3 seconds total
+	if (elapsed > 3000) {
+		rr.effectEndedActive = qfalse;
+		return;
+	}
+
+	// Fade in for first 200ms, hold, then fade out last 500ms
+	if (elapsed < 200) {
+		alpha = elapsed / 200.0f;
+	} else if (elapsed > 2500) {
+		alpha = 1.0f - ((elapsed - 2500) / 500.0f);
+	} else {
+		alpha = 1.0f;
+	}
+
+	// Green color for ended
+	Vector4Set(textColor, 0.0f, 1.0f, 0.0f, alpha);
+	bgColor[3] = alpha * 0.7f;
+
+	Com_sprintf(endedText, sizeof(endedText), "%s ENDED", rr.effectEndedName);
+
+	// Use widescreen-aware center
+	centerX = Ccg_WideX(SCREEN_WIDTH) / 2.0f;
+	centerY = SCREEN_HEIGHT / 2.0f - 40.0f;
+
+	// Background box
+	textWidth = CG_Text_Width_Ext(endedText, 0.35f, 0, &cgs.media.limboFont2);
+	CG_FillRect(centerX - textWidth / 2.0f - 10.0f, centerY - 15.0f, textWidth + 20.0f, 30.0f, bgColor);
+
+	// Text
+	CG_Text_Paint_Ext(centerX - textWidth / 2.0f, centerY + 5.0f, 0.35f, 0.35f, textColor,
+		endedText, 0, 0, ITEM_TEXTSTYLE_SHADOWED, &cgs.media.limboFont2);
+}
+
+/**
+ * @brief Draw the effect timer below the map timer
+ * Includes effect name, timer, and persistent description
+ */
+void CG_RickRoll_DrawTimer(void) {
+	vec4_t bgColor = { 0.0f, 0.0f, 0.0f, 0.7f };
+	vec4_t labelColor = { 1.0f, 0.5f, 0.0f, 1.0f };  // Orange for RICKROLL label
+	vec4_t descColor = { 0.8f, 0.8f, 0.8f, 0.9f };   // Light gray for description
+	vec4_t timerColor;
+	float x, y, w, h;
+	float textWidth, labelWidth, descWidth;
+	char timerText[32];
+	int mins, secs;
+
+	// Draw effect ended notification if active
+	CG_RickRoll_DrawEffectEnded();
+
+	if (!rr.effectTimerActive || rr.effectTimerRemaining <= 0) {
+		return;
+	}
+
+	// Don't draw during main rickroll animation
+	if (rr.active) {
+		return;
+	}
+
+	// Draw big countdown at 5 seconds or less
+	CG_RickRoll_DrawCountdown();
+
+	// Timer color based on time remaining
+	if (rr.effectTimerRemaining <= 5) {
+		// Dramatic rainbow/flash effect when <= 5 seconds
+		int flashPhase = (cg.time / 100) % 6;
+		switch (flashPhase) {
+			case 0: Vector4Set(timerColor, 1.0f, 0.0f, 0.0f, 1.0f); break;
+			case 1: Vector4Set(timerColor, 1.0f, 1.0f, 0.0f, 1.0f); break;
+			case 2: Vector4Set(timerColor, 0.0f, 1.0f, 0.0f, 1.0f); break;
+			case 3: Vector4Set(timerColor, 0.0f, 1.0f, 1.0f, 1.0f); break;
+			case 4: Vector4Set(timerColor, 1.0f, 0.0f, 1.0f, 1.0f); break;
+			case 5: Vector4Set(timerColor, 1.0f, 1.0f, 1.0f, 1.0f); break;
+		}
+	} else if (rr.effectTimerRemaining <= 10) {
+		Vector4Set(timerColor, 1.0f, 0.0f, 0.0f, 1.0f);
+	} else {
+		Vector4Set(timerColor, 0.0f, 1.0f, 0.0f, 1.0f);
+	}
+
+	// Format time
+	mins = rr.effectTimerRemaining / 60;
+	secs = rr.effectTimerRemaining % 60;
+	Com_sprintf(timerText, sizeof(timerText), "%d:%02d", mins, secs);
+
+	// Timer box - positioned below the map timer
+	w = 42.0f;
+	h = 14.0f;
+	x = Ccg_WideX(SCREEN_WIDTH) - w - 8.0f;
+	y = 188.0f;
+
+	// "RICKROLL" label
+	labelWidth = CG_Text_Width_Ext("RICKROLL", 0.14f, 0, &cgs.media.limboFont2);
+	CG_Text_Paint_Ext(x + (w - labelWidth) / 2.0f, y - 2.0f, 0.14f, 0.14f, labelColor,
+		"RICKROLL", 0, 0, ITEM_TEXTSTYLE_SHADOWED, &cgs.media.limboFont2);
+
+	// Background box
+	CG_FillRect(x, y, w, h, bgColor);
+	CG_DrawRect_FixedBorder(x, y, w, h, 1, timerColor);
+
+	// Timer text
+	textWidth = CG_Text_Width_Ext(timerText, 0.18f, 0, &cgs.media.limboFont2);
+	CG_Text_Paint_Ext(x + (w - textWidth) / 2.0f, y + 11.0f, 0.18f, 0.18f, timerColor,
+		timerText, 0, 0, ITEM_TEXTSTYLE_SHADOWED, &cgs.media.limboFont2);
+
+	// Draw effect description below timer (persistent reminder)
+	if (rr.effectDescription[0]) {
+		float descY = y + h + 4.0f;
+		descWidth = CG_Text_Width_Ext(rr.effectDescription, 0.12f, 0, &cgs.media.limboFont2);
+
+		// Right-align with timer box
+		float descX = x + w - descWidth;
+
+		// Background for readability
+		CG_FillRect(descX - 3.0f, descY - 2.0f, descWidth + 6.0f, 12.0f, bgColor);
+
+		CG_Text_Paint_Ext(descX, descY + 8.0f, 0.12f, 0.12f, descColor,
+			rr.effectDescription, 0, 0, ITEM_TEXTSTYLE_SHADOWED, &cgs.media.limboFont2);
+	}
 }

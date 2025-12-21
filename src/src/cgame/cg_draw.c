@@ -4332,6 +4332,9 @@ static void CG_Draw2D(void)
 	// Rick Roll Mode overlay (draws on top of everything)
 	CG_RickRoll_Draw();
 
+	// Rick Roll effect timer (shows when effect is active)
+	CG_RickRoll_DrawTimer();
+
 #ifdef FEATURE_EDV
 	if (!cgs.demoCamera.renderingFreeCam && !cgs.demoCamera.renderingWeaponCam)
 #endif

@@ -1,15 +1,39 @@
 --[[
     Rick Roll Mode - Configuration
     All settings for the Rick Roll lottery system
+
+    EFFECT CATEGORIES:
+    - BLESSED (Green): Good effects that help the player
+    - CURSED (Red): Bad effects that hinder the player
+    - CHAOTIC (Yellow): Wild effects that affect everyone or are unpredictable
+
+    POWER LEVELS (Wheel 3):
+    - MILD: Subtle effect
+    - MODERATE: Noticeable effect
+    - STRONG: Significant effect
+    - EXTREME: Major effect
+    - LEGENDARY: Maximum chaos
+
+    PLAYER SELECTION (Wheel 1):
+    - Individual players OR "ALL PLAYERS" for mass effects
+
+    POWER LEVEL MEANINGS vary by effect type:
+    - Multiplier effects: 1.25x / 1.5x / 2.0x / 2.5x / 3.0x
+    - Interval effects: 15s / 12s / 10s / 8s / 5s (telefrag, weapon roulette, butter fingers)
+    - Fixed effects: Power level ignored (knife fight, adrenaline, blind, team shuffle)
 ]]--
 
 rickroll = rickroll or {}
 
 rickroll.config = {
-    -- Master toggle
+    -- Master toggle (if false, rickroll system is completely disabled)
     enabled = true,
 
-    -- Trigger timing (milliseconds)
+    -- Auto-trigger toggle (if false, rickroll only triggers via manual rcon commands)
+    -- When autoTrigger=false but enabled=true, you can still use rickroll_test_cmd and rickroll_force
+    autoTrigger = false,
+
+    -- Trigger timing (milliseconds) - only used when autoTrigger=true
     interval = {
         min = 30000,    -- 30 seconds minimum between rolls (TESTING - change to 300000 for production)
         max = 60000     -- 60 seconds maximum (TESTING - change to 600000 for production)
@@ -28,13 +52,30 @@ rickroll.config = {
 
     -- Category weights (higher = more likely)
     weights = {
-        blessed = 50,   -- Good effects
-        cursed = 40,    -- Bad effects
-        chaotic = 10    -- Affects everyone
+        blessed = 40,   -- Good effects
+        cursed = 45,    -- Bad effects (slightly more likely for entertainment)
+        chaotic = 15    -- Affects everyone
     },
 
-    -- Intensity multipliers
-    intensities = {1.25, 1.5, 2.0, 2.5, 3.0},
+    -- Weight for ALL PLAYERS selection (out of 100)
+    allPlayersWeight = 50,  -- 50% chance to select ALL PLAYERS
+
+    -- Include bots when ALL PLAYERS is selected?
+    allPlayersIncludesBots = true,  -- true = bots get effects too, false = humans only
+
+    -- Power level definitions
+    -- Different effects interpret these differently (see powerMeanings below)
+    -- Multipliers are significant: 2x to 5x for noticeable effects
+    powerLevels = {
+        { label = "MILD",      multiplier = 2.0, interval = 10000, color = "^2" },
+        { label = "MODERATE",  multiplier = 2.5, interval = 8000,  color = "^3" },
+        { label = "STRONG",    multiplier = 3.0, interval = 6000,  color = "^3" },
+        { label = "EXTREME",   multiplier = 4.0, interval = 4000,  color = "^1" },
+        { label = "LEGENDARY", multiplier = 5.0, interval = 2000,  color = "^6" }
+    },
+
+    -- Legacy intensities array (for backward compatibility)
+    intensities = {2.0, 2.5, 3.0, 4.0, 5.0},
 
     -- Sound paths
     sounds = {
@@ -52,149 +93,292 @@ rickroll.config = {
     samePlayerCooldown = 2,   -- Don't select same player X times in a row
 
     -- Debug
-    debug = false
+    debug = false,
+
+    --=========================================================================
+    -- PER-EFFECT INTERVAL OVERRIDES
+    -- For effects with powerMeaning = "interval", these override the default
+    -- powerLevels.interval values. Format: {MILD, MODERATE, STRONG, EXTREME, LEGENDARY}
+    -- Values are in milliseconds.
+    --=========================================================================
+    effectIntervals = {
+        -- CURSED
+        butter_fingers = {15000, 12500, 10000, 7500, 5000},  -- 15s to 5s (needs time to reselect weapon)
+        disoriented = {10000, 8000, 6000, 4000, 2000},       -- 10s to 2s
+        marked = {10000, 8000, 6000, 4000, 2000},            -- 10s to 2s
+        bouncy = {10000, 8000, 6000, 4500, 3000},            -- 10s to 3s
+
+        -- CHAOTIC
+        russian_roulette = {15000, 12500, 10000, 7500, 5000}, -- 15s to 5s (kills are harsh)
+        team_switch = {60000, 50000, 40000, 30000, 20000},    -- 60s to 20s
+        telefrag = {10000, 8000, 6000, 4000, 2000},           -- 10s to 2s
+        weapon_roulette = {10000, 8000, 6000, 4000, 2000},    -- 10s to 2s
+        fling = {10000, 8000, 6000, 4500, 3000},              -- 10s to 3s
+        narcolepsy = {20000, 16250, 12500, 8750, 5000},       -- 20s to 5s between naps
+
+        -- BLESSED
+        medic_mode = {6000, 5000, 4000, 3000, 2000}           -- 6s to 2s
+    }
 }
 
--- Effect definitions
+--[[
+    POWER MEANING TYPES
+
+    Each effect uses power levels differently:
+    - "multiplier": Uses multiplier value (1.25x to 3.0x)
+    - "interval": Uses interval value from effectIntervals or default powerLevels
+    - "percentage": Converts multiplier to percentage (25% to 75%)
+    - "inverse": Inverse of multiplier (80% to 33%) for reductions
+    - "fixed": Power level has no effect (always the same)
+]]--
+rickroll.powerMeanings = {
+    -- BLESSED
+    god_mode = "duration",      -- Multiplier affects how long god mode lasts
+    caffeine_rush = "multiplier", -- Speed multiplier 150%-300% (renamed from super_speed)
+    tank_mode = "multiplier",   -- Health multiplier 150%-300%
+    regeneration = "multiplier", -- HP regen 10-25 HP every 2s
+    adrenaline = "multiplier",  -- Adrenaline regen 10-25 every 2s
+    medic_mode = "interval",    -- Health pack frequency 2-6s
+    damage_boost = "multiplier", -- Damage multiplier
+
+    -- CURSED
+    tiny_legs = "inverse",      -- Speed reduction (per-player via C code)
+    glass_cannon = "inverse",   -- Health reduction 80%-10%
+    disoriented = "interval",   -- Spin frequency
+    marked = "interval",        -- Location broadcast frequency
+    butter_fingers = "interval", -- Drop frequency
+    pistols_only = "fixed",     -- Just pistols
+    bouncy = "interval",        -- Bounce frequency 10-3s
+    slippery = "multiplier",    -- Ice skating mode 15x-30x friction reduction
+    weak_hits = "inverse",      -- Damage reduction 80%-10%
+
+    -- CHAOTIC
+    knife_fight = "fixed",      -- Knives only (single or all)
+    moon_mode = "inverse",      -- Gravity reduction 80%-50% (single or all)
+    russian_roulette = "interval", -- Kill random player every 5-15s (global only)
+    team_switch = "interval",   -- Team swap every 20-60s, restore on end (single or all)
+    telefrag = "interval",      -- Teleport frequency
+    weapon_roulette = "interval", -- Weapon change frequency 2-10s
+    clone_wars = "fixed",       -- Psychological effect (disabled)
+    fling = "interval",         -- Launch frequency 3-10s
+    narcolepsy = "interval",    -- Sleep frequency (sleep duration = interval/3)
+    panzer_freeze = "duration", -- Freeze duration 5-15 seconds
+    projectile_speed = "multiplier", -- Projectile speed multiplier
+    earthquake = "multiplier"   -- Intensity, duration, and interval all scale with power
+}
+
+--[[
+    EFFECT DEFINITIONS
+
+    Each effect needs:
+    - id: unique identifier (used in code)
+    - name: display name for wheel (keep short for UI)
+    - description: shown when applied
+    - color: ET color code for display
+    - singlePlayerOnly: true if effect can't apply to ALL PLAYERS
+    - isGlobal: true if effect inherently affects everyone (knife fight, etc)
+]]--
+
 rickroll.effects = {
-    -- BLESSED (Good) effects
+    --=========================================================================
+    -- BLESSED EFFECTS (Good for the player)
+    --=========================================================================
     blessed = {
         {
-            id = "speed_up",
-            name = "Super Speed",
-            description = "Movement speed increased!",
-            color = "^2",  -- Green
-            apply = function(clientNum, intensity)
-                -- Speed is handled via configstring/powerup
-                return true
-            end
-        },
-        {
-            id = "health_up",
-            name = "Tank Mode",
-            description = "Maximum health doubled!",
+            id = "god_mode",
+            name = "GOD MODE",
+            description = "You are INVINCIBLE!",
             color = "^2",
-            apply = function(clientNum, intensity)
-                local maxHealth = et.gentity_get(clientNum, "health")
-                local newMax = math.floor(maxHealth * intensity)
-                et.gentity_set(clientNum, "health", newMax)
-                return true
-            end
+            singlePlayerOnly = true  -- Too powerful for ALL PLAYERS
         },
         {
-            id = "regen",
-            name = "Regeneration",
+            id = "caffeine_rush",
+            name = "CAFFEINE RUSH",
+            description = "You move FAST!",
+            color = "^2"
+        },
+        {
+            id = "tank_mode",
+            name = "TANK MODE",
+            description = "Health massively increased!",
+            color = "^2"
+        },
+        {
+            id = "regeneration",
+            name = "REGENERATION",
             description = "Health regenerates over time!",
-            color = "^2",
-            apply = function(clientNum, intensity)
-                -- Handled in RunFrame
-                return true
-            end
+            color = "^2"
         },
         {
-            id = "damage_up",
-            name = "Heavy Hitter",
-            description = "Deal more damage!",
-            color = "^2",
-            apply = function(clientNum, intensity)
-                -- Damage multiplier handled in qagame
-                return true
-            end
+            id = "adrenaline",
+            name = "ADRENALINE",
+            description = "Adrenaline regenerates!",
+            color = "^2"
+        },
+        {
+            id = "medic_mode",
+            name = "MEDIC MODE",
+            description = "Health packs incoming!",
+            color = "^2"
+        },
+        {
+            id = "damage_boost",
+            name = "DAMAGE BOOST",
+            description = "Your hits deal more damage!",
+            color = "^2"
         }
     },
 
-    -- CURSED (Bad) effects
+    --=========================================================================
+    -- CURSED EFFECTS (Bad for the player)
+    --=========================================================================
     cursed = {
         {
-            id = "speed_down",
-            name = "Tiny Legs",
-            description = "Movement speed reduced!",
-            color = "^1",  -- Red
-            apply = function(clientNum, intensity)
-                return true
-            end
+            id = "tiny_legs",
+            name = "TINY LEGS",
+            description = "You move slower!",
+            color = "^1"
         },
         {
-            id = "health_down",
-            name = "Glass Cannon",
-            description = "Maximum health halved!",
-            color = "^1",
-            apply = function(clientNum, intensity)
-                local health = et.gentity_get(clientNum, "health")
-                local newHealth = math.floor(health / intensity)
-                if newHealth < 1 then newHealth = 1 end
-                et.gentity_set(clientNum, "health", newHealth)
-                return true
-            end
+            id = "glass_cannon",
+            name = "GLASS CANNON",
+            description = "One hit and you're dead!",
+            color = "^1"
         },
         {
-            id = "damage_down",
-            name = "Pea Shooter",
-            description = "Deal less damage!",
-            color = "^1",
-            apply = function(clientNum, intensity)
-                return true
-            end
+            id = "disoriented",
+            name = "DISORIENTED",
+            description = "Your view keeps spinning!",
+            color = "^1"
         },
         {
-            id = "glow",
-            name = "Spotlight",
-            description = "Everyone can see you!",
+            id = "marked",
+            name = "MARKED",
+            description = "Location broadcast to everyone!",
             color = "^1",
-            apply = function(clientNum, intensity)
-                return true
-            end
+            singlePlayerOnly = true  -- Too many messages for ALL PLAYERS
+        },
+        {
+            id = "butter_fingers",
+            name = "BUTTER FINGERS",
+            description = "Weapons randomly drop!",
+            color = "^1"
+        },
+        {
+            id = "pistols_only",
+            name = "PISTOLS ONLY",
+            description = "No big guns for you!",
+            color = "^1"
+        },
+        {
+            id = "bouncy",
+            name = "BOUNCY",
+            description = "Random knockback pushes!",
+            color = "^1"
+        },
+        {
+            id = "slippery",
+            name = "SLIPPERY",
+            description = "Ice skating mode!",
+            color = "^1"
+        },
+        {
+            id = "weak_hits",
+            name = "WEAK HITS",
+            description = "Your hits deal less damage!",
+            color = "^1"
         }
     },
 
-    -- CHAOTIC (Affects everyone) effects
+    --=========================================================================
+    -- CHAOTIC EFFECTS (Affects everyone or is random)
+    --=========================================================================
     chaotic = {
         {
             id = "knife_fight",
-            name = "Knife Fight!",
-            description = "Everyone loses their guns!",
-            color = "^3",  -- Yellow
-            apply = function(clientNum, intensity)
-                -- Strip weapons from all players
-                for i = 0, 63 do
-                    if et.gentity_get(i, "inuse") == 1 then
-                        local team = et.gentity_get(i, "sess.sessionTeam")
-                        if team == 1 or team == 2 then
-                            et.gentity_set(i, "ps.weapon", 1)  -- Knife
-                        end
-                    end
-                end
-                return true
-            end
+            name = "KNIFE FIGHT",
+            description = "Guns are disabled!",
+            color = "^3"
+            -- Can target single player or all players
         },
         {
-            id = "low_grav",
-            name = "Moon Mode",
-            description = "Low gravity for everyone!",
-            color = "^3",
-            apply = function(clientNum, intensity)
-                local currentGrav = tonumber(et.trap_Cvar_Get("g_gravity")) or 800
-                local newGrav = math.floor(currentGrav / intensity)
-                et.trap_Cvar_Set("g_gravity", tostring(newGrav))
-                return true
-            end
+            id = "moon_mode",
+            name = "MOON MODE",
+            description = "Low gravity!",
+            color = "^3"
+            -- Can target single player or all players
         },
         {
-            id = "speed_all",
-            name = "Caffeine Rush",
-            description = "Everyone is faster!",
+            id = "russian_roulette",
+            name = "RUSSIAN ROULETTE",
+            description = "Someone dies periodically!",
             color = "^3",
-            apply = function(clientNum, intensity)
-                local currentSpeed = tonumber(et.trap_Cvar_Get("g_speed")) or 320
-                local newSpeed = math.floor(currentSpeed * intensity)
-                et.trap_Cvar_Set("g_speed", tostring(newSpeed))
-                return true
-            end
+            isGlobal = true  -- Always affects everyone (kills random player)
+        },
+        {
+            id = "team_switch",
+            name = "TEAM SWITCH",
+            description = "Teams are swapped periodically!",
+            color = "^3"
+            -- Can target single player or all players
+        },
+        {
+            id = "telefrag",
+            name = "TELEFRAG",
+            description = "Teleporting to enemies!",
+            color = "^3"
+        },
+        {
+            id = "weapon_roulette",
+            name = "WEAPON ROULETTE",
+            description = "Random weapons!",
+            color = "^3"
+        },
+        -- DISABLED: Bots aren't smart enough to actually hunt players
+        -- {
+        --     id = "clone_wars",
+        --     name = "CLONE WARS",
+        --     description = "Bots are hunting you!",
+        --     color = "^3",
+        --     singlePlayerOnly = true  -- Can't target ALL PLAYERS
+        -- },
+        {
+            id = "fling",
+            name = "FLING",
+            description = "Launched across the map!",
+            color = "^3"
+        },
+        {
+            id = "narcolepsy",
+            name = "NARCOLEPSY",
+            description = "Sudden nap attacks!",
+            color = "^3"
+        },
+        {
+            id = "panzer_freeze",
+            name = "PANZER FREEZE",
+            description = "Rockets freeze enemies!",
+            color = "^4"
+        },
+        {
+            id = "projectile_speed",
+            name = "PROJECTILE SPEED",
+            description = "Projectiles move faster/slower!",
+            color = "^3"
+        },
+        {
+            id = "earthquake",
+            name = "EARTHQUAKE",
+            description = "The ground is shaking!",
+            color = "^3"
         }
     }
 }
 
--- Get flat list of all effects for wheel display
+-- Special constant for ALL PLAYERS selection
+rickroll.ALL_PLAYERS = -999
+
+-- Get flat list of all effect names for wheel display
 function rickroll.getAllEffectNames()
     local names = {}
     for _, effect in ipairs(rickroll.effects.blessed) do
@@ -212,13 +396,140 @@ end
 -- Get effect by ID
 function rickroll.getEffectById(effectId)
     for category, effects in pairs(rickroll.effects) do
-        for _, effect in ipairs(effects) do
-            if effect.id == effectId then
-                return effect, category
+        if type(effects) == "table" then
+            for _, effect in ipairs(effects) do
+                if effect.id == effectId then
+                    return effect, category
+                end
             end
         end
     end
     return nil
+end
+
+-- Get power level info by multiplier value
+function rickroll.getPowerLevel(multiplier)
+    for _, level in ipairs(rickroll.config.powerLevels) do
+        if level.multiplier == multiplier then
+            return level
+        end
+    end
+    -- Default fallback
+    return { label = string.format("%.2fx", multiplier), multiplier = multiplier, interval = 10000, color = "^7" }
+end
+
+-- Get power level labels for wheel display
+function rickroll.getPowerLevelLabels()
+    local labels = {}
+    for _, level in ipairs(rickroll.config.powerLevels) do
+        table.insert(labels, level.color .. level.label)
+    end
+    return labels
+end
+
+-- Get how power level applies to a specific effect
+function rickroll.getPowerMeaning(effectId)
+    return rickroll.powerMeanings[effectId] or "multiplier"
+end
+
+-- Get power index (1-5) from powerLevel
+function rickroll.getPowerIndex(powerLevel)
+    for i, level in ipairs(rickroll.config.powerLevels) do
+        if level.multiplier == powerLevel.multiplier then
+            return i
+        end
+    end
+    return 3  -- Default to STRONG
+end
+
+-- Get the actual value to use based on power meaning
+function rickroll.getPowerValue(effectId, powerLevel)
+    local meaning = rickroll.getPowerMeaning(effectId)
+
+    if meaning == "multiplier" then
+        return powerLevel.multiplier
+    elseif meaning == "interval" then
+        -- Check for per-effect interval override first
+        local effectIntervals = rickroll.config.effectIntervals and rickroll.config.effectIntervals[effectId]
+        if effectIntervals then
+            local powerIndex = rickroll.getPowerIndex(powerLevel)
+            return effectIntervals[powerIndex] or powerLevel.interval
+        end
+        return powerLevel.interval
+    elseif meaning == "percentage" then
+        -- Convert multiplier to percentage (1.25 -> 25%, 3.0 -> 75%)
+        return (powerLevel.multiplier - 1) / 2 * 100
+    elseif meaning == "inverse" then
+        -- Inverse for reductions (1.25 -> 80%, 3.0 -> 33%)
+        return 1.0 / powerLevel.multiplier
+    elseif meaning == "duration" then
+        -- Multiplier affects duration (2x = 60s, 5x = 150s)
+        return powerLevel.multiplier
+    else -- "fixed"
+        return 1.0
+    end
+end
+
+-- Get display string for power level based on effect
+function rickroll.getPowerDisplay(effectId, powerLevel)
+    local meaning = rickroll.getPowerMeaning(effectId)
+
+    if meaning == "fixed" then
+        return ""  -- Don't show power for fixed effects
+    elseif meaning == "interval" then
+        -- Use per-effect interval if available
+        local interval = rickroll.getPowerValue(effectId, powerLevel)
+        return string.format("every %ds", interval / 1000)
+    elseif meaning == "percentage" then
+        local pct = (powerLevel.multiplier - 1) / 2 * 100
+        return string.format("%.0f%%", pct)
+    elseif meaning == "inverse" then
+        local pct = (1.0 / powerLevel.multiplier) * 100
+        return string.format("%.0f%%", pct)
+    elseif meaning == "duration" then
+        -- Show duration in seconds (base 30s * multiplier)
+        return string.format("%.0fs", powerLevel.multiplier * 30)
+    else -- multiplier
+        return string.format("%.2fx", powerLevel.multiplier)
+    end
+end
+
+-- Check if effect can be used with ALL PLAYERS
+function rickroll.canApplyToAll(effect)
+    -- Single player only effects can't target ALL
+    if effect.singlePlayerOnly then
+        return false
+    end
+    return true
+end
+
+-- Get effects available for a target (filters out singlePlayerOnly when ALL selected)
+function rickroll.getAvailableEffects(isAllPlayers)
+    local available = {
+        blessed = {},
+        cursed = {},
+        chaotic = {}
+    }
+
+    for _, effect in ipairs(rickroll.effects.blessed) do
+        if not isAllPlayers or rickroll.canApplyToAll(effect) then
+            table.insert(available.blessed, effect)
+        end
+    end
+
+    for _, effect in ipairs(rickroll.effects.cursed) do
+        if not isAllPlayers or rickroll.canApplyToAll(effect) then
+            table.insert(available.cursed, effect)
+        end
+    end
+
+    for _, effect in ipairs(rickroll.effects.chaotic) do
+        if not isAllPlayers or rickroll.canApplyToAll(effect) then
+            table.insert(available.chaotic, effect)
+        end
+    end
+
+    return available
 end
 
 return rickroll.config

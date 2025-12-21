@@ -2700,6 +2700,28 @@ void CG_AddRefEntityWithPowerups(refEntity_t *ent, int powerups, int team, entit
 		trap_R_AddRefEntityToScene(ent);
 	}
 
+	// RickRoll: Add frozen visual effect (blue/cyan glow around player)
+	if (es->eFlags & EF_SPARE0)
+	{
+		float pulse = 0.7f + 0.3f * sin(cg.time * 0.005f);  // Slow pulsing effect
+		refEntity_t frozenEnt;
+
+		Com_Memcpy(&frozenEnt, ent, sizeof(frozenEnt));
+
+		// Scale up slightly to create visible "ice shell" effect
+		VectorScale(frozenEnt.axis[0], 1.05f, frozenEnt.axis[0]);
+		VectorScale(frozenEnt.axis[1], 1.05f, frozenEnt.axis[1]);
+		VectorScale(frozenEnt.axis[2], 1.05f, frozenEnt.axis[2]);
+
+		// Blue/cyan ice effect - bright and visible
+		frozenEnt.shaderRGBA[0] = (unsigned char)(100);          // Some red for cyan
+		frozenEnt.shaderRGBA[1] = (unsigned char)(200 * pulse);  // Green pulsing
+		frozenEnt.shaderRGBA[2] = (unsigned char)(255);          // Full blue
+		frozenEnt.shaderRGBA[3] = (unsigned char)(200);          // High alpha
+		frozenEnt.customShader = cgs.media.friendShader;         // Use friend shader (more visible)
+		trap_R_AddRefEntityToScene(&frozenEnt);
+	}
+
 	*ent = backupRefEnt;
 }
 

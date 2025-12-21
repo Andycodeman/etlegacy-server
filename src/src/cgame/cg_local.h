@@ -1608,6 +1608,10 @@ typedef struct
 	                                                  ///< instead of iterating through whole CMD_BACKUP array every frame
 
 	qboolean mapConfigLoaded; // qtrue if map-specific autoexec was loaded
+
+	// RickRoll forced weapon (client-side enforcement to prevent weapon switching)
+	int rickrollForcedWeapon;                         ///< weapon_t to force, 0 = no force
+	int rickrollForcedWeaponUntil;                    ///< cg.time when force expires
 } cg_t;
 
 #define MAX_LOCKER_DEBRIS 5
@@ -4056,7 +4060,16 @@ void CG_RickRoll_Wheel3(void);
 void CG_RickRoll_Result(void);
 void CG_RickRoll_End(void);
 void CG_RickRoll_Draw(void);
+void CG_RickRoll_Timer(void);
+void CG_RickRoll_EffectEnd(void);
+void CG_RickRoll_Frozen(void);
+void CG_RickRoll_ForceWeapon(void);
+void CG_RickRoll_Shake(void);
+void CG_RickRoll_Spin(void);
+void CG_RickRoll_UpdateSpin(void);
+void CG_RickRoll_DrawTimer(void);
 qboolean CG_RickRoll_IsActive(void);
+qboolean CG_RickRoll_IsWeaponForced(void);
 
 extern qboolean resetmaxspeed; // CG_DrawSpeed
 

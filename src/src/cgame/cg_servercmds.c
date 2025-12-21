@@ -3771,6 +3771,9 @@ static void CG_ServerCommand(void)
 	}
 #endif
 	// Rick Roll Mode commands
+	// Hash computed using BG_StringHashValue() from bg_animation.c:
+	//   hash = sum of (char * (index + 119)) for each char, uppercase converted to lowercase
+	// Python: sum((ord(c.lower()) * (i + 119)) for i, c in enumerate(s))
 	case 190698:  // "rickroll_start"
 		CG_RickRoll_Start();
 		return;
@@ -3788,6 +3791,24 @@ static void CG_ServerCommand(void)
 		return;
 	case 158276:  // "rickroll_end"
 		CG_RickRoll_End();
+		return;
+	case 189000:  // "rickroll_timer"
+		CG_RickRoll_Timer();
+		return;
+	case 254256:  // "rickroll_effect_end"
+		CG_RickRoll_EffectEnd();
+		return;
+	case 204294:  // "rickroll_frozen"
+		CG_RickRoll_Frozen();
+		return;
+	case 274729:  // "rickroll_forceweapon"
+		CG_RickRoll_ForceWeapon();
+		return;
+	case 186253:  // "rickroll_shake"
+		CG_RickRoll_Shake();
+		return;
+	case 175386:  // "rickroll_spin"
+		CG_RickRoll_Spin();
 		return;
 	default:
 		CG_Printf("Unknown client game command: %s [%lu]\n", cmd, hash);

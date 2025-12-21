@@ -1712,9 +1712,14 @@ void G_DamageExt(gentity_t *targ, gentity_t *inflictor, gentity_t *attacker, vec
 	}
 
 #ifdef FEATURE_LUA
-	if (G_LuaHook_Damage(targ->s.number, attacker->s.number, take, dflags, mod))
 	{
-		return;
+		int modifiedDamage;
+		if (G_LuaHook_Damage(targ->s.number, attacker->s.number, take, dflags, mod, &modifiedDamage))
+		{
+			return;  // Lua aborted damage
+		}
+		// Use modified damage from Lua if different
+		take = modifiedDamage;
 	}
 #endif
 

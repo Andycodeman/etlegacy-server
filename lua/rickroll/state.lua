@@ -6,6 +6,10 @@
 rickroll = rickroll or {}
 
 rickroll.state = {
+    -- Current level time (updated every frame from et_RunFrame)
+    -- Use this instead of trap_Milliseconds() for freeze timing!
+    currentLevelTime = 0,
+
     -- Trigger state
     nextTriggerTime = 0,
     lastTriggerTime = 0,
@@ -19,9 +23,11 @@ rickroll.state = {
     -- Selection results (determined at start, revealed over time)
     selectedPlayer = -1,
     selectedPlayerName = "",
+    isAllPlayers = false,           -- True if ALL PLAYERS was selected
     selectedEffect = nil,
     selectedEffectCategory = "",
-    selectedIntensity = 1.0,
+    selectedPowerLevel = nil,       -- Full power level object
+    selectedIntensity = 1.0,        -- Legacy: just the multiplier
 
     -- Wheel display data (for clients)
     playerList = {},
@@ -29,10 +35,12 @@ rickroll.state = {
     intensityList = {},
 
     -- Active effects on players
-    activeEffects = {},  -- {clientNum = {effectId, endTime, intensity, originalValues}}
+    -- For single player: {clientNum = {effectId, endTime, powerLevel, originalValues, ...}}
+    -- For ALL PLAYERS: multiple entries, one per player
+    activeEffects = {},
 
-    -- Global effects state
-    globalEffects = {},  -- {effectId = {endTime, originalValue}}
+    -- Global effects state (affects CVARs like gravity/speed)
+    globalEffects = {},  -- {effectId = {endTime, originalValue, triggeredBy}}
 
     -- Recently selected players (for cooldown)
     recentPlayers = {},
@@ -52,6 +60,8 @@ function rickroll.state.reset()
     rickroll.state.isRolling = false
     rickroll.state.rollStartTime = 0
     rickroll.state.selectedPlayer = -1
+    rickroll.state.isAllPlayers = false
+    rickroll.state.selectedPowerLevel = nil
     rickroll.state.activeEffects = {}
     rickroll.state.globalEffects = {}
     rickroll.state.recentPlayers = {}

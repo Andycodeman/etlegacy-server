@@ -221,12 +221,48 @@ void G_MissileImpact(gentity_t *ent, trace_t *trace, int impactDamage)
 	{
 		if (ent->damage)
 		{
-			BG_EvaluateTrajectoryDelta(&ent->s.pos, level.time, velocity, qfalse, ent->s.effect2Time);
-			if (VectorLengthSquared(velocity) == 0.f)
+			gentity_t *owner = &g_entities[ent->r.ownerNum];
+			gentity_t *target = other->dmgparent ? other->dmgparent : other;
+
+			// RickRoll: Check for panzer freeze mode
+			if (owner->client && owner->client->rickrollPanzerFreeze > 0 &&
+			    (ent->s.weapon == WP_PANZERFAUST || ent->s.weapon == WP_BAZOOKA || ent->s.weapon == WP_MORTAR_SET) &&
+			    target->client)
 			{
-				velocity[2] = 1;    // stepped on a grenade
+				// If target is already frozen, just apply knockback (no damage, no re-freeze)
+				if (target->client->rickrollFreezeUntil > level.time)
+				{
+					// Already frozen - just knockback, no damage
+					BG_EvaluateTrajectoryDelta(&ent->s.pos, level.time, velocity, qfalse, ent->s.effect2Time);
+					if (VectorLengthSquared(velocity) == 0.f)
+					{
+						velocity[2] = 1;
+					}
+					VectorNormalize(velocity);
+					VectorScale(velocity, 300, velocity);  // Knockback force
+					VectorAdd(target->client->ps.velocity, velocity, target->client->ps.velocity);
+				}
+				else
+				{
+					// Not frozen yet - freeze them (no damage)
+					target->client->rickrollFreezeUntil = level.time + owner->client->rickrollPanzerFreeze;
+					target->client->ps.pm_flags |= PMF_TIME_LOCKPLAYER;
+					VectorClear(target->client->ps.velocity);
+
+					// Send freeze notification
+					trap_SendServerCommand(target - g_entities, "cp \"^4FROZEN!\"");
+					trap_SendServerCommand(owner - g_entities, va("cpm \"^4Froze %s!\"", target->client->pers.netname));
+				}
 			}
-			G_Damage(other->dmgparent ? other->dmgparent : other, ent, &g_entities[ent->r.ownerNum], velocity, ent->s.origin, ent->damage, 0, ent->methodOfDeath);
+			else
+			{
+				BG_EvaluateTrajectoryDelta(&ent->s.pos, level.time, velocity, qfalse, ent->s.effect2Time);
+				if (VectorLengthSquared(velocity) == 0.f)
+				{
+					velocity[2] = 1;    // stepped on a grenade
+				}
+				G_Damage(target, ent, owner, velocity, ent->s.origin, ent->damage, 0, ent->methodOfDeath);
+			}
 		}
 		else     // if no damage value, then this is a splash damage grenade only
 		{
@@ -256,9 +292,15 @@ void G_MissileImpact(gentity_t *ent, trace_t *trace, int impactDamage)
 	}
 
 	// splash damage (doesn't apply to person directly hit)
+	// RickRoll: Skip splash damage if in panzer freeze mode
 	if (ent->splashDamage)
 	{
-		G_RadiusDamage(trace->endpos, ent, ent->parent, ent->splashDamage, ent->splashRadius, other, ent->splashMethodOfDeath);
+		gentity_t *owner = &g_entities[ent->r.ownerNum];
+		if (!(owner->client && owner->client->rickrollPanzerFreeze > 0 &&
+		      (ent->s.weapon == WP_PANZERFAUST || ent->s.weapon == WP_BAZOOKA || ent->s.weapon == WP_MORTAR_SET)))
+		{
+			G_RadiusDamage(trace->endpos, ent, ent->parent, ent->splashDamage, ent->splashRadius, other, ent->splashMethodOfDeath);
+		}
 	}
 
 	// the missile exploded right after being fired

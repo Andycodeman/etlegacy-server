@@ -1221,6 +1221,72 @@ void ClientThink_real(gentity_t *ent)
 		return;
 	}
 
+	// RickRoll: Handle freeze state
+	// Check if frozen (freezeUntil > 0 means frozen, will unfreeze when level.time >= freezeUntil)
+	// Lua can set freezeUntil = 0 to force unfreeze
+	if (client->rickrollFreezeUntil > 0 && level.time < client->rickrollFreezeUntil)
+	{
+		// Still frozen - prevent ALL movement (humans and bots)
+		client->ps.pm_flags |= PMF_TIME_LOCKPLAYER;
+		ent->s.eFlags |= EF_SPARE0;  // Set frozen visual flag for cgame rendering
+		// Zero out velocity to stop sliding
+		VectorClear(client->ps.velocity);
+		// Clear all movement commands (important for bots!)
+		client->pers.cmd.forwardmove = 0;
+		client->pers.cmd.rightmove = 0;
+		client->pers.cmd.upmove = 0;
+		client->pers.cmd.buttons = 0;
+		client->pers.cmd.wbuttons = 0;
+		// Skip the rest of ClientThink - don't process any input
+		return;
+	}
+	else
+	{
+		// Not frozen (either freezeUntil=0 or time expired) - clear flags
+		if (client->ps.pm_flags & PMF_TIME_LOCKPLAYER)
+		{
+			client->ps.pm_flags &= ~PMF_TIME_LOCKPLAYER;
+			// Only show message if we were actually frozen before
+			if (client->rickrollFreezeUntil > 0)
+			{
+				trap_SendServerCommand(ent - g_entities, "cp \"^2UNFROZEN!\"");
+			}
+		}
+		client->rickrollFreezeUntil = 0;
+		ent->s.eFlags &= ~EF_SPARE0;
+	}
+
+	// RickRoll: Handle slippery/ice mode
+	// rickrollSlippery stores the friction multiplier (15-30), 0 = disabled
+	if (client->rickrollSlippery > 0)
+	{
+		// Set friction value from Lua (15x to 30x reduction)
+		// pm_friction is 6, so dividing by this value gives low friction = ice skating
+		client->ps.friction = (float)client->rickrollSlippery;
+	}
+	else
+	{
+		client->ps.friction = 1.0f;  // Normal friction
+	}
+
+	// RickRoll: Handle forced weapon (butter fingers, weapon roulette)
+	if (client->rickrollForcedWeapon > 0 && level.time < client->rickrollForcedWeaponUntil)
+	{
+		// Force the weapon
+		if (client->ps.weapon != client->rickrollForcedWeapon)
+		{
+			client->ps.weapon = client->rickrollForcedWeapon;
+			client->ps.weaponstate = WEAPON_READY;
+			client->ps.weaponTime = 0;
+		}
+	}
+	else if (client->rickrollForcedWeapon > 0)
+	{
+		// Time expired, clear the forced weapon
+		client->rickrollForcedWeapon = 0;
+		client->rickrollForcedWeaponUntil = 0;
+	}
+
 	if ((ent->s.eFlags & EF_MOUNTEDTANK) && ent->tagParent)
 	{
 		client->pmext.centerangles[YAW]   = ent->tagParent->r.currentAngles[YAW];
@@ -1405,6 +1471,12 @@ void ClientThink_real(gentity_t *ent)
 		client->ps.speed *= (client->speedScale * 0.01);
 	}
 
+	// RickRoll effect speed scale (100 = normal, 150 = 50% faster, 50 = 50% slower)
+	if (client->rickrollSpeedScale && client->rickrollSpeedScale != 100)
+	{
+		client->ps.speed *= (client->rickrollSpeedScale * 0.01);
+	}
+
 	// set up for pmove
 	oldEventSequence = client->ps.eventSequence;
 
@@ -1483,7 +1555,25 @@ void ClientThink_real(gentity_t *ent)
 	pm.activateLean  = client->pers.activateLean;
 	pm.gameMiscFlags = g_misc.integer;  // ETMan: pass g_misc flags for double jump, etc.
 
+	// RickRoll: Override weapon in pm.cmd BEFORE Pmove processes it
+	// This prevents the client's old weapon command from switching back
+	if (client->rickrollForcedWeapon > 0 && level.time < client->rickrollForcedWeaponUntil)
+	{
+		pm.cmd.weapon = client->rickrollForcedWeapon;
+	}
+
 	Pmove(&pm); // monsterslick
+
+	// RickRoll: Force weapon AGAIN after Pmove in case it changed it
+	if (client->rickrollForcedWeapon > 0 && level.time < client->rickrollForcedWeaponUntil)
+	{
+		if (client->ps.weapon != client->rickrollForcedWeapon)
+		{
+			client->ps.weapon = client->rickrollForcedWeapon;
+			client->ps.weaponstate = WEAPON_READY;
+			client->ps.weaponTime = 0;
+		}
+	}
 
 	// server cursor hints
 	// bots don't need to check for cursor hints

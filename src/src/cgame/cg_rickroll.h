@@ -19,9 +19,14 @@ void CG_RickRoll_Wheel2(void);
 void CG_RickRoll_Wheel3(void);
 void CG_RickRoll_Result(void);
 void CG_RickRoll_End(void);
+void CG_RickRoll_Timer(void);
+void CG_RickRoll_EffectEnd(void);
 
 // Draw the Rick Roll overlay (call from CG_Draw2D)
 void CG_RickRoll_Draw(void);
+
+// Draw the effect timer HUD element
+void CG_RickRoll_DrawTimer(void);
 
 // Check if Rick Roll animation is currently active
 qboolean CG_RickRoll_IsActive(void);
@@ -34,5 +39,7 @@ qboolean CG_RickRoll_IsActive(void);
 #define RICKROLL_WHEEL3_HASH    194206  // "rickroll_wheel3"
 #define RICKROLL_RESULT_HASH    205740  // "rickroll_result"
 #define RICKROLL_END_HASH       158276  // "rickroll_end"
+#define RICKROLL_TIMER_HASH     189000  // "rickroll_timer"
+#define RICKROLL_EFFECT_END_HASH 254256 // "rickroll_effect_end"
 
 #endif // CG_RICKROLL_H

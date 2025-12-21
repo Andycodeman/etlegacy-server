@@ -533,8 +533,16 @@ static void PM_Friction(void)
 			if (!(pm->ps->pm_flags & PMF_TIME_KNOCKBACK))
 			{
 				float control = speed < pm_stopspeed ? pm_stopspeed : speed;
+				float frictionMod = pm_friction;
 
-				drop += control * pm_friction * pml.frametime;
+				// RickRoll: Apply slippery/ice effect (friction > 1.0 = ice mode)
+				// Higher ps->friction value = more slippery (less friction applied)
+				if (pm->ps->friction > 1.0f)
+				{
+					frictionMod = pm_friction / pm->ps->friction;
+				}
+
+				drop += control * frictionMod * pml.frametime;
 			}
 		}
 	}

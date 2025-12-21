@@ -2408,6 +2408,15 @@ void CG_DrawActiveFrame(int serverTime, qboolean demoPlayback)
 		cg.weaponSelectDuringFiring = (cg.snap->ps.weaponstate == WEAPON_FIRING) ? cg.time : 0;
 	}
 
+	// RickRoll: Enforce forced weapon - override any weapon selection
+	// Note: We DON'T set weaponSelectTime here to avoid repeated weapon switch sounds
+	// The server will handle the actual weapon forcing; this just keeps client in sync
+	if (CG_RickRoll_IsWeaponForced() && cg.weaponSelect != cg.rickrollForcedWeapon)
+	{
+		cg.weaponSelect = cg.rickrollForcedWeapon;
+		// Don't set weaponSelectTime - avoids weapon flash/sound spam
+	}
+
 	// The very first frame
 	if (cg.clientFrame == 0)
 	{
@@ -2482,6 +2491,10 @@ void CG_DrawActiveFrame(int serverTime, qboolean demoPlayback)
 
 		// build cg.refdef
 		inwater = CG_CalcViewValues();
+
+		// RickRoll: Apply smooth spin effect (disoriented)
+		CG_RickRoll_UpdateSpin();
+
 		CG_SetupFrustum();
 
 		DEBUGTIME

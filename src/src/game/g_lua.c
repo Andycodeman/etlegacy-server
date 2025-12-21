@@ -1241,6 +1241,25 @@ static const gentity_field_t gclient_fields[] =
 	_et_gclient_addfield(freezed,                           FIELD_INT,                 0),
 	_et_gclient_addfield(constructSoundTime,                FIELD_INT,                 FIELD_FLAG_READONLY),
 
+	// RickRoll effect support - per-player speed multiplier (100 = normal)
+	_et_gclient_addfield(rickrollSpeedScale,                FIELD_INT,                 0),
+
+	// RickRoll projectile speed multiplier (100 = normal, 200 = 2x speed)
+	_et_gclient_addfield(rickrollRocketSpeed,              FIELD_INT,                 0),
+
+	// RickRoll panzer freeze mode (> 0 = freeze duration in ms, rockets freeze instead of damage)
+	_et_gclient_addfield(rickrollPanzerFreeze,             FIELD_INT,                 0),
+
+	// RickRoll freeze state (level.time when freeze ends, 0 = not frozen)
+	_et_gclient_addfield(rickrollFreezeUntil,              FIELD_INT,                 0),
+
+	// RickRoll slippery/ice mode (0 = normal, 1 = ice physics)
+	_et_gclient_addfield(rickrollSlippery,                 FIELD_INT,                 0),
+
+	// RickRoll forced weapon (force to specific weapon, block switching)
+	_et_gclient_addfield(rickrollForcedWeapon,             FIELD_INT,                 0),
+	_et_gclient_addfield(rickrollForcedWeaponUntil,        FIELD_INT,                 0),
+
 	// to be compatible with ETPro:
 	_et_gclient_addfieldalias(client.inactivityTime,        inactivityTime,            FIELD_INT,           0),
 	_et_gclient_addfieldalias(client.inactivityWarning,     inactivityWarning,         FIELD_INT,           0),
@@ -1286,14 +1305,16 @@ static const gentity_field_t gclient_fields[] =
 	_et_gclient_addfield(ps.pm_time,                        FIELD_INT,                 FIELD_FLAG_READONLY),
 	_et_gclient_addfield(ps.pm_type,                        FIELD_INT,                 FIELD_FLAG_READONLY),
 	_et_gclient_addfield(ps.eFlags,                         FIELD_INT,                 FIELD_FLAG_READONLY),
-	_et_gclient_addfield(ps.weapon,                         FIELD_INT,                 FIELD_FLAG_READONLY),
-	_et_gclient_addfield(ps.weaponstate,                    FIELD_INT,                 FIELD_FLAG_READONLY),
+	_et_gclient_addfield(ps.weapon,                         FIELD_INT,                 0),  // Made writable for RickRoll
+	_et_gclient_addfield(ps.weaponstate,                    FIELD_INT,                 0),  // Made writable for RickRoll (force weapon switch)
+	_et_gclient_addfield(ps.weaponTime,                     FIELD_INT,                 0),  // Made writable for RickRoll
 	_et_gclient_addfield(ps.stats,                          FIELD_INT_ARRAY,           0),
 	_et_gclient_addfield(ps.persistant,                     FIELD_INT_ARRAY,           0),
 	_et_gclient_addfield(ps.ping,                           FIELD_INT,                 FIELD_FLAG_READONLY),// no ping change for lua scripts
 	_et_gclient_addfield(ps.powerups,                       FIELD_INT_ARRAY,           0),
 	_et_gclient_addfield(ps.origin,                         FIELD_VEC3,                0),
 	_et_gclient_addfield(ps.viewangles,                     FIELD_VEC3,                0),
+	_et_gclient_addfield(ps.delta_angles,                   FIELD_INT_ARRAY,           0),  // For forcing view changes (short[3])
 	_et_gclient_addfield(ps.velocity,                       FIELD_VEC3,                0),
 	_et_gclient_addfield(ps.ammo,                           FIELD_INT_ARRAY,           0),
 	_et_gclient_addfield(ps.ammoclip,                       FIELD_INT_ARRAY,           0),
@@ -1392,7 +1413,7 @@ static const gentity_field_t gentity_fields[] =
 	_et_gentity_addfield(end_size,            FIELD_INT,        0),
 	_et_gentity_addfield(enemy,               FIELD_ENTITY,     0),
 	_et_gentity_addfield(entstate,            FIELD_INT,        FIELD_FLAG_READONLY),
-	_et_gentity_addfield(flags,               FIELD_INT,        FIELD_FLAG_READONLY),
+	_et_gentity_addfield(flags,               FIELD_INT,        0),  // Made writable for RickRoll
 	_et_gentity_addfield(harc,                FIELD_FLOAT,      0),
 	_et_gentity_addfield(health,              FIELD_INT,        0),
 	_et_gentity_addfield(inuse,               FIELD_INT,        0),
@@ -4267,10 +4288,16 @@ qboolean G_LuaHook_Revive(int revivee, int reviver, int invulnEndTime)
  * @lua_def ---@param damageFlags number
  * @lua_def ---@param meansOfDeath number the means of death. See `et.MOD_*` for possible values.
  */
-qboolean G_LuaHook_Damage(int target, int attacker, int damage, int dflags, meansOfDeath_t mod)
+qboolean G_LuaHook_Damage(int target, int attacker, int damage, int dflags, meansOfDeath_t mod, int *modifiedDamage)
 {
 	int      i;
 	lua_vm_t *vm;
+
+	// Initialize modified damage to original
+	if (modifiedDamage)
+	{
+		*modifiedDamage = damage;
+	}
 
 	for (i = 0; i < LUA_NUM_VM; i++)
 	{
@@ -4298,10 +4325,19 @@ qboolean G_LuaHook_Damage(int target, int attacker, int damage, int dflags, mean
 				continue;
 			}
 			// Return values
-			if (lua_tointeger(vm->L, -1) == 1)
+			// Return 1 = abort damage completely
+			// Return 0 or nil = use original damage
+			// Return > 1 = use returned value as modified damage
+			int retval = lua_tointeger(vm->L, -1);
+			if (retval == 1)
 			{
 				lua_pop(vm->L, 1);
-				return qtrue;
+				return qtrue;  // Abort damage
+			}
+			else if (retval > 1 && modifiedDamage)
+			{
+				// Use returned value as new damage amount
+				*modifiedDamage = retval;
 			}
 			lua_pop(vm->L, 1);
 		}

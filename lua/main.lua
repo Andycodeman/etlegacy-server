@@ -247,6 +247,11 @@ end
 
 function et_ClientSpawn(clientNum, revived, teamChange, restoreHealth)
     -- Player spawned (after death or team change)
+
+    -- Re-apply Rick Roll effects after respawn
+    if rickrollEnabled and rickroll then
+        rickroll.onPlayerSpawn(clientNum, revived)
+    end
 end
 
 --[[
@@ -262,6 +267,38 @@ function et_Obituary(victim, killer, meansOfDeath)
         local victimName = et.gentity_get(victim, "pers.netname") or "Unknown"
         debug(killerName .. " killed " .. victimName .. " (MOD: " .. meansOfDeath .. ")")
     end
+end
+
+--[[
+    DAMAGE HOOK
+    Called when a player takes damage
+    Return modified damage value or nil to use original
+]]--
+function et_Damage(target, attacker, damage, damageFlags, meansOfDeath)
+    -- Only process if rickroll effects are active
+    if not rickroll or not rickroll.effectSystem then
+        return nil
+    end
+
+    local modifiedDamage = damage
+
+    -- Check if attacker has damage boost
+    if attacker >= 0 and rickroll.effectSystem.damageBoost and rickroll.effectSystem.damageBoost[attacker] then
+        local boost = rickroll.effectSystem.damageBoost[attacker]
+        modifiedDamage = math.floor(modifiedDamage * boost)
+    end
+
+    -- Check if attacker has weak hits
+    if attacker >= 0 and rickroll.effectSystem.weakHits and rickroll.effectSystem.weakHits[attacker] then
+        local reduction = rickroll.effectSystem.weakHits[attacker]
+        modifiedDamage = math.floor(modifiedDamage * reduction)
+    end
+
+    -- Return modified damage if changed, nil otherwise
+    if modifiedDamage ~= damage then
+        return modifiedDamage
+    end
+    return nil
 end
 
 function et_Print(text, level)
@@ -440,6 +477,9 @@ end
 function et_ConsoleCommand()
     local cmd = et.trap_Argv(0):lower()
 
+    -- Debug: log what command we received
+    et.G_Print(string.format("[DEBUG] et_ConsoleCommand: cmd='%s'\n", cmd))
+
     if cmd == "lua_reload" then
         log("^3Reloading Lua scripts on next map...")
         return 1
@@ -447,6 +487,7 @@ function et_ConsoleCommand()
 
     -- Rick Roll Mode console commands
     if rickrollEnabled and rickroll then
+        et.G_Print(string.format("[DEBUG] Calling rickroll.consoleCommand with '%s'\n", cmd))
         if rickroll.consoleCommand(cmd) then
             return 1
         end

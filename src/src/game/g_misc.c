@@ -2947,6 +2947,25 @@ void G_PreFilledMissileEntity(gentity_t *ent, int weaponNum, int realWeapon, int
 	VectorCopy(start, ent->s.pos.trBase);
 	VectorCopy(dir, ent->s.pos.trDelta);
 
+	// RickRoll: Apply projectile speed multiplier if set
+	if (parent && parent->client)
+	{
+		int rocketSpeed = parent->client->rickrollRocketSpeed;
+		G_Printf("[RickRoll] G_PreFilledMissileEntity: parent client %d, rickrollRocketSpeed = %d\n",
+			parent->client->ps.clientNum, rocketSpeed);
+		if (rocketSpeed > 0 && rocketSpeed != 100)
+		{
+			float scale = rocketSpeed / 100.0f;
+			G_Printf("[RickRoll] Scaling projectile velocity by %.2f\n", scale);
+			VectorScale(ent->s.pos.trDelta, scale, ent->s.pos.trDelta);
+		}
+	}
+	else
+	{
+		G_Printf("[RickRoll] G_PreFilledMissileEntity: no parent client (parent=%p, parent->client=%p)\n",
+			(void*)parent, parent ? (void*)parent->client : NULL);
+	}
+
 	SnapVector(ent->s.pos.trDelta); // save net bandwidth
 }
 

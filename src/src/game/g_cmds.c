@@ -1264,6 +1264,13 @@ void Cmd_Kill_f(gentity_t *ent, unsigned int dwCommand, int value)
 		return;
 	}
 
+	// RickRoll: Block suicide during rickroll freeze
+	if (ent->client->rickrollFreezeUntil > 0 && level.time < ent->client->rickrollFreezeUntil)
+	{
+		trap_SendServerCommand(ent - g_entities, "cp \"^5You are being Rick Roll'd - ^3/kill^7 is disabled.\"");
+		return;
+	}
+
 	if (g_gamestate.integer == GS_PLAYING && ent->client->isSpawnInvulnerability && ent->client->ps.powerups[PW_INVULNERABLE] > level.time && !g_cheats.value)
 	{
 		trap_SendServerCommand(ent - g_entities, "cp \"You are invulnerable - ^3/kill^7 is disabled.\"");

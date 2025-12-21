@@ -1020,6 +1020,27 @@ struct gclient_s
 
 	int speedScale;
 
+	// RickRoll effect speed multiplier (100 = normal, 150 = 50% faster, 50 = 50% slower)
+	// Set via Lua: et.gentity_set(clientNum, "client.rickrollSpeedScale", 150)
+	int rickrollSpeedScale;
+
+	// RickRoll projectile speed multiplier (100 = normal, 200 = 2x faster, 50 = half speed)
+	// Affects ALL projectile weapons (rockets, grenades, etc)
+	int rickrollRocketSpeed;
+
+	// RickRoll panzer freeze mode (if > 0, rockets freeze instead of damage, value = freeze duration ms)
+	int rickrollPanzerFreeze;
+
+	// RickRoll freeze state (time when freeze ends, 0 = not frozen)
+	int rickrollFreezeUntil;
+
+	// RickRoll slippery/ice mode (0 = normal, 1 = ice physics - reduced friction)
+	int rickrollSlippery;
+
+	// RickRoll forced weapon (if > 0, force to this weapon and block switching until time expires)
+	int rickrollForcedWeapon;       // weapon_t to force, 0 = no force
+	int rickrollForcedWeaponUntil;  // level.time when force expires
+
 	unsigned int combatState;
 
 	// antilag
