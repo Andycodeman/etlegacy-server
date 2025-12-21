@@ -41,11 +41,22 @@ rickroll.config = {
     warmupDelay = 10000,   -- 10 seconds warmup (TESTING - change to 120000 for production)
 
     -- Animation timing (milliseconds) - synced with 18.67s audio
+    -- FULL INTRO (first roll of map)
     animationDuration = 18670,
     wheel1StopTime = 6000,    -- Player wheel stops at 6s
     wheel2StopTime = 9000,    -- Effect wheel stops at 9s
     wheel3StopTime = 12000,   -- Intensity wheel stops at 12s
     resultShowTime = 13000,   -- Show result at 13s
+
+    -- QUICK MODE (subsequent rolls) - faster, no freeze, no music
+    quickMode = {
+        animationDuration = 5000,   -- 5 seconds total
+        wheel1StopTime = 1500,      -- Player wheel stops at 1.5s
+        wheel2StopTime = 2500,      -- Effect wheel stops at 2.5s
+        wheel3StopTime = 3500,      -- Intensity wheel stops at 3.5s
+        resultShowTime = 4000,      -- Show result at 4s
+        flashDuration = 500,        -- Quick red flash at start
+    },
 
     -- Effect duration (milliseconds)
     effectDuration = 60000,   -- Effects last 60 seconds

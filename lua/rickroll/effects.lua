@@ -206,40 +206,46 @@ end
 
 function rickroll.effectSystem.getDescription(effectId, powerLevel, powerValue)
     local meaning = rickroll.getPowerMeaning(effectId)
+
+    -- For multiplier effects, show actual percentage (2.0x = 200%)
+    local speedPct = math.floor(powerValue * 100)
+    -- For inverse effects, powerValue is already the fraction (e.g., 0.5 for 50%)
+    local inversePct = math.floor(powerValue * 100)
+
     local descriptions = {
         -- BLESSED
-        god_mode = "Cannot take damage! (20-60 seconds based on power)",
-        caffeine_rush = "Movement speed boosted 150%-300%!",
-        tank_mode = "Health boosted 150%-300%!",
-        regeneration = "Regenerate 10-25 HP every 2 seconds!",
-        adrenaline = "Adrenaline regenerates 10-25 every 2 seconds!",
+        god_mode = string.format("Cannot take damage for %d seconds!", math.floor(powerValue * 30)),
+        caffeine_rush = string.format("Movement speed boosted to %d%%!", speedPct),
+        tank_mode = string.format("Health boosted to %d%%!", speedPct),
+        regeneration = string.format("Regenerate %d HP every 2 seconds!", math.floor(10 * powerValue)),
+        adrenaline = string.format("Adrenaline regenerates %d every 2 seconds!", math.floor(10 * powerValue)),
         medic_mode = string.format("Receive health pack every %.0f seconds!", powerValue / 1000),
-        damage_boost = string.format("Your attacks deal %.0fx damage!", powerValue),
+        damage_boost = string.format("Your attacks deal %.1fx damage!", powerValue),
 
         -- CURSED
-        tiny_legs = string.format("Movement speed reduced to %.0f%% for 60 seconds!", powerValue * 100),
-        glass_cannon = "Health reduced to 80%-10% - fragile!",
+        tiny_legs = string.format("Movement speed reduced to %d%%!", inversePct),
+        glass_cannon = string.format("Health reduced to %d%% - fragile!", inversePct),
         disoriented = string.format("Screen spins every %.0f seconds!", powerValue / 1000),
         marked = string.format("Location revealed every %.0f seconds!", powerValue / 1000),
         butter_fingers = string.format("Drop weapon every %.0f seconds!", powerValue / 1000),
-        pistols_only = "Only pistol has ammo for 60 seconds!",
+        pistols_only = "Only pistol has ammo!",
         bouncy = string.format("Random knockback every %.0f seconds!", powerValue / 1000),
-        slippery = "Ice physics 15x-30x slippery!",
-        weak_hits = "Your attacks deal only 80%-10% damage!",
+        slippery = string.format("Ice physics - %.0fx slippery!", powerValue),
+        weak_hits = string.format("Your attacks deal only %d%% damage!", inversePct),
 
         -- CHAOTIC
         knife_fight = "Guns disabled - knives only!",
-        moon_mode = "Gravity reduced to 80%-50% - floaty jumps!",
+        moon_mode = string.format("Gravity reduced to %d%% - floaty jumps!", inversePct),
         russian_roulette = string.format("Random player dies every %.0f seconds!", powerValue / 1000),
-        team_switch = string.format("Team swapped every %.0f seconds! (restored when done)", powerValue / 1000),
+        team_switch = string.format("Team swapped every %.0f seconds!", powerValue / 1000),
         telefrag = string.format("Teleport to random enemy every %.0f seconds!", powerValue / 1000),
         weapon_roulette = string.format("Weapon changes every %.0f seconds!", powerValue / 1000),
         clone_wars = "Bots are hunting you!",
         fling = string.format("Launched across map every %.0f seconds!", powerValue / 1000),
         narcolepsy = string.format("Sudden nap attacks every %.0f seconds!", powerValue / 1000),
-        panzer_freeze = "Rockets freeze enemies for 5-15 seconds!",
-        projectile_speed = "Projectiles move FASTER or SLOWER - random!",
-        earthquake = "The ground is shaking! Periodic screen shake!"
+        panzer_freeze = string.format("Rockets freeze enemies for %.0f seconds!", powerValue * 30),
+        projectile_speed = string.format("Projectiles move at %.1fx speed!", powerValue),
+        earthquake = string.format("Screen shake intensity %.1fx!", powerValue)
     }
 
     return descriptions[effectId] or "Unknown effect!"

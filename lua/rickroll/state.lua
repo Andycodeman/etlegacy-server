@@ -5,53 +5,64 @@
 
 rickroll = rickroll or {}
 
-rickroll.state = {
-    -- Current level time (updated every frame from et_RunFrame)
-    -- Use this instead of trap_Milliseconds() for freeze timing!
-    currentLevelTime = 0,
+-- Only initialize state if it doesn't exist (preserve across file reloads)
+if not rickroll.state then
+    rickroll.state = {
+        -- Current level time (updated every frame from et_RunFrame)
+        -- Use this instead of trap_Milliseconds() for freeze timing!
+        currentLevelTime = 0,
 
-    -- Trigger state
-    nextTriggerTime = 0,
-    lastTriggerTime = 0,
-    mapStartTime = 0,
+        -- Trigger state
+        nextTriggerTime = 0,
+        lastTriggerTime = 0,
+        mapStartTime = 0,
 
-    -- Active roll state
-    isRolling = false,
-    rollStartTime = 0,
-    rollSeed = 0,
+        -- Intro tracking (resets on map change)
+        -- First roll of the map gets full intro, subsequent rolls are quick
+        hasPlayedIntro = false,
 
-    -- Selection results (determined at start, revealed over time)
-    selectedPlayer = -1,
-    selectedPlayerName = "",
-    isAllPlayers = false,           -- True if ALL PLAYERS was selected
-    selectedEffect = nil,
-    selectedEffectCategory = "",
-    selectedPowerLevel = nil,       -- Full power level object
-    selectedIntensity = 1.0,        -- Legacy: just the multiplier
+        -- Active roll state
+        isRolling = false,
+        isQuickMode = false,  -- true when using quick mode timing
+        rollStartTime = 0,
+        rollSeed = 0,
 
-    -- Wheel display data (for clients)
-    playerList = {},
-    effectList = {},
-    intensityList = {},
+        -- Selection results (determined at start, revealed over time)
+        selectedPlayer = -1,
+        selectedPlayerName = "",
+        isAllPlayers = false,           -- True if ALL PLAYERS was selected
+        selectedEffect = nil,
+        selectedEffectCategory = "",
+        selectedPowerLevel = nil,       -- Full power level object
+        selectedIntensity = 1.0,        -- Legacy: just the multiplier
 
-    -- Active effects on players
-    -- For single player: {clientNum = {effectId, endTime, powerLevel, originalValues, ...}}
-    -- For ALL PLAYERS: multiple entries, one per player
-    activeEffects = {},
+        -- Wheel display data (for clients)
+        playerList = {},
+        effectList = {},
+        intensityList = {},
 
-    -- Global effects state (affects CVARs like gravity/speed)
-    globalEffects = {},  -- {effectId = {endTime, originalValue, triggeredBy}}
+        -- Active effects on players
+        -- For single player: {clientNum = {effectId, endTime, powerLevel, originalValues, ...}}
+        -- For ALL PLAYERS: multiple entries, one per player
+        activeEffects = {},
 
-    -- Recently selected players (for cooldown)
-    recentPlayers = {},
+        -- Global effects state (affects CVARs like gravity/speed)
+        globalEffects = {},  -- {effectId = {endTime, originalValue, triggeredBy}}
 
-    -- Frozen players during animation
-    frozenPlayers = {},
+        -- Recently selected players (for cooldown)
+        recentPlayers = {},
 
-    -- Original health/flags for invincibility restore
-    originalHealth = {},
-    originalFlags = {}
-}
+        -- Frozen players during animation
+        frozenPlayers = {},
+
+        -- Original health/flags for invincibility restore
+        originalHealth = {},
+        originalFlags = {},
+
+        -- Safety unfreeze timer (set after roll ends to catch stuck players)
+        safetyUnfreezeTime = nil
+    }
+end
 
 -- Reset state for new map
 function rickroll.state.reset()
@@ -68,6 +79,8 @@ function rickroll.state.reset()
     rickroll.state.frozenPlayers = {}
     rickroll.state.originalHealth = {}
     rickroll.state.originalFlags = {}
+    rickroll.state.hasPlayedIntro = false  -- Reset intro flag on new map
+    rickroll.state.safetyUnfreezeTime = nil
 end
 
 -- Add player to recent list

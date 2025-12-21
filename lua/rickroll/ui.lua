@@ -8,17 +8,34 @@ rickroll.ui = {}
 
 -- Start the Rick Roll animation
 function rickroll.ui.startRoll(levelTime, seed)
-    et.G_Print(string.format("[RickRoll] ^6startRoll ENTERED with levelTime=%d, seed=%d\n", levelTime, seed))
+    -- Determine if this is the first roll (full intro) or subsequent (quick mode)
+    local isQuickMode = rickroll.state.hasPlayedIntro
+
+    -- DEBUG: Log the state
+    et.G_Print(string.format("[RickRoll] ^5DEBUG: hasPlayedIntro=%s before this roll\n",
+        tostring(rickroll.state.hasPlayedIntro)))
+
+    rickroll.state.isQuickMode = isQuickMode  -- Store for updateRoll to use
+
+    if isQuickMode then
+        et.G_Print(string.format("[RickRoll] ^6startRoll QUICK MODE with levelTime=%d, seed=%d\n", levelTime, seed))
+    else
+        et.G_Print(string.format("[RickRoll] ^6startRoll FULL INTRO with levelTime=%d, seed=%d\n", levelTime, seed))
+        -- Mark that we've played the intro for this map
+        rickroll.state.hasPlayedIntro = true
+        et.G_Print("[RickRoll] ^5DEBUG: Set hasPlayedIntro=true\n")
+    end
 
     -- SAFETY: Ensure any previous freeze is cleared before starting new roll
-    -- This handles the case where a previous roll didn't properly unfreeze
     et.G_Print("[RickRoll] ^6Calling safety unfreeze...\n")
     rickroll.ui.freezeAll(false, levelTime)
     et.trap_SendServerCommand(-1, 'rickroll_frozen 0')
 
-    -- Play music globally
-    et.G_Print("[RickRoll] ^6Playing music...\n")
-    et.G_globalSound(rickroll.config.sounds.music)
+    -- Play music only for full intro
+    if not isQuickMode then
+        et.G_Print("[RickRoll] ^6Playing music...\n")
+        et.G_globalSound(rickroll.config.sounds.music)
+    end
 
     -- Send start command to all clients
     local playerCount = #rickroll.state.playerList
@@ -38,9 +55,9 @@ function rickroll.ui.startRoll(levelTime, seed)
     -- Build intensity list
     local intensityStr = table.concat(rickroll.state.intensityList, "|")
 
-    -- Send command to start animation on clients
+    -- Send command to start animation on clients (include quick mode flag)
     et.trap_SendServerCommand(-1, string.format(
-        'rickroll_start %d %d %d %d %d "%s" "%s" "%s"',
+        'rickroll_start %d %d %d %d %d "%s" "%s" "%s" %d',
         levelTime,
         seed,
         playerCount,
@@ -48,34 +65,35 @@ function rickroll.ui.startRoll(levelTime, seed)
         intensityCount,
         playerNames,
         effectStr,
-        intensityStr
+        intensityStr,
+        isQuickMode and 1 or 0  -- Quick mode flag for client
     ))
 
-    -- Also send banner message for clients without cgame support
-    et.trap_SendServerCommand(-1, 'bp "^1♪ ^5RICK ROLL MODE ACTIVATED ^1♪"')
+    -- Banner message
+    if isQuickMode then
+        et.trap_SendServerCommand(-1, 'bp "^1♪ ^5RICK ROLL! ^1♪"')
+    else
+        et.trap_SendServerCommand(-1, 'bp "^1♪ ^5RICK ROLL MODE ACTIVATED ^1♪"')
+    end
 
-    -- Freeze players if configured
-    et.G_Print(string.format("[RickRoll] ^6freezePlayers config = %s\n", tostring(rickroll.config.freezePlayers)))
-    if rickroll.config.freezePlayers then
-        et.G_Print("[RickRoll] ^6Calling FREEZE all...\n")
+    -- Freeze players ONLY for full intro
+    if not isQuickMode and rickroll.config.freezePlayers then
+        et.G_Print("[RickRoll] ^6Calling FREEZE all (full intro)...\n")
         rickroll.ui.freezeAll(true, levelTime)
-        -- Send frozen notification to clients
         et.trap_SendServerCommand(-1, 'rickroll_frozen 1')
         et.G_Print("[RickRoll] ^6FREEZE complete\n")
     end
 
-    -- Add time to map to compensate for rickroll duration (20 seconds)
-    local currentTimeLimit = tonumber(et.trap_Cvar_Get("timelimit")) or 0
-    if currentTimeLimit > 0 then
-        -- Store original timelimit to restore if needed
-        rickroll.state.originalTimelimit = currentTimeLimit
-        -- Add ~20 seconds (converted to minutes for timelimit)
-        -- Actually, timelimit is in minutes, so we need to extend level.time instead
-        -- Use g_gamestate extension or just accept the time loss
+    -- Add time to map to compensate for rickroll duration (full intro only)
+    if not isQuickMode then
+        local currentTimeLimit = tonumber(et.trap_Cvar_Get("timelimit")) or 0
+        if currentTimeLimit > 0 then
+            rickroll.state.originalTimelimit = currentTimeLimit
+        end
     end
 
     if rickroll.config.debug then
-        et.G_Print("[RickRoll] ^3Animation started\n")
+        et.G_Print(string.format("[RickRoll] ^3Animation started (%s)\n", isQuickMode and "quick" or "full"))
     end
 end
 
@@ -88,8 +106,17 @@ function rickroll.ui.updateRoll(levelTime)
     local elapsed = levelTime - rickroll.state.rollStartTime
     local cfg = rickroll.config
 
+    -- Get timing values based on mode (quick or full)
+    local isQuickMode = rickroll.state.isQuickMode
+    local timing = isQuickMode and cfg.quickMode or cfg
+    local wheel1Stop = timing.wheel1StopTime
+    local wheel2Stop = timing.wheel2StopTime
+    local wheel3Stop = timing.wheel3StopTime
+    local resultShow = timing.resultShowTime
+    local animDuration = timing.animationDuration
+
     -- Wheel 1 stops (player)
-    if elapsed >= cfg.wheel1StopTime and elapsed < cfg.wheel1StopTime + 100 then
+    if elapsed >= wheel1Stop and elapsed < wheel1Stop + 100 then
         local playerName = rickroll.state.selectedPlayerName
         local displayName = rickroll.state.isAllPlayers and "^6ALL PLAYERS" or playerName:gsub("%^[0-9a-zA-Z]", "")
 
@@ -104,7 +131,7 @@ function rickroll.ui.updateRoll(levelTime)
     end
 
     -- Wheel 2 stops (effect)
-    if elapsed >= cfg.wheel2StopTime and elapsed < cfg.wheel2StopTime + 100 then
+    if elapsed >= wheel2Stop and elapsed < wheel2Stop + 100 then
         local effect = rickroll.state.selectedEffect
         local colorCode = rickroll.state.selectedEffectCategory == "blessed" and "^2" or
                           rickroll.state.selectedEffectCategory == "cursed" and "^1" or "^3"
@@ -120,7 +147,7 @@ function rickroll.ui.updateRoll(levelTime)
     end
 
     -- Wheel 3 stops (power level)
-    if elapsed >= cfg.wheel3StopTime and elapsed < cfg.wheel3StopTime + 100 then
+    if elapsed >= wheel3Stop and elapsed < wheel3Stop + 100 then
         local powerLevel = rickroll.state.selectedPowerLevel
         local effect = rickroll.state.selectedEffect
 
@@ -151,12 +178,12 @@ function rickroll.ui.updateRoll(levelTime)
     end
 
     -- Show final result
-    if elapsed >= cfg.resultShowTime and elapsed < cfg.resultShowTime + 100 then
+    if elapsed >= resultShow and elapsed < resultShow + 100 then
         rickroll.ui.showResult()
     end
 
     -- End animation
-    if elapsed >= cfg.animationDuration then
+    if elapsed >= animDuration then
         rickroll.ui.endRoll(levelTime)
     end
 end
@@ -245,13 +272,16 @@ end
 -- End the roll animation and apply effect
 function rickroll.ui.endRoll(levelTime)
     local state = rickroll.state
+    local isQuickMode = state.isQuickMode
 
-    -- Unfreeze players
-    if rickroll.config.freezePlayers then
-        rickroll.ui.freezeAll(false, levelTime)
-        -- Send unfreeze notification to clients
-        et.trap_SendServerCommand(-1, 'rickroll_frozen 0')
-    end
+    -- ALWAYS unfreeze ALL players at end of roll (safety measure)
+    -- This catches edge cases like players who spawned during animation
+    et.G_Print("[RickRoll] ^6endRoll: Safety unfreeze ALL players\n")
+    rickroll.ui.freezeAll(false, levelTime)
+    et.trap_SendServerCommand(-1, 'rickroll_frozen 0')
+
+    -- Schedule a delayed safety check to catch any stragglers
+    state.safetyUnfreezeTime = levelTime + 3000  -- Check again in 3 seconds
 
     -- Apply the effect
     if state.selectedEffect then
@@ -271,9 +301,10 @@ function rickroll.ui.endRoll(levelTime)
     -- Reset rolling state
     state.isRolling = false
     state.rollStartTime = 0
+    state.isQuickMode = false  -- Reset quick mode flag
 
     if rickroll.config.debug then
-        et.G_Print("[RickRoll] ^3Animation ended, effect applied\n")
+        et.G_Print(string.format("[RickRoll] ^3Animation ended (%s), effect applied\n", isQuickMode and "quick" or "full"))
     end
 end
 

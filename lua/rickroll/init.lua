@@ -122,6 +122,14 @@ function rickroll.runFrame(levelTime)
         end
     end
 
+    -- Safety unfreeze check (runs 3 seconds after roll ends to catch any stuck players)
+    if rickroll.state.safetyUnfreezeTime and levelTime >= rickroll.state.safetyUnfreezeTime then
+        et.G_Print("[RickRoll] ^6Running delayed safety unfreeze check\n")
+        rickroll.ui.freezeAll(false, levelTime)
+        et.trap_SendServerCommand(-1, 'rickroll_frozen 0')
+        rickroll.state.safetyUnfreezeTime = nil  -- Clear so we only run once
+    end
+
     -- Check trigger
     rickroll.trigger.check(levelTime)
 
@@ -152,11 +160,13 @@ end
 --[[
     Player Spawn/Respawn Handler
     Re-applies active effects when player respawns after death
-    Also freezes players who spawn during rickroll animation
+    Also freezes players who spawn during rickroll animation (FULL INTRO ONLY)
 ]]--
 function rickroll.onPlayerSpawn(clientNum, revived)
     -- Check if rickroll animation is active - freeze the spawning player
-    if rickroll.state.isRolling and rickroll.config.freezePlayers then
+    -- IMPORTANT: Only freeze during FULL INTRO, not quick mode!
+    local isQuickMode = rickroll.state.isQuickMode
+    if rickroll.state.isRolling and rickroll.config.freezePlayers and not isQuickMode then
         local levelTime = rickroll.state.currentLevelTime
         if levelTime > 0 then
             -- Calculate remaining freeze time (animation ends at rollStartTime + animationDuration)
@@ -166,7 +176,7 @@ function rickroll.onPlayerSpawn(clientNum, revived)
                 local freezeUntil = levelTime + remainingFreeze
                 et.gentity_set(clientNum, "rickrollFreezeUntil", freezeUntil)
                 -- NOTE: No god mode - freeze is enough protection, and god mode can get stuck
-                et.G_Print(string.format("[RickRoll] Froze spawning player %d until %d\n", clientNum, freezeUntil))
+                et.G_Print(string.format("[RickRoll] Froze spawning player %d until %d (full intro)\n", clientNum, freezeUntil))
             end
         end
     end
@@ -264,8 +274,20 @@ function rickroll.consoleCommand(command)
         et.G_Print("^5[Rick Roll Mode] ^7Debug: " .. status .. "\n")
         return true
 
-    elseif cmd == "rickroll_auto" then
-        rickroll.config.autoTrigger = not rickroll.config.autoTrigger
+    elseif cmd == "rickroll_auto" or cmd:match("^rickroll_auto%s") then
+        -- Check for argument: rickroll_auto 1, rickroll_auto 0, rickroll_auto on, rickroll_auto off
+        local arg = cmd:match("^rickroll_auto%s+(%S+)") or ""
+        arg = arg:lower()
+
+        if arg == "1" or arg == "on" then
+            rickroll.config.autoTrigger = true
+        elseif arg == "0" or arg == "off" then
+            rickroll.config.autoTrigger = false
+        else
+            -- No valid arg, toggle
+            rickroll.config.autoTrigger = not rickroll.config.autoTrigger
+        end
+
         local status = rickroll.config.autoTrigger and "^2ON" or "^1OFF"
         et.G_Print("^5[Rick Roll Mode] ^7Auto-trigger: " .. status .. "\n")
         if rickroll.config.autoTrigger then
