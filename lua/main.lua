@@ -45,7 +45,7 @@ end
 
 local config = {
     -- Feature toggles
-    crazy_mode = true,
+    crazy_mode = true,  -- Must exec crazymode.cfg on each map load (CVARs reset between maps)
     panzerfest_enabled = false,  -- TODO: implement
     survival_bonus_enabled = false,  -- TODO: implement
     killstreak_enabled = false,  -- TODO: implement
@@ -144,9 +144,19 @@ function et_InitGame(levelTime, randomSeed, restart)
     log("^3ET:Legacy with Lua scripting")
 
     -- Load crazy mode if enabled
+    -- Order: crazymode.cfg first (defaults), then map config (overrides)
     if config.crazy_mode then
         et.trap_SendConsoleCommand(et.EXEC_APPEND, "exec crazymode.cfg\n")
         log("^3Crazy mode enabled")
+    end
+
+    -- Now exec the map-specific config to override defaults
+    -- g_mapConfigs handles this automatically, but it runs BEFORE Lua
+    -- So we need to re-exec it here AFTER crazymode.cfg
+    local mapname = et.trap_Cvar_Get("mapname")
+    if mapname and mapname ~= "" then
+        et.trap_SendConsoleCommand(et.EXEC_APPEND, string.format("exec mapconfigs/%s.cfg\n", mapname))
+        log("^3Map config: mapconfigs/" .. mapname .. ".cfg")
     end
 
     -- Initialize Rick Roll Mode
