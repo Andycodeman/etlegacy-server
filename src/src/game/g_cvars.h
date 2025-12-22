@@ -65,6 +65,7 @@ extern vmCvar_t g_speed;
 extern vmCvar_t g_knockback;
 extern vmCvar_t g_knockbackCap;        // ETMan: 0 = no cap, otherwise max knockback
 extern vmCvar_t g_knockbackTeammates;  // ETMan: 1 = knockback teammates
+extern vmCvar_t g_selfDamageScale;     // ETMan: Scale self-damage (0.0-1.0, default 1.0)
 
 extern vmCvar_t g_forcerespawn;
 extern vmCvar_t g_inactivity;
@@ -282,6 +283,7 @@ extern vmCvar_t g_panzerRadius;
 extern vmCvar_t g_panzerSpeed;
 extern vmCvar_t g_shakeIntensity;
 extern vmCvar_t g_fallDamage;
+extern vmCvar_t g_fallDamageScale;    // ETMan: Scale fall damage (0.0-1.0)
 
 extern vmCvar_t g_intermissionTime;
 extern vmCvar_t g_intermissionReadyPercent;

@@ -1575,6 +1575,13 @@ void G_DamageExt(gentity_t *targ, gentity_t *inflictor, gentity_t *attacker, vec
 		take *= .5f;
 	}
 
+	// ETMan: Scale self-inflicted damage (for rocket jumping)
+	// Only applies when you damage yourself, not when others damage you
+	if (targ == attacker && g_selfDamageScale.value < 1.0f)
+	{
+		take *= g_selfDamageScale.value;
+	}
+
 	// save some from flak jacket
 	if (targ->client && BG_IsSkillAvailable(targ->client->sess.skill, SK_EXPLOSIVES_AND_CONSTRUCTION, SK_ENGINEER_FLAK_JACKET) && targ->client->sess.playerType == PC_ENGINEER)
 	{

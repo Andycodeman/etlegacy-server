@@ -1022,6 +1022,17 @@ void G_FallDamage(gentity_t *ent, int event)
 	{
 		damage = 5; // never used
 	}
+
+	// ETMan: Scale fall damage (for rocket jumping cushion landings)
+	if (g_fallDamageScale.value < 1.0f)
+	{
+		damage = (int)(damage * g_fallDamageScale.value);
+		if (damage < 1)
+		{
+			damage = 1;  // minimum 1 damage so you still feel it
+		}
+	}
+
 	ent->pain_debounce_time = level.time + 200; // no normal pain sound
 	G_Damage(ent, NULL, NULL, NULL, NULL, damage, 0, MOD_FALLING);
 }
