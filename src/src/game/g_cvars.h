@@ -63,6 +63,8 @@ extern vmCvar_t sv_privatepassword;
 extern vmCvar_t g_gravity;
 extern vmCvar_t g_speed;
 extern vmCvar_t g_knockback;
+extern vmCvar_t g_knockbackCap;        // ETMan: 0 = no cap, otherwise max knockback
+extern vmCvar_t g_knockbackTeammates;  // ETMan: 1 = knockback teammates
 
 extern vmCvar_t g_forcerespawn;
 extern vmCvar_t g_inactivity;
@@ -267,6 +269,19 @@ extern vmCvar_t skill_battlesense;
 extern vmCvar_t skill_lightweapons;
 
 extern vmCvar_t g_misc;
+
+// ETMan: Crazy mode weapon CVARs
+extern vmCvar_t g_adrenalineAdd;
+extern vmCvar_t g_adrenalineMax;
+extern vmCvar_t g_smgFireRate;
+extern vmCvar_t g_grenadeFireRate;
+extern vmCvar_t g_grenadeInstant;
+extern vmCvar_t g_panzerDamage;
+extern vmCvar_t g_panzerSplash;
+extern vmCvar_t g_panzerRadius;
+extern vmCvar_t g_panzerSpeed;
+extern vmCvar_t g_shakeIntensity;
+extern vmCvar_t g_fallDamage;
 
 extern vmCvar_t g_intermissionTime;
 extern vmCvar_t g_intermissionReadyPercent;

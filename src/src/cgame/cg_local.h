@@ -4066,6 +4066,7 @@ void CG_RickRoll_Frozen(void);
 void CG_RickRoll_ForceWeapon(void);
 void CG_RickRoll_Shake(void);
 void CG_RickRoll_Spin(void);
+void CG_RickRoll_SpinReset(void);
 void CG_RickRoll_UpdateSpin(void);
 void CG_RickRoll_DrawTimer(void);
 qboolean CG_RickRoll_IsActive(void);

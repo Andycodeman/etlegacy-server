@@ -744,30 +744,37 @@ rickroll.effectSystem.handlers["glass_cannon"] = {
     remove = function(clientNum, original, isAllPlayers) end
 }
 
--- DISORIENTED - Smooth spin to random direction periodically (interval)
--- Uses client-side rickroll_spin command for smooth animation
+-- DISORIENTED - Periodic screen wobble effect (interval)
+-- Uses client-side rickroll_spin command for smooth wobble animation
+-- Wobble spins screen then returns to normal - doesn't affect movement
 rickroll.effectSystem.handlers["disoriented"] = {
     apply = function(clientNum, powerLevel, powerValue, endTime, isAllPlayers)
         local original = {}
-        original.spinInterval = powerValue  -- interval in ms (15s to 5s)
+        original.spinInterval = powerValue  -- interval in ms (10s to 2s)
         original.isAllPlayers = isAllPlayers
         return true, original
     end,
-    remove = function(clientNum, original, isAllPlayers) end,
+    remove = function(clientNum, original, isAllPlayers)
+        -- Reset spin when effect ends
+        if isAllPlayers then
+            et.trap_SendServerCommand(-1, 'rickroll_spin_reset')
+        else
+            et.trap_SendServerCommand(clientNum, 'rickroll_spin_reset')
+        end
+    end,
     update = function(clientNum, data, levelTime)
         local interval = data.originalValues.spinInterval or 10000
         local isAllPlayers = data.originalValues.isAllPlayers
 
         if data.lastSpin == nil or levelTime - data.lastSpin > interval then
-            -- Random spin amount in degrees (120 to 240 degrees, positive or negative)
-            -- Using larger values to make the spin very noticeable
-            local spinAmount = math.random(120, 240)
+            -- Random wobble amount in degrees (60 to 120 degrees, positive or negative)
+            local spinAmount = math.random(60, 120)
             if math.random() > 0.5 then
                 spinAmount = -spinAmount
             end
 
-            -- Spin duration: 400ms for visible but fast spin
-            local spinDuration = 400
+            -- Wobble duration: 800ms for full out-and-back motion
+            local spinDuration = 800
 
             -- Send spin command to client(s)
             if isAllPlayers then

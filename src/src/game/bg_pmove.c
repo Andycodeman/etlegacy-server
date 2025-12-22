@@ -3372,7 +3372,8 @@ static qboolean PM_CheckGrenade()
 		{
 			pm->ps->grenadeTimeLeft = 100;
 		}
-		else if ((pm->cmd.buttons & BUTTON_ATTACK) && !(pm->ps->eFlags & EF_PRONE_MOVING))
+		// ETMan: If instant grenades, don't hold - throw immediately regardless of button state
+		else if (!pm->grenadeInstant && (pm->cmd.buttons & BUTTON_ATTACK) && !(pm->ps->eFlags & EF_PRONE_MOVING))
 		{
 			BG_SetConditionBitFlag(pm->ps->clientNum, ANIM_COND_GEN_BITFLAG, ANIM_BITFLAG_HOLDING);
 			return qtrue;
@@ -3472,6 +3473,17 @@ static void PM_Weapon(void)
 #ifdef DO_WEAPON_DBG
 	static int weaponstate_last = -1;
 #endif
+
+	// ETMan: Override fire rate for SMGs based on server CVAR
+	if (pm->smgFireRate > 0 && (pm->ps->weapon == WP_MP40 || pm->ps->weapon == WP_THOMPSON))
+	{
+		addTime = pm->smgFireRate;
+	}
+	// ETMan: Override fire rate for grenades based on server CVAR
+	if (pm->grenadeFireRate > 0 && (pm->ps->weapon == WP_GRENADE_LAUNCHER || pm->ps->weapon == WP_GRENADE_PINEAPPLE))
+	{
+		addTime = pm->grenadeFireRate;
+	}
 
 	// don't allow attack until all buttons are up
 	if (pm->ps->pm_flags & PMF_RESPAWNED)
@@ -3831,14 +3843,31 @@ static void PM_Weapon(void)
 			if (PM_WeaponAmmoAvailable(pm->ps->weapon))
 			{
 				// start at and count down
-				pm->ps->grenadeTimeLeft = GetWeaponTableData(pm->ps->weapon)->grenadeTime;
+				// ETMan: If instant grenades enabled, use full fuse time (grenade explodes 4s after throw)
+				// but we'll skip the cooking phase entirely by immediately triggering the throw
+				if (pm->grenadeInstant && (pm->ps->weapon == WP_GRENADE_LAUNCHER || pm->ps->weapon == WP_GRENADE_PINEAPPLE))
+				{
+					pm->ps->grenadeTimeLeft = 4000;  // Full 4 second fuse after being thrown
+				}
+				else
+				{
+					pm->ps->grenadeTimeLeft = GetWeaponTableData(pm->ps->weapon)->grenadeTime;
+				}
 
 				PM_StartWeaponAnim(WEAP_ATTACK1);
 			}
 
-			pm->ps->weaponDelay = GetWeaponTableData(pm->ps->weapon)->fireDelayTime;
+			// ETMan: If instant grenades, no fire delay - throw immediately
+			if (pm->grenadeInstant && (pm->ps->weapon == WP_GRENADE_LAUNCHER || pm->ps->weapon == WP_GRENADE_PINEAPPLE))
+			{
+				pm->ps->weaponDelay = 0;
+			}
+			else
+			{
+				pm->ps->weaponDelay = GetWeaponTableData(pm->ps->weapon)->fireDelayTime;
+			}
 		}
-		else if (!GetWeaponTableData(pm->ps->weapon)->grenadeTime)
+		else if (!GetWeaponTableData(pm->ps->weapon)->grenadeTime || pm->grenadeInstant)
 		{
 			if (pm->ps->eFlags & EF_PRONE)
 			{

@@ -60,6 +60,8 @@ vmCvar_t g_speed;
 vmCvar_t g_gravity;
 vmCvar_t g_cheats;
 vmCvar_t g_knockback;
+vmCvar_t g_knockbackCap;        // ETMan: 0 = no cap on knockback (default), otherwise max knockback value
+vmCvar_t g_knockbackTeammates;  // ETMan: 1 = apply knockback to teammates (for rocket jumping fun)
 
 vmCvar_t g_forcerespawn;
 vmCvar_t g_inactivity;
@@ -277,6 +279,19 @@ vmCvar_t skill_lightweapons;
 
 vmCvar_t g_misc;
 
+// ETMan: Crazy mode weapon CVARs
+vmCvar_t g_adrenalineAdd;      // Time added per shot in ms (default 10000 = 10s)
+vmCvar_t g_adrenalineMax;      // Maximum adrenaline time in ms (default 999000 = 999s)
+vmCvar_t g_smgFireRate;        // SMG fire rate in ms (default 50, stock is 150)
+vmCvar_t g_grenadeFireRate;    // Grenade throw rate in ms (default 100, stock is 1600)
+vmCvar_t g_grenadeInstant;     // Instant throw grenades - no cooking (1=yes, 0=no)
+vmCvar_t g_panzerDamage;       // Panzerfaust/Bazooka direct damage (0 = use stock 400)
+vmCvar_t g_panzerSplash;       // Panzerfaust/Bazooka splash damage (0 = use stock 400)
+vmCvar_t g_panzerRadius;       // Panzerfaust/Bazooka splash radius (0 = use stock 300)
+vmCvar_t g_panzerSpeed;        // Panzerfaust/Bazooka projectile speed (0 = use stock 2500)
+vmCvar_t g_shakeIntensity;     // Screen shake intensity (0=off, 100=normal, 200=double)
+vmCvar_t g_fallDamage;         // Fall damage (1=on, 0=off) - overrides g_misc flag
+
 vmCvar_t g_intermissionTime;
 vmCvar_t g_intermissionReadyPercent;
 
@@ -425,7 +440,9 @@ cvarTable_t gameCvarTable[] =
 
 	{ &g_speed,                           "g_speed",                           "320",                        0,                                               0, qtrue,  qtrue  },
 	{ &g_gravity,                         "g_gravity",                         "800",                        0,                                               0, qtrue,  qtrue  },
-	{ &g_knockback,                       "g_knockback",                       "1000",                       0,                                               0, qtrue,  qtrue  },
+	{ &g_knockback,                       "g_knockback",                       "2000",                       0,                                               0, qtrue,  qtrue  },  // ETMan: default raised from 1000 to 2000
+	{ &g_knockbackCap,                    "g_knockbackCap",                    "0",                          0,                                               0, qtrue,  qtrue  },  // ETMan: 0 = no cap (default), otherwise max knockback
+	{ &g_knockbackTeammates,              "g_knockbackTeammates",              "1",                          0,                                               0, qtrue,  qtrue  },  // ETMan: 1 = apply knockback to teammates
 
 	{ &g_needpass,                        "g_needpass",                        "0",                          CVAR_SERVERINFO | CVAR_ROM,                      0, qtrue,  qfalse },
 	{ &g_balancedteams,                   "g_balancedteams",                   "0",                          CVAR_SERVERINFO | CVAR_ROM,                      0, qtrue,  qfalse },
@@ -617,6 +634,18 @@ cvarTable_t gameCvarTable[] =
 	{ &skill_battlesense,                 "skill_battlesense",                 "20 50 90 140",               CVAR_ARCHIVE,                                    0, qfalse, qfalse },
 	{ &skill_lightweapons,                "skill_lightweapons",                "20 50 90 140",               CVAR_ARCHIVE,                                    0, qfalse, qfalse },
 	{ &g_misc,                            "g_misc",                            "0",                          CVAR_SERVERINFO,                                 0, qfalse, qfalse },
+	// ETMan: Crazy mode weapon CVARs
+	{ &g_adrenalineAdd,                   "g_adrenalineAdd",                   "10000",                      0,                                               0, qfalse, qfalse },  // ms per shot (default 10s)
+	{ &g_adrenalineMax,                   "g_adrenalineMax",                   "999000",                     0,                                               0, qfalse, qfalse },  // max ms (default 999s)
+	{ &g_smgFireRate,                     "g_smgFireRate",                     "50",                         0,                                               0, qfalse, qfalse },  // ms between shots (stock 150)
+	{ &g_grenadeFireRate,                 "g_grenadeFireRate",                 "100",                        0,                                               0, qfalse, qfalse },  // ms between throws (stock 1600)
+	{ &g_grenadeInstant,                  "g_grenadeInstant",                  "1",                          0,                                               0, qfalse, qfalse },  // 1=instant throw, 0=cooking
+	{ &g_panzerDamage,                    "g_panzerDamage",                    "0",                          0,                                               0, qfalse, qfalse },  // 0=stock 400, otherwise custom damage
+	{ &g_panzerSplash,                    "g_panzerSplash",                    "0",                          0,                                               0, qfalse, qfalse },  // 0=stock 400, otherwise custom splash
+	{ &g_panzerRadius,                    "g_panzerRadius",                    "0",                          0,                                               0, qfalse, qfalse },  // 0=stock 300, otherwise custom radius
+	{ &g_panzerSpeed,                     "g_panzerSpeed",                     "0",                          0,                                               0, qfalse, qfalse },  // 0=stock 2500, otherwise custom speed
+	{ &g_shakeIntensity,                  "g_shakeIntensity",                  "100",                        0,                                               0, qfalse, qfalse },  // 0=off, 100=normal, 200=double
+	{ &g_fallDamage,                      "g_fallDamage",                      "1",                          0,                                               0, qfalse, qfalse },  // 1=on, 0=off (overrides g_misc)
 	{ &g_intermissionTime,                "g_intermissionTime",                "60",                         0,                                               0, qfalse, qfalse },
 	{ &g_intermissionReadyPercent,        "g_intermissionReadyPercent",        "100",                        0,                                               0, qfalse, qfalse },
 	{ &g_mapScriptDirectory,              "g_mapScriptDirectory",              "mapscripts",                 0,                                               0, qfalse, qfalse },

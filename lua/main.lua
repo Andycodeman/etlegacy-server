@@ -182,7 +182,7 @@ function et_ClientConnect(clientNum, firstTime, isBot)
 
         -- Welcome message
         et.trap_SendServerCommand(clientNum,
-            'cp "^3Welcome to ETMan\'s Server!\n^7Crazy mode is ^2ON"')
+            'cp "^3Welcome to ETMan\'s Server!\n^5Experimental RickRoll mode enabled\n^7Check back often as changes are daily. Enjoy!"')
     end
 
     return nil  -- Allow connection

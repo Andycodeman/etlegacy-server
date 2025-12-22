@@ -3810,6 +3810,9 @@ static void CG_ServerCommand(void)
 	case 175386:  // "rickroll_spin"
 		CG_RickRoll_Spin();
 		return;
+	case 261775:  // "rickroll_spin_reset"
+		CG_RickRoll_SpinReset();
+		return;
 	default:
 		CG_Printf("Unknown client game command: %s [%lu]\n", cmd, hash);
 		break;

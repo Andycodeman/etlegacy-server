@@ -504,10 +504,30 @@ gentity_t *Weapon_Syringe(gentity_t *ent)
 /**
  * @brief Hmmmm. Needles. With stuff in it. Woooo.
  * @param[in,out] ent
+ *
+ * ETMan: Adrenaline is now stackable! Each shot adds time based on g_adrenalineAdd,
+ * up to a maximum based on g_adrenalineMax. Configurable per-map via CVARs.
  */
 gentity_t *Weapon_AdrenalineSyringe(gentity_t *ent)
 {
-	ent->client->ps.powerups[PW_ADRENALINE] = level.time + 10000;
+	int currentRemaining = 0;
+	int addTime = g_adrenalineAdd.integer;  // Default 10000ms (10s) per shot
+	int maxTime = g_adrenalineMax.integer;  // Default 999000ms (999s) max
+	int newExpireTime;
+
+	// Sanity checks
+	if (addTime <= 0) addTime = 10000;
+	if (maxTime <= 0) maxTime = 999000;
+
+	// Calculate how much time remains on current adrenaline
+	if (ent->client->ps.powerups[PW_ADRENALINE] > level.time)
+	{
+		currentRemaining = ent->client->ps.powerups[PW_ADRENALINE] - level.time;
+	}
+
+	// Add time, capped at max
+	newExpireTime = level.time + MIN(currentRemaining + addTime, maxTime);
+	ent->client->ps.powerups[PW_ADRENALINE] = newExpireTime;
 
 	return NULL;
 }

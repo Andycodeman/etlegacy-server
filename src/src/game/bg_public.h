@@ -663,6 +663,11 @@ typedef struct
 	qboolean activateLean;
 
 	int gameMiscFlags;             ///< ETMan: g_misc flags for double jump, no fall damage, etc.
+
+	// ETMan: Configurable weapon settings
+	int smgFireRate;               ///< SMG fire rate in ms (0 = use default 150)
+	int grenadeFireRate;           ///< Grenade throw rate in ms (0 = use default 1600)
+	int grenadeInstant;            ///< Instant throw grenades - no cooking (1=yes, 0=no)
 } pmove_t;
 
 // if a full pmove isn't done on the client, you can just update the angles

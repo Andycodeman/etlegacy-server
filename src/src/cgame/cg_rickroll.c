@@ -893,27 +893,27 @@ void CG_RickRoll_Shake(void) {
 	}
 }
 
-// Spin state for disoriented effect
-static float spinTargetYaw = 0;      // Total degrees to spin
-static float spinAccumulated = 0;    // How much we've spun so far (persistent offset)
+// Spin state for disoriented effect - temporary wobble that returns to normal
+static float spinMaxAngle = 0;       // Maximum angle to spin to
 static qboolean spinActive = qfalse;
 static int spinStartTime = 0;
-static int spinDuration = 300;       // 300ms spin duration
+static int spinDuration = 800;       // Total duration (spin out + spin back)
 
 /**
- * @brief Handle rickroll_spin command - smooth spin to random direction
- * Format: rickroll_spin <targetYawDelta> <durationMs>
- * targetYawDelta is degrees to spin (can be negative)
+ * @brief Handle rickroll_spin command - temporary wobble effect
+ * Format: rickroll_spin <maxAngle> <durationMs>
+ * Creates a wobble: spins to maxAngle then back to 0
+ * Does NOT affect movement, only visual
  */
 void CG_RickRoll_Spin(void) {
-	float yawDelta = atof(CG_Argv(1));
+	float angle = atof(CG_Argv(1));
 	int duration = atoi(CG_Argv(2));
 
 	if (duration <= 0) {
-		duration = 300;  // default 300ms
+		duration = 800;  // default 800ms total
 	}
 
-	spinTargetYaw = yawDelta;
+	spinMaxAngle = angle;
 	spinActive = qtrue;
 	spinStartTime = cg.time;
 	spinDuration = duration;
@@ -921,39 +921,42 @@ void CG_RickRoll_Spin(void) {
 
 /**
  * @brief Update spin effect - called every frame from CG_DrawActiveFrame
- * Applies smooth rotation to view angles and rebuilds view axis
- * Uses accumulated offset that persists after spin completes
+ * Applies temporary wobble: spins out to max angle, then back to 0
+ * Only affects visual rendering, not actual player view angles
  */
 void CG_RickRoll_UpdateSpin(void) {
-	float progress, targetAccum;
+	float progress, currentOffset;
 
-	// Always apply accumulated spin offset
-	if (spinAccumulated != 0 || spinActive) {
-		if (spinActive) {
-			// Calculate progress (0.0 to 1.0)
-			progress = (float)(cg.time - spinStartTime) / (float)spinDuration;
-
-			if (progress >= 1.0f) {
-				// Spin complete
-				spinAccumulated += spinTargetYaw;
-				spinActive = qfalse;
-				spinTargetYaw = 0;
-			} else {
-				// Use ease-out curve for smoother feel: progress = 1 - (1 - t)^2
-				progress = 1.0f - ((1.0f - progress) * (1.0f - progress));
-				targetAccum = spinAccumulated + (spinTargetYaw * progress);
-
-				// Apply current spin progress
-				cg.refdefViewAngles[YAW] += targetAccum;
-				AnglesToAxis(cg.refdefViewAngles, cg.refdef_current->viewaxis);
-				return;
-			}
-		}
-
-		// Apply accumulated offset (after spin is done or no active spin)
-		cg.refdefViewAngles[YAW] += spinAccumulated;
-		AnglesToAxis(cg.refdefViewAngles, cg.refdef_current->viewaxis);
+	if (!spinActive) {
+		return;
 	}
+
+	// Calculate progress (0.0 to 1.0)
+	progress = (float)(cg.time - spinStartTime) / (float)spinDuration;
+
+	if (progress >= 1.0f) {
+		// Wobble complete - back to normal
+		spinActive = qfalse;
+		spinMaxAngle = 0;
+		return;
+	}
+
+	// Wobble curve: sin wave that goes 0 -> max -> 0
+	// Use sin(progress * PI) for smooth out-and-back
+	currentOffset = spinMaxAngle * sin(progress * M_PI);
+
+	// Apply wobble offset to view (visual only)
+	cg.refdefViewAngles[YAW] += currentOffset;
+	AnglesToAxis(cg.refdefViewAngles, cg.refdef_current->viewaxis);
+}
+
+/**
+ * @brief Reset spin effect - stops any active wobble
+ * Called when disoriented effect ends
+ */
+void CG_RickRoll_SpinReset(void) {
+	spinActive = qfalse;
+	spinMaxAngle = 0;
 }
 
 /**

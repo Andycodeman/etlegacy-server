@@ -31,14 +31,16 @@ rickroll.config = {
 
     -- Auto-trigger toggle (if false, rickroll only triggers via manual rcon commands)
     -- When autoTrigger=false but enabled=true, you can still use rickroll_test_cmd and rickroll_force
-    autoTrigger = false,
+    autoTrigger = true,
 
     -- Trigger timing (milliseconds) - only used when autoTrigger=true
+    -- Delay after human joins before first roll
+    humanJoinDelay = 15000,  -- 15 seconds after human joins team
+    -- Subsequent rolls timing
     interval = {
-        min = 30000,    -- 30 seconds minimum between rolls (TESTING - change to 300000 for production)
-        max = 60000     -- 60 seconds maximum (TESTING - change to 600000 for production)
+        min = 60000,    -- 1 minute minimum between rolls
+        max = 180000    -- 3 minutes maximum
     },
-    warmupDelay = 10000,   -- 10 seconds warmup (TESTING - change to 120000 for production)
 
     -- Animation timing (milliseconds) - synced with 18.67s audio
     -- FULL INTRO (first roll of map)

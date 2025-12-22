@@ -2904,6 +2904,23 @@ void G_PreFilledMissileEntity(gentity_t *ent, int weaponNum, int realWeapon, int
 	ent->splashMethodOfDeath = GetWeaponTableData(realWeapon)->splashMod;
 	ent->splashRadius        = GetWeaponTableData(realWeapon)->splashRadius;  // blast radius proportional to damage for ALL weapons
 
+	// ETMan: Override Panzerfaust/Bazooka damage/splash/radius with CVARs if set
+	if (realWeapon == WP_PANZERFAUST || realWeapon == WP_BAZOOKA)
+	{
+		if (g_panzerDamage.integer > 0)
+		{
+			ent->damage = g_panzerDamage.integer;
+		}
+		if (g_panzerSplash.integer > 0)
+		{
+			ent->splashDamage = g_panzerSplash.integer;
+		}
+		if (g_panzerRadius.integer > 0)
+		{
+			ent->splashRadius = g_panzerRadius.integer;
+		}
+	}
+
 	// state
 	ent->s.weapon    = weaponNum;
 	ent->s.teamNum   = teamNum;
@@ -2947,7 +2964,17 @@ void G_PreFilledMissileEntity(gentity_t *ent, int weaponNum, int realWeapon, int
 	VectorCopy(start, ent->s.pos.trBase);
 	VectorCopy(dir, ent->s.pos.trDelta);
 
-	// RickRoll: Apply projectile speed multiplier if set
+	// ETMan: Override panzer/bazooka projectile speed with CVAR if set
+	// Stock speed is 2500, passed in as dir magnitude from weapon_antitank_fire
+	if ((realWeapon == WP_PANZERFAUST || realWeapon == WP_BAZOOKA) && g_panzerSpeed.integer > 0)
+	{
+		vec3_t normDir;
+		VectorCopy(ent->s.pos.trDelta, normDir);
+		VectorNormalize(normDir);
+		VectorScale(normDir, g_panzerSpeed.integer, ent->s.pos.trDelta);
+	}
+
+	// RickRoll: Apply projectile speed multiplier if set (per-player, overrides global)
 	if (parent && parent->client)
 	{
 		int rocketSpeed = parent->client->rickrollRocketSpeed;

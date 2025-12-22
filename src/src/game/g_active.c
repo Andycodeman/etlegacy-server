@@ -640,6 +640,10 @@ void SpectatorThink(gentity_t *ent, usercmd_t *ucmd)
 		pm.pointcontents = trap_PointContents;
 		pm.activateLean  = client->pers.activateLean;
 		pm.gameMiscFlags = g_misc.integer;  // ETMan: pass g_misc flags for double jump, etc.
+		// ETMan: Configurable weapon settings
+		pm.smgFireRate     = g_smgFireRate.integer;
+		pm.grenadeFireRate = g_grenadeFireRate.integer;
+		pm.grenadeInstant  = g_grenadeInstant.integer;
 
 		Pmove(&pm);
 
@@ -979,8 +983,9 @@ void G_FallDamage(gentity_t *ent, int event)
 		return;      // not in the player model
 	}
 
-	// g_misc flag: no fall damage
-	if (g_misc.integer & G_MISC_NO_FALL_DAMAGE)
+	// ETMan: g_fallDamage CVAR overrides g_misc flag
+	// g_fallDamage: 1=on (default), 0=off
+	if (!g_fallDamage.integer)
 	{
 		return;
 	}
@@ -1554,6 +1559,10 @@ void ClientThink_real(gentity_t *ent)
 
 	pm.activateLean  = client->pers.activateLean;
 	pm.gameMiscFlags = g_misc.integer;  // ETMan: pass g_misc flags for double jump, etc.
+	// ETMan: Configurable weapon settings
+	pm.smgFireRate     = g_smgFireRate.integer;
+	pm.grenadeFireRate = g_grenadeFireRate.integer;
+	pm.grenadeInstant  = g_grenadeInstant.integer;
 
 	// RickRoll: Override weapon in pm.cmd BEFORE Pmove processes it
 	// This prevents the client's old weapon command from switching back

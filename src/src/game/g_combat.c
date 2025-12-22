@@ -1286,7 +1286,9 @@ void G_DamageExt(gentity_t *targ, gentity_t *inflictor, gentity_t *attacker, vec
 {
 	int         take;
 	int         knockback;
+	int         knockbackDamage;  // ETMan: original damage for knockback calculation (may differ from take when FF is off)
 	qboolean    wasAlive, onSameTeam;
+	qboolean    teammateNoFF = qfalse;  // ETMan: teammate hit with FF off (knockback only, no damage)
 	hitRegion_t hr           = HR_NUM_HITREGIONS;
 	int         hitEventType = HIT_NONE;
 
@@ -1475,6 +1477,7 @@ void G_DamageExt(gentity_t *targ, gentity_t *inflictor, gentity_t *attacker, vec
 	}
 
 	// check for completely getting out of the damage
+	// ETMan: Modified to allow knockback on teammates even when friendly fire is off
 	if (!(dflags & DAMAGE_NO_PROTECTION))
 	{
 		// if TF_NO_FRIENDLY_FIRE is set, don't do damage to the target
@@ -1483,11 +1486,21 @@ void G_DamageExt(gentity_t *targ, gentity_t *inflictor, gentity_t *attacker, vec
 		{
 			if ((g_gamestate.integer != GS_PLAYING && match_warmupDamage.integer == 1))
 			{
-				return;
+				// ETMan: Still apply knockback if enabled, even during warmup
+				if (!g_knockbackTeammates.integer)
+				{
+					return;
+				}
+				teammateNoFF = qtrue;  // Mark as teammate with no FF - will skip damage but apply knockback
 			}
 			else if (!g_friendlyFire.integer)
 			{
-				return;
+				// ETMan: Still apply knockback if enabled, even with FF off
+				if (!g_knockbackTeammates.integer)
+				{
+					return;
+				}
+				teammateNoFF = qtrue;  // Mark as teammate with no FF - will skip damage but apply knockback
 			}
 		}
 	}
@@ -1515,14 +1528,28 @@ void G_DamageExt(gentity_t *targ, gentity_t *inflictor, gentity_t *attacker, vec
 		take *= G_DamageFalloff(VectorDistance(point, muzzleTrace), 0.5f);
 	}
 
-	if ((targ->flags & FL_NO_KNOCKBACK) || (dflags & DAMAGE_NO_KNOCKBACK) ||
-	    (targ->client && g_friendlyFire.integer && (onSameTeam || (attacker->client && targ->client->sess.sessionTeam == G_GetTeamFromEntity(inflictor)))))
+	// ETMan: For teammate knockback with FF off, use original damage for knockback calc
+	// but we'll zero out 'take' for actual damage later
+	knockbackDamage = take;
+
+	// ETMan: Reworked knockback logic
+	// - g_knockbackCap: 0 = no cap (unlimited), otherwise caps knockback at this value
+	// - g_knockbackTeammates: 1 = apply knockback to teammates (for rocket jumping fun)
+	if ((targ->flags & FL_NO_KNOCKBACK) || (dflags & DAMAGE_NO_KNOCKBACK))
 	{
 		knockback = 0;
 	}
 	else
 	{
-		knockback = MIN(take, 200);
+		// ETMan: Use g_knockbackCap if set, otherwise no cap (use raw damage as knockback)
+		if (g_knockbackCap.integer > 0)
+		{
+			knockback = MIN(knockbackDamage, g_knockbackCap.integer);
+		}
+		else
+		{
+			knockback = knockbackDamage;  // No cap - full damage as knockback
+		}
 
 		if (dflags & DAMAGE_HALF_KNOCKBACK)
 		{
@@ -1534,6 +1561,12 @@ void G_DamageExt(gentity_t *targ, gentity_t *inflictor, gentity_t *attacker, vec
 		{
 			knockback *= 0.5;
 		}
+	}
+
+	// ETMan: If teammate with FF off, zero out damage but keep knockback
+	if (teammateNoFF)
+	{
+		take = 0;
 	}
 
 	// adrenaline junkie!
@@ -1699,7 +1732,8 @@ void G_DamageExt(gentity_t *targ, gentity_t *inflictor, gentity_t *attacker, vec
 		G_Printf("client:%i health:%i damage:%i mod:%s\n", targ->s.number, targ->health, take, GetMODTableData(mod)->modName);
 	}
 
-	if (hitEventType)
+	// ETMan: Skip hit event for teammates with FF off (no teamshot sound)
+	if (hitEventType && !teammateNoFF)
 	{
 		if (!hitEventOut)
 		{
@@ -1726,7 +1760,8 @@ void G_DamageExt(gentity_t *targ, gentity_t *inflictor, gentity_t *attacker, vec
 	// add to the damage inflicted on a player this frame
 	// the total will be turned into screen blends and view angle kicks
 	// at the end of the frame
-	if (targ->client)
+	// ETMan: Skip damage feedback for teammates with FF off (no pain sound, no screen effects)
+	if (targ->client && !teammateNoFF)
 	{
 		if (attacker)
 		{

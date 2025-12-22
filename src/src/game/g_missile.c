@@ -317,10 +317,11 @@ void G_MissileImpact(gentity_t *ent, trace_t *trace, int impactDamage)
 		temp->s.clientNum      = ent->r.ownerNum;
 
 		// give big weapons the shakey shakey
-		if (GetWeaponTableData(ent->s.weapon)->attributes & WEAPON_ATTRIBUT_SHAKE)
+		// ETMan: g_shakeIntensity controls intensity (0=off, 100=normal, 200=double)
+		if (g_shakeIntensity.integer > 0 && (GetWeaponTableData(ent->s.weapon)->attributes & WEAPON_ATTRIBUT_SHAKE))
 		{
 			temp                     = G_TempEntity(ent->r.currentOrigin, EV_SHAKE);
-			temp->s.onFireStart      = ent->splashDamage * 4;
+			temp->s.onFireStart      = (ent->splashDamage * 4 * g_shakeIntensity.integer) / 100;
 			temp->r.svFlags         |= SVF_BROADCAST;
 			temp->r.snapshotCallback = qtrue;
 		}
@@ -334,10 +335,11 @@ void G_MissileImpact(gentity_t *ent, trace_t *trace, int impactDamage)
 		ent->s.otherEntityNum = otherentnum;
 
 		// give big weapons the shakey shakey
-		if (GetWeaponTableData(ent->s.weapon)->attributes & WEAPON_ATTRIBUT_SHAKE)
+		// ETMan: g_shakeIntensity controls intensity (0=off, 100=normal, 200=double)
+		if (g_shakeIntensity.integer > 0 && (GetWeaponTableData(ent->s.weapon)->attributes & WEAPON_ATTRIBUT_SHAKE))
 		{
 			G_AddEvent(ent, EV_SHAKE, param);
-			ent->s.onFireStart = ent->splashDamage * 4;
+			ent->s.onFireStart = (ent->splashDamage * 4 * g_shakeIntensity.integer) / 100;
 		}
 
 		ent->s.eType        = ET_GENERAL;
@@ -490,13 +492,14 @@ void G_ExplodeMissile(gentity_t *ent)
 		}
 
 		// give big weapons the shakey shakey
-		if (GetWeaponTableData(ent->s.weapon)->attributes & WEAPON_ATTRIBUT_SHAKE)
+		// ETMan: g_shakeIntensity controls intensity (0=off, 100=normal, 200=double)
+		if (g_shakeIntensity.integer > 0 && (GetWeaponTableData(ent->s.weapon)->attributes & WEAPON_ATTRIBUT_SHAKE))
 		{
 			gentity_t *tent;
 
 			tent = G_TempEntity(ent->r.currentOrigin, EV_SHAKE);
 
-			tent->s.onFireStart      = ent->splashDamage * 4;
+			tent->s.onFireStart      = (ent->splashDamage * 4 * g_shakeIntensity.integer) / 100;
 			tent->r.svFlags         |= SVF_BROADCAST;
 			tent->r.snapshotCallback = qtrue;
 		}
