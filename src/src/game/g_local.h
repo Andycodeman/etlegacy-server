@@ -1041,6 +1041,9 @@ struct gclient_s
 	int rickrollForcedWeapon;       // weapon_t to force, 0 = no force
 	int rickrollForcedWeaponUntil;  // level.time when force expires
 
+	// RickRoll homing rockets mode (if > 0, panzerfaust/bazooka rockets track nearest enemy)
+	int rickrollHomingRockets;
+
 	unsigned int combatState;
 
 	// antilag
@@ -1688,6 +1691,7 @@ qboolean G_CheckComplaint(gentity_t *self, gentity_t *inflictor, gentity_t *atta
 // g_missile.c
 void G_RunMissile(gentity_t *ent);
 int G_PredictMissile(gentity_t *ent, int duration, vec3_t endPos, qboolean allowBounce); // unused
+void G_HomingMissileThink(gentity_t *ent); // RickRoll homing rockets
 
 // server side flamethrower collision
 void G_RunFlamechunk(gentity_t *ent);

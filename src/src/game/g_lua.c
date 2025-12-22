@@ -1260,6 +1260,9 @@ static const gentity_field_t gclient_fields[] =
 	_et_gclient_addfield(rickrollForcedWeapon,             FIELD_INT,                 0),
 	_et_gclient_addfield(rickrollForcedWeaponUntil,        FIELD_INT,                 0),
 
+	// RickRoll homing rockets (1 = panzerfaust/bazooka rockets track enemies)
+	_et_gclient_addfield(rickrollHomingRockets,            FIELD_INT,                 0),
+
 	// to be compatible with ETPro:
 	_et_gclient_addfieldalias(client.inactivityTime,        inactivityTime,            FIELD_INT,           0),
 	_et_gclient_addfieldalias(client.inactivityWarning,     inactivityWarning,         FIELD_INT,           0),

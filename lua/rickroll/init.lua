@@ -309,12 +309,12 @@ function rickroll.consoleCommand(command)
     elseif cmd == "rickroll_effects" then
         -- List all available effect IDs
         et.G_Print("^5[Rick Roll Mode] ^7Available effects:\n")
-        et.G_Print("^2BLESSED: ^7god_mode, caffeine_rush, tank_mode, regeneration, adrenaline, medic_mode, damage_boost\n")
+        et.G_Print("^2BLESSED: ^7god_mode, caffeine_rush, tank_mode, regeneration, adrenaline, medic_mode, damage_boost, homing_rockets\n")
         et.G_Print("^1CURSED: ^7tiny_legs, glass_cannon, disoriented, marked, butter_fingers, pistols_only, bouncy, slippery, weak_hits\n")
         et.G_Print("^3CHAOTIC: ^7knife_fight, moon_mode, russian_roulette, team_switch, telefrag, weapon_roulette, fling, narcolepsy, panzer_freeze, projectile_speed, earthquake\n")
         et.G_Print("\n^5Usage: ^7rickroll_test <effect_id> [player_num|all] [power_level 1-5]\n")
         et.G_Print("^5Example: ^7rickroll_test butter_fingers all 3\n")
-        et.G_Print("^5Example: ^7rickroll_test earthquake all 5\n")
+        et.G_Print("^5Example: ^7rickroll_test homing_rockets 0 3\n")
         return true
 
     elseif cmd == "rickroll_clear" then
@@ -352,7 +352,7 @@ function rickroll.showTestHelp(clientNum)
     et.trap_SendServerCommand(clientNum, 'print "^3Auto: ^7/rcon set rickroll_auto_cmd on|off|toggle\n"')
     et.trap_SendServerCommand(clientNum, 'print "^3Full: ^7/rcon set rickroll_force 1\n"')
     et.trap_SendServerCommand(clientNum, 'print "^5----- EFFECTS -----\n"')
-    et.trap_SendServerCommand(clientNum, 'print "^2BLESSED: ^7god_mode caffeine_rush tank_mode regeneration adrenaline medic_mode damage_boost\n"')
+    et.trap_SendServerCommand(clientNum, 'print "^2BLESSED: ^7god_mode caffeine_rush tank_mode regeneration adrenaline medic_mode damage_boost homing_rockets\n"')
     et.trap_SendServerCommand(clientNum, 'print "^1CURSED: ^7tiny_legs glass_cannon disoriented marked butter_fingers pistols_only bouncy slippery weak_hits\n"')
     et.trap_SendServerCommand(clientNum, 'print "^3CHAOTIC: ^7knife_fight moon_mode russian_roulette team_switch telefrag weapon_roulette fling narcolepsy panzer_freeze projectile_speed earthquake\n"')
     et.trap_SendServerCommand(clientNum, 'print "^5==============================\n"')

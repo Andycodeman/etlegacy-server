@@ -38,6 +38,210 @@
 #include "g_etbot_interface.h"
 #endif
 
+//=============================================================================
+// RickRoll: Homing Missiles
+//=============================================================================
+
+#define HOMING_SPEED        2000    // Slightly slower than stock 2500 for better tracking visuals
+#define HOMING_TURN_RATE    0.08f   // 8% blend per frame (~4° per 50ms) - gradual turns
+#define HOMING_RANGE        1500    // Detection range in units
+#define HOMING_THINK_TIME   50      // Think every 50ms
+
+// Cone angles based on power level (set by Lua in rickrollHomingRockets):
+// Power 1 (MILD):      45° cone - weak homing, must aim well
+// Power 2 (MODERATE):  60° cone - decent homing
+// Power 3 (STRONG):    90° cone - good homing (default)
+// Power 4 (EXTREME):  120° cone - strong homing
+// Power 5 (LEGENDARY):150° cone - almost full hemisphere tracking
+
+/**
+ * @brief Find the best homing target for a missile
+ * @param[in] ent The missile entity
+ * @param[in] ownerTeam Team of the missile owner (to find enemies)
+ * @param[in] coneAngle Homing cone angle in degrees (from rickrollHomingRockets)
+ * @return Best target entity, or NULL if none found
+ */
+static gentity_t *G_FindHomingTarget(gentity_t *ent, int ownerTeam, int coneAngle)
+{
+	int       i;
+	gentity_t *target;
+	gentity_t *bestTarget = NULL;
+	float     bestDist = HOMING_RANGE * HOMING_RANGE; // Square for optimization
+	vec3_t    missileDir, toTarget;
+	float     dot, dist;
+	float     coneThreshold;
+
+	// Calculate missile's current direction (normalized)
+	VectorCopy(ent->s.pos.trDelta, missileDir);
+	VectorNormalize(missileDir);
+
+	// Use cone angle from rickrollHomingRockets (half angle for threshold)
+	// e.g., 90° cone means targets within 45° of missile heading are valid
+	coneThreshold = cos(DEG2RAD(coneAngle / 2.0f));
+
+	// Iterate all clients looking for enemies
+	for (i = 0; i < level.maxclients; i++)
+	{
+		target = &g_entities[i];
+
+		// Skip invalid entities
+		if (!target->inuse || !target->client)
+		{
+			continue;
+		}
+
+		// Skip dead players
+		if (target->health <= 0)
+		{
+			continue;
+		}
+
+		// Skip spectators
+		if (target->client->sess.sessionTeam != TEAM_AXIS &&
+		    target->client->sess.sessionTeam != TEAM_ALLIES)
+		{
+			continue;
+		}
+
+		// Skip same team (only track enemies)
+		if (target->client->sess.sessionTeam == ownerTeam)
+		{
+			continue;
+		}
+
+		// Calculate vector to target
+		VectorSubtract(target->r.currentOrigin, ent->r.currentOrigin, toTarget);
+		dist = VectorLengthSquared(toTarget);
+
+		// Skip if too far
+		if (dist > bestDist)
+		{
+			continue;
+		}
+
+		// Normalize for cone check
+		VectorNormalize(toTarget);
+
+		// Check if target is in cone ahead of missile
+		dot = DotProduct(missileDir, toTarget);
+		if (dot < coneThreshold)
+		{
+			continue; // Target is not ahead of missile
+		}
+
+		// Optional: Line of sight check (trace to target)
+		// Uncomment if you want rockets to not track through walls
+		/*
+		{
+			trace_t tr;
+			trap_Trace(&tr, ent->r.currentOrigin, NULL, NULL, target->r.currentOrigin, ent->s.number, MASK_SHOT);
+			if (tr.entityNum != i)
+			{
+				continue; // Blocked by something
+			}
+		}
+		*/
+
+		// This is the best target so far
+		bestDist = dist;
+		bestTarget = target;
+	}
+
+	return bestTarget;
+}
+
+/**
+ * @brief Think function for homing missiles
+ * Locks onto nearest enemy target on first acquisition, then tracks until impact.
+ * Uses ent->enemy to store the locked target (NULL = not locked yet).
+ * @param[in,out] ent The missile entity
+ */
+void G_HomingMissileThink(gentity_t *ent)
+{
+	gentity_t *owner;
+	gentity_t *target;
+	vec3_t    toTarget, newVelocity, targetPos;
+	int       ownerTeam;
+	int       coneAngle;
+
+	// Get owner for team info and cone angle
+	owner = &g_entities[ent->r.ownerNum];
+	if (!owner->client)
+	{
+		// No valid owner, just continue on current trajectory
+		ent->nextthink = level.time + HOMING_THINK_TIME;
+		return;
+	}
+
+	ownerTeam = owner->client->sess.sessionTeam;
+
+	// Get cone angle from owner's rickrollHomingRockets field
+	coneAngle = owner->client->rickrollHomingRockets;
+	if (coneAngle < 30)
+	{
+		coneAngle = 90; // Default to 90° if invalid
+	}
+
+	// Check if we already have a locked target
+	target = ent->enemy;
+
+	if (!target)
+	{
+		// No target locked yet - find one and lock on
+		target = G_FindHomingTarget(ent, ownerTeam, coneAngle);
+		if (target)
+		{
+			// Lock onto this target permanently
+			ent->enemy = target;
+		}
+	}
+
+	// If we have a locked target, track it (even if dead - go to last position)
+	if (target)
+	{
+		vec3_t currentDir, targetDir;
+		float  speed;
+
+		// Get current velocity direction and speed
+		speed = VectorLength(ent->s.pos.trDelta);
+		if (speed < 100)
+		{
+			speed = HOMING_SPEED; // Ensure minimum speed
+		}
+
+		VectorCopy(ent->s.pos.trDelta, currentDir);
+		VectorNormalize(currentDir);
+
+		// Get target position (use current origin, works even if dead)
+		VectorCopy(target->r.currentOrigin, targetPos);
+		targetPos[2] += 32; // Aim at chest height
+
+		// Calculate direction to target
+		VectorSubtract(targetPos, ent->r.currentOrigin, toTarget);
+		VectorCopy(toTarget, targetDir);
+		VectorNormalize(targetDir);
+
+		// Blend current direction toward target direction (limited turn rate)
+		newVelocity[0] = currentDir[0] * (1.0f - HOMING_TURN_RATE) + targetDir[0] * HOMING_TURN_RATE;
+		newVelocity[1] = currentDir[1] * (1.0f - HOMING_TURN_RATE) + targetDir[1] * HOMING_TURN_RATE;
+		newVelocity[2] = currentDir[2] * (1.0f - HOMING_TURN_RATE) + targetDir[2] * HOMING_TURN_RATE;
+
+		// Normalize and scale to speed
+		VectorNormalize(newVelocity);
+		VectorScale(newVelocity, speed, newVelocity);
+
+		// Apply new velocity
+		VectorCopy(newVelocity, ent->s.pos.trDelta);
+
+		// Update trajectory base for smooth interpolation
+		VectorCopy(ent->r.currentOrigin, ent->s.pos.trBase);
+		ent->s.pos.trTime = level.time;
+	}
+
+	// Schedule next think
+	ent->nextthink = level.time + HOMING_THINK_TIME;
+}
+
 /**
  * @brief G_BounceMissile
  * @param[in,out] ent

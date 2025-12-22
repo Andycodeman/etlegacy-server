@@ -153,6 +153,7 @@ rickroll.powerMeanings = {
     adrenaline = "multiplier",  -- Adrenaline regen 10-25 every 2s
     medic_mode = "interval",    -- Health pack frequency 2-6s
     damage_boost = "multiplier", -- Damage multiplier
+    homing_rockets = "multiplier",  -- Cone angle scales with power (45°-150°)
 
     -- CURSED
     tiny_legs = "inverse",      -- Speed reduction (per-player via C code)
@@ -238,6 +239,12 @@ rickroll.effects = {
             id = "damage_boost",
             name = "DAMAGE BOOST",
             description = "Your hits deal more damage!",
+            color = "^2"
+        },
+        {
+            id = "homing_rockets",
+            name = "HOMING ROCKETS",
+            description = "Your rockets seek enemies!",
             color = "^2"
         }
     },

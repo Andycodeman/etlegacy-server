@@ -221,6 +221,7 @@ function rickroll.effectSystem.getDescription(effectId, powerLevel, powerValue)
         adrenaline = string.format("Adrenaline regenerates %d every 2 seconds!", math.floor(10 * powerValue)),
         medic_mode = string.format("Receive health pack every %.0f seconds!", powerValue / 1000),
         damage_boost = string.format("Your attacks deal %.1fx damage!", powerValue),
+        homing_rockets = "Rockets home on enemies!",
 
         -- CURSED
         tiny_legs = string.format("Movement speed reduced to %d%%!", inversePct),
@@ -228,7 +229,7 @@ function rickroll.effectSystem.getDescription(effectId, powerLevel, powerValue)
         disoriented = string.format("Screen spins every %.0f seconds!", powerValue / 1000),
         marked = string.format("Location revealed every %.0f seconds!", powerValue / 1000),
         butter_fingers = string.format("Drop weapon every %.0f seconds!", powerValue / 1000),
-        pistols_only = "Only pistol has ammo!",
+        pistols_only = "Forced to pistol only!",
         bouncy = string.format("Random knockback every %.0f seconds!", powerValue / 1000),
         slippery = string.format("Ice physics - %.0fx slippery!", powerValue),
         weak_hits = string.format("Your attacks deal only %d%% damage!", inversePct),
@@ -686,6 +687,56 @@ rickroll.effectSystem.handlers["damage_boost"] = {
     end
 }
 
+-- HOMING ROCKETS - Panzerfaust/Bazooka rockets track nearest enemy
+-- Uses C code: rickrollHomingRockets stores the cone angle in degrees
+-- Power level affects how wide the homing cone is:
+--   MILD (1):      45° cone - weak homing, must aim well
+--   MODERATE (2):  60° cone - decent homing
+--   STRONG (3):    90° cone - good homing
+--   EXTREME (4):  120° cone - strong homing
+--   LEGENDARY (5):150° cone - almost full hemisphere tracking
+rickroll.effectSystem.handlers["homing_rockets"] = {
+    apply = function(clientNum, powerLevel, powerValue, endTime, isAllPlayers)
+        local original = {}
+        original.wasHoming = et.gentity_get(clientNum, "rickrollHomingRockets") or 0
+
+        -- Get power index (1-5) from the powerLevel multiplier
+        local powerIndex = 1
+        for i, level in ipairs(rickroll.config.powerLevels) do
+            if level.multiplier == powerLevel.multiplier then
+                powerIndex = i
+                break
+            end
+        end
+
+        -- Map power levels to cone angles (degrees)
+        -- Higher power = wider cone = better tracking
+        local coneAngles = {45, 60, 90, 120, 150}
+        local coneAngle = coneAngles[powerIndex] or 90
+
+        -- Store cone angle in rickrollHomingRockets (C code reads this)
+        et.gentity_set(clientNum, "rickrollHomingRockets", coneAngle)
+
+        -- Announce the effect with cone info
+        if not isAllPlayers then
+            local name = et.gentity_get(clientNum, "pers.netname") or "Player"
+            et.trap_SendServerCommand(-1, string.format(
+                'bp "^2HOMING ROCKETS!\n^7%s\'s rockets seek enemies (%d° cone)!"',
+                name, coneAngle
+            ))
+        end
+
+        return true, original
+    end,
+    remove = function(clientNum, original, isAllPlayers)
+        -- Disable homing mode
+        et.gentity_set(clientNum, "rickrollHomingRockets", 0)
+    end,
+    update = function(clientNum, data, levelTime)
+        -- Nothing to update, homing is handled entirely in C code (g_missile.c)
+    end
+}
+
 --=============================================================================
 -- CURSED EFFECTS
 --=============================================================================
@@ -858,32 +909,62 @@ rickroll.effectSystem.handlers["butter_fingers"] = {
     end
 }
 
--- PISTOLS ONLY - Force to pistol weapon and keep forcing back to it
+-- PISTOLS ONLY - Force to pistol weapon (single player or all)
+-- Uses BOTH server-side AND client-side weapon forcing (same as knife_fight)
 rickroll.effectSystem.handlers["pistols_only"] = {
     apply = function(clientNum, powerLevel, powerValue, endTime, isAllPlayers)
         local original = {}
+        local now = et.trap_Milliseconds()
+        local duration = endTime - now
 
-        -- Force to pistol based on team
-        local team = et.gentity_get(clientNum, "sess.sessionTeam")
-        local pistol = (team == 1) and 1 or 2  -- WP_LUGER=1, WP_COLT=2
-        original.pistol = pistol
+        original.isAllPlayers = isAllPlayers
 
-        -- Switch to pistol
-        et.gentity_set(clientNum, "ps.weapon", pistol)
+        -- Helper to get pistol for a player based on team
+        local function getPistolForPlayer(playerNum)
+            local team = et.gentity_get(playerNum, "sess.sessionTeam")
+            -- TEAM_AXIS = 1 uses LUGER (2), TEAM_ALLIES = 2 uses COLT (7)
+            return (team == 1) and WEAPON.LUGER or WEAPON.COLT
+        end
+
+        if isAllPlayers then
+            -- Force all players to their team's pistol
+            local maxClients = tonumber(et.trap_Cvar_Get("sv_maxclients")) or 64
+            for i = 0, maxClients - 1 do
+                if et.gentity_get(i, "inuse") == 1 then
+                    local team = et.gentity_get(i, "sess.sessionTeam")
+                    if team == 1 or team == 2 then
+                        local pistol = getPistolForPlayer(i)
+                        et.gentity_set(i, "ps.weapon", pistol)
+                        et.gentity_set(i, "rickrollForcedWeapon", pistol)
+                        et.gentity_set(i, "rickrollForcedWeaponUntil", endTime)
+                        rickroll.effectSystem.sendForceWeapon(i, pistol, duration)
+                    end
+                end
+            end
+        else
+            -- Force single player to their team's pistol
+            local pistol = getPistolForPlayer(clientNum)
+            et.gentity_set(clientNum, "ps.weapon", pistol)
+            et.gentity_set(clientNum, "rickrollForcedWeapon", pistol)
+            et.gentity_set(clientNum, "rickrollForcedWeaponUntil", endTime)
+            rickroll.effectSystem.sendForceWeapon(clientNum, pistol, duration)
+        end
         return true, original
     end,
-    remove = function(clientNum, original, isAllPlayers) end,
-    update = function(clientNum, data, levelTime)
-        -- Continuously force back to pistol every 500ms
-        if data.lastForce == nil or levelTime - data.lastForce > 500 then
-            local pistol = data.originalValues.pistol or 1
-            local currentWeapon = et.gentity_get(clientNum, "ps.weapon")
-
-            -- If they switched away from pistol, force them back
-            if currentWeapon ~= pistol then
-                et.gentity_set(clientNum, "ps.weapon", pistol)
+    remove = function(clientNum, original, isAllPlayers)
+        if isAllPlayers then
+            local maxClients = tonumber(et.trap_Cvar_Get("sv_maxclients")) or 64
+            for i = 0, maxClients - 1 do
+                if et.gentity_get(i, "inuse") == 1 then
+                    et.gentity_set(i, "rickrollForcedWeapon", 0)
+                    et.gentity_set(i, "rickrollForcedWeaponUntil", 0)
+                    rickroll.effectSystem.clearForceWeapon(i)
+                end
             end
-            data.lastForce = levelTime
+        else
+            et.gentity_set(clientNum, "rickrollForcedWeapon", 0)
+            et.gentity_set(clientNum, "rickrollForcedWeaponUntil", 0)
+            rickroll.effectSystem.clearForceWeapon(clientNum)
         end
     end
 }

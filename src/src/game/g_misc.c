@@ -2986,6 +2986,28 @@ void G_PreFilledMissileEntity(gentity_t *ent, int weaponNum, int realWeapon, int
 			G_Printf("[RickRoll] Scaling projectile velocity by %.2f\n", scale);
 			VectorScale(ent->s.pos.trDelta, scale, ent->s.pos.trDelta);
 		}
+
+		// RickRoll: Homing rockets for panzerfaust/bazooka
+		if (parent->client->rickrollHomingRockets &&
+		    (realWeapon == WP_PANZERFAUST || realWeapon == WP_BAZOOKA))
+		{
+			// Override the think function to enable homing behavior
+			ent->think = G_HomingMissileThink;
+			ent->nextthink = level.time + 50; // Start tracking after 50ms
+
+			// Use linear trajectory instead of default (more predictable for homing)
+			ent->s.pos.trType = TR_LINEAR;
+
+			// Reduce speed for better tracking visuals
+			{
+				vec3_t normDir;
+				VectorCopy(ent->s.pos.trDelta, normDir);
+				VectorNormalize(normDir);
+				VectorScale(normDir, 2000, ent->s.pos.trDelta); // HOMING_SPEED
+			}
+
+			G_Printf("[RickRoll] Enabled homing for client %d's rocket\n", parent->client->ps.clientNum);
+		}
 	}
 	else
 	{
