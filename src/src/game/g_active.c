@@ -1237,6 +1237,25 @@ void ClientThink_real(gentity_t *ent)
 		return;
 	}
 
+	// RickRoll: Handle god mode via rickrollGodModeUntil (persists across respawn)
+	// Lua sets rickrollGodModeUntil to level.time + duration, C code handles the rest
+	// Uses PW_GODMODE powerup for visual (gets networked to client, unlike EF_SPARE1)
+	if (client->rickrollGodModeUntil > 0 && level.time < client->rickrollGodModeUntil)
+	{
+		// God mode active - set FL_GODMODE and visual powerup
+		ent->flags |= FL_GODMODE;
+		ent->s.powerups |= (1 << PW_GODMODE);
+		client->ps.powerups[PW_GODMODE] = INT_MAX;
+	}
+	else if (client->rickrollGodModeUntil > 0)
+	{
+		// God mode expired - clear everything
+		client->rickrollGodModeUntil = 0;
+		ent->flags &= ~FL_GODMODE;
+		ent->s.powerups &= ~(1 << PW_GODMODE);
+		client->ps.powerups[PW_GODMODE] = 0;
+	}
+
 	// RickRoll: Handle freeze state
 	// Check if frozen (freezeUntil > 0 means frozen, will unfreeze when level.time >= freezeUntil)
 	// Lua can set freezeUntil = 0 to force unfreeze
@@ -1244,7 +1263,9 @@ void ClientThink_real(gentity_t *ent)
 	{
 		// Still frozen - prevent ALL movement (humans and bots)
 		client->ps.pm_flags |= PMF_TIME_LOCKPLAYER;
-		ent->s.eFlags |= EF_SPARE0;  // Set frozen visual flag for cgame rendering
+		// Set frozen visual flag for cgame rendering - use both ent->s.eFlags and client->ps.eFlags
+		ent->s.eFlags |= EF_SPARE0;
+		client->ps.eFlags |= EF_SPARE0;
 		// Zero out velocity to stop sliding
 		VectorClear(client->ps.velocity);
 		// Clear all movement commands (important for bots!)
@@ -1270,6 +1291,7 @@ void ClientThink_real(gentity_t *ent)
 		}
 		client->rickrollFreezeUntil = 0;
 		ent->s.eFlags &= ~EF_SPARE0;
+		client->ps.eFlags &= ~EF_SPARE0;
 	}
 
 	// RickRoll: Handle slippery/ice mode

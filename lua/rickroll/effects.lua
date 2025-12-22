@@ -460,20 +460,20 @@ rickroll.effectSystem.handlers = {}
 -- BLESSED EFFECTS
 --=============================================================================
 
--- GOD MODE - Player takes no damage (FL_GODMODE = 16)
+-- GOD MODE - Player takes no damage
+-- Uses rickrollGodModeUntil field which persists across respawn and is handled by C code
 rickroll.effectSystem.handlers["god_mode"] = {
     apply = function(clientNum, powerLevel, powerValue, endTime, isAllPlayers)
         local original = {}
-        local flags = et.gentity_get(clientNum, "flags") or 0
-        original.flags = flags
-        et.gentity_set(clientNum, "flags", flags | 16)  -- FL_GODMODE
+        original.godModeUntil = et.gentity_get(clientNum, "rickrollGodModeUntil") or 0
+        -- Set the time when god mode ends - C code in g_active.c will set FL_GODMODE and EF_SPARE1
+        et.gentity_set(clientNum, "rickrollGodModeUntil", endTime)
+        et.G_Print("^3GOD MODE APPLIED: client=" .. clientNum .. " until=" .. endTime .. "\n")
         return true, original
     end,
     remove = function(clientNum, original, isAllPlayers)
-        if original.flags ~= nil then
-            local flags = et.gentity_get(clientNum, "flags") or 0
-            et.gentity_set(clientNum, "flags", flags & ~16)
-        end
+        -- Clear god mode by setting time to 0
+        et.gentity_set(clientNum, "rickrollGodModeUntil", 0)
     end
 }
 

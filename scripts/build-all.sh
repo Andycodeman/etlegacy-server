@@ -208,6 +208,17 @@ build_mod_windows() {
     log_info "Windows ${arch}-bit client modules built successfully!"
 }
 
+# Build the rickroll pk3 (separate from main mod pk3 for HTTP downloads)
+build_rickroll_pk3() {
+    log_step "Building rickroll pk3..."
+
+    if [ -x "$SCRIPT_DIR/build-rickroll-pk3.sh" ]; then
+        "$SCRIPT_DIR/build-rickroll-pk3.sh"
+    else
+        log_warn "build-rickroll-pk3.sh not found or not executable, skipping rickroll pk3"
+    fi
+}
+
 # Create the mod pk3 with all client modules
 create_mod_pk3() {
     log_step "Creating mod pk3 package..."
@@ -312,6 +323,7 @@ main() {
             build_mod_windows 32
             build_mod_windows 64
             create_mod_pk3
+            build_rickroll_pk3
             ;;
         server)
             build_server_linux64
@@ -331,6 +343,7 @@ main() {
             build_mod_windows 32
             build_mod_windows 64
             create_mod_pk3
+            build_rickroll_pk3
             ;;
         linux32)
             build_mod_linux 32

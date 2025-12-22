@@ -2358,6 +2358,13 @@ static void CG_PlayerSprites(centity_t *cent)
 		                     cgs.clientinfo[cent->currentState.number].selected
 		                         ? cgs.fireteamSpritesColorSelected : cgs.fireteamSpritesColor);
 	}
+
+	// RickRoll: Show frozen indicator (blue sprite) above frozen players
+	if (cent->currentState.eFlags & EF_SPARE0)
+	{
+		CG_PlayerFloatSprite(cent, cgs.media.objectiveBlueShader, height, numIcons++, NULL);
+	}
+
 }
 
 #define SHADOW_DISTANCE     64
@@ -2700,26 +2707,18 @@ void CG_AddRefEntityWithPowerups(refEntity_t *ent, int powerups, int team, entit
 		trap_R_AddRefEntityToScene(ent);
 	}
 
-	// RickRoll: Add frozen visual effect (blue/cyan glow around player)
+	// ETMan: Add frozen visual effect (blue ice glow)
 	if (es->eFlags & EF_SPARE0)
 	{
-		float pulse = 0.7f + 0.3f * sin(cg.time * 0.005f);  // Slow pulsing effect
-		refEntity_t frozenEnt;
+		ent->customShader = cgs.media.frozenShader;
+		trap_R_AddRefEntityToScene(ent);
+	}
 
-		Com_Memcpy(&frozenEnt, ent, sizeof(frozenEnt));
-
-		// Scale up slightly to create visible "ice shell" effect
-		VectorScale(frozenEnt.axis[0], 1.05f, frozenEnt.axis[0]);
-		VectorScale(frozenEnt.axis[1], 1.05f, frozenEnt.axis[1]);
-		VectorScale(frozenEnt.axis[2], 1.05f, frozenEnt.axis[2]);
-
-		// Blue/cyan ice effect - bright and visible
-		frozenEnt.shaderRGBA[0] = (unsigned char)(100);          // Some red for cyan
-		frozenEnt.shaderRGBA[1] = (unsigned char)(200 * pulse);  // Green pulsing
-		frozenEnt.shaderRGBA[2] = (unsigned char)(255);          // Full blue
-		frozenEnt.shaderRGBA[3] = (unsigned char)(200);          // High alpha
-		frozenEnt.customShader = cgs.media.friendShader;         // Use friend shader (more visible)
-		trap_R_AddRefEntityToScene(&frozenEnt);
+	// ETMan: Add god mode visual effect (golden glow)
+	if (es->powerups & (1 << PW_GODMODE))
+	{
+		ent->customShader = cgs.media.godModeShader;
+		trap_R_AddRefEntityToScene(ent);
 	}
 
 	*ent = backupRefEnt;

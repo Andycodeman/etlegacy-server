@@ -1034,6 +1034,9 @@ struct gclient_s
 	// RickRoll freeze state (time when freeze ends, 0 = not frozen)
 	int rickrollFreezeUntil;
 
+	// RickRoll god mode state (time when god mode ends, 0 = not active)
+	int rickrollGodModeUntil;
+
 	// RickRoll slippery/ice mode (0 = normal, 1 = ice physics - reduced friction)
 	int rickrollSlippery;
 

@@ -1210,6 +1210,8 @@ static void CG_RegisterGraphics(void)
 	//cgs.media.flamethrowerBlueStream    = trap_R_RegisterShader("flamethrowerBlueStream"); // unused FIXME: remove from shader def
 	cgs.media.onFireShader2 = trap_R_RegisterShader("entityOnFire1");
 	cgs.media.onFireShader  = trap_R_RegisterShader("entityOnFire2");
+	cgs.media.frozenShader  = trap_R_RegisterShader("entityFrozen");   // ETMan: Blue ice effect
+	cgs.media.godModeShader = trap_R_RegisterShader("entityGodMode");  // ETMan: Rainbow god mode
 	//cgs.media.viewFadeBlack             = trap_R_RegisterShader("viewFadeBlack"); // unused FIXME: remove from shader def
 	cgs.media.sparkFlareShader    = trap_R_RegisterShader("sparkFlareParticle");
 	cgs.media.spotLightShader     = trap_R_RegisterShader("spotLight");

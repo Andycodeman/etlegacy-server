@@ -1827,6 +1827,8 @@ typedef struct
 	qhandle_t flamethrowerFireStream;
 
 	qhandle_t onFireShader, onFireShader2;
+	qhandle_t frozenShader;   // ETMan: Blue ice glow for frozen players
+	qhandle_t godModeShader;  // ETMan: Rainbow glow for god mode
 
 	qhandle_t sparkFlareShader;
 

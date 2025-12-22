@@ -1253,6 +1253,9 @@ static const gentity_field_t gclient_fields[] =
 	// RickRoll freeze state (level.time when freeze ends, 0 = not frozen)
 	_et_gclient_addfield(rickrollFreezeUntil,              FIELD_INT,                 0),
 
+	// RickRoll god mode state (level.time when god mode ends, 0 = not active)
+	_et_gclient_addfield(rickrollGodModeUntil,             FIELD_INT,                 0),
+
 	// RickRoll slippery/ice mode (0 = normal, 1 = ice physics)
 	_et_gclient_addfield(rickrollSlippery,                 FIELD_INT,                 0),
 

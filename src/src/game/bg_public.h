@@ -796,6 +796,7 @@ typedef enum
 	PW_NONE = 0,           ///< unused
 
 	PW_INVULNERABLE,
+	PW_GODMODE,            ///< RickRoll: god mode visual indicator
 
 	PW_NOFATIGUE = 4,      ///< not dependant on level.time
 
