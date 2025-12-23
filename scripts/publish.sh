@@ -16,6 +16,14 @@ DIST_DIR="$PROJECT_DIR/dist"
 REMOTE_HOST="andy@5.78.83.59"
 REMOTE_DIR="/home/andy/etlegacy"
 
+# SSH connection multiplexing - reuse single connection for all SSH/rsync calls
+SSH_CONTROL_PATH="/tmp/ssh-et-publish-%r@%h:%p"
+SSH_OPTS="-o ControlMaster=auto -o ControlPath=$SSH_CONTROL_PATH -o ControlPersist=60"
+export RSYNC_RSH="ssh $SSH_OPTS"
+
+# Start master connection
+ssh $SSH_OPTS -fNM "$REMOTE_HOST" 2>/dev/null || true
+
 # Colors
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -75,11 +83,11 @@ echo -e "${YELLOW}Step 4b: Syncing server-monitor.sh...${NC}"
 rsync -avz --progress \
     "$PROJECT_DIR/scripts/server-monitor.sh" \
     "$REMOTE_HOST:$REMOTE_DIR/server-monitor.sh"
-ssh "$REMOTE_HOST" "chmod +x $REMOTE_DIR/server-monitor.sh"
+ssh $SSH_OPTS "$REMOTE_HOST" "chmod +x $REMOTE_DIR/server-monitor.sh"
 
 # Step 5: Update systemd service file on VPS
 echo -e "${YELLOW}Step 5: Updating etserver.service on VPS...${NC}"
-ssh "$REMOTE_HOST" "cat > /tmp/etserver.service << 'EOF'
+ssh $SSH_OPTS "$REMOTE_HOST" "cat > /tmp/etserver.service << 'EOF'
 [Unit]
 Description=ET:Legacy Server
 After=network.target
@@ -101,7 +109,7 @@ echo "  - etserver.service updated for ET:Legacy (64-bit)"
 
 # Step 6: Restart server and monitor
 echo -e "${YELLOW}Step 6: Restarting services...${NC}"
-ssh "$REMOTE_HOST" "
+ssh $SSH_OPTS "$REMOTE_HOST" "
     echo '  Restarting etserver...'
     sudo systemctl restart etserver
     sleep 2
@@ -118,7 +126,7 @@ ssh "$REMOTE_HOST" "
 # Verify services are running
 echo -e "${YELLOW}Step 7: Verifying services...${NC}"
 sleep 2
-ssh "$REMOTE_HOST" "
+ssh $SSH_OPTS "$REMOTE_HOST" "
     if pgrep -f etlded.x86_64 > /dev/null; then
         echo '  ✓ etserver running'
     else
@@ -137,7 +145,7 @@ echo -e "${YELLOW}Step 8: Validating pk3 checksums...${NC}"
 PK3_NAME="zzz_etman_etlegacy.pk3"
 DIST_MD5=$(md5sum "$DIST_DIR/$PK3_NAME" 2>/dev/null | cut -d' ' -f1)
 LOCAL_MD5=$(md5sum "$LOCAL_SERVER/legacy/$PK3_NAME" 2>/dev/null | cut -d' ' -f1)
-REMOTE_MD5=$(ssh "$REMOTE_HOST" "md5sum $REMOTE_DIR/legacy/$PK3_NAME 2>/dev/null | cut -d' ' -f1")
+REMOTE_MD5=$(ssh $SSH_OPTS "$REMOTE_HOST" "md5sum $REMOTE_DIR/legacy/$PK3_NAME 2>/dev/null | cut -d' ' -f1")
 
 echo "  Dist:   $DIST_MD5"
 echo "  Local:  $LOCAL_MD5"
