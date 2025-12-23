@@ -28,6 +28,25 @@ Windows clients couldn't find the custom modules in the pk3 (wrong filename), so
 - `server-monitor.sh` (Bash) - Health check & auto-restart only (must run externally to detect crashes)
 - `lua/main.lua` (Lua) - Player connect/disconnect ntfy notifications (runs inside game, instant detection)
 
+### Player Notification Deduplication (Dec 2024)
+**Problem:** ntfy notifications were sent on every map change, not just first player connect.
+
+**Root Cause:** `et_ClientBegin` fires on every spawn (first connect AND every map change). The `restart` parameter in `et_InitGame`/`et_ShutdownGame` is unreliable:
+- `restart=0` in `et_ShutdownGame` means changing to a DIFFERENT map (not shutdown!)
+- `restart=1` means restarting the SAME map
+- Neither reliably indicates actual server process restart
+
+**Solution:** Use server PID to track sessions:
+- File: `~/.etlegacy/legacy/notified_players.txt`
+- Format: First line is server PID, remaining lines are player GUIDs
+- On map load: Check if file PID matches current `$PPID`
+  - Same PID → continue session, load GUIDs, skip notifications for known players
+  - Different PID → new server process, start fresh
+- On player join: Save GUID to file
+- On player disconnect: Remove GUID from file
+
+**Key insight:** Server PID is the only reliable way to detect a true server restart vs map change in ET:Legacy Lua.
+
 ## Directory Structure
 
 ```

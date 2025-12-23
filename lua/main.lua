@@ -60,6 +60,89 @@ local config = {
 }
 
 --[[
+    SESSION TRACKING
+    Track players who have already been notified this session.
+    Uses GUID (cl_guid) to persist across map changes.
+    State is saved to a file so it survives map changes.
+    File includes the server PID to detect new server sessions.
+]]--
+local notifiedPlayers = {}  -- { [guid] = true, ... }
+local NOTIFIED_PLAYERS_FILE = "/home/andy/.etlegacy/legacy/notified_players.txt"
+
+-- Get current server process ID
+local function getServerPid()
+    local handle = io.popen("echo $PPID")
+    if handle then
+        local pid = handle:read("*a"):match("^%s*(%d+)")
+        handle:close()
+        return pid
+    end
+    return nil
+end
+
+local currentPid = getServerPid()
+
+-- Load notified players from file (called on map load)
+-- Returns true if loaded successfully, false if PID mismatch (new server session)
+local function loadNotifiedPlayers()
+    notifiedPlayers = {}
+
+    local file = io.open(NOTIFIED_PLAYERS_FILE, "r")
+    if not file then
+        return false
+    end
+
+    local firstLine = file:read("*line")
+    if not firstLine then
+        file:close()
+        return false
+    end
+
+    -- First line is PID
+    local filePid = firstLine:match("^%s*(%d+)")
+    if not filePid then
+        file:close()
+        return false
+    end
+
+    -- Check if PID matches current server
+    if filePid ~= currentPid then
+        file:close()
+        return false  -- Different server process, start fresh
+    end
+
+    -- Load the rest of the lines as GUIDs
+    for line in file:lines() do
+        local guid = line:match("^%s*(.-)%s*$")  -- trim whitespace
+        if guid and guid ~= "" then
+            notifiedPlayers[guid] = true
+        end
+    end
+
+    file:close()
+    return true
+end
+
+-- Save notified players to file (called when player joins/leaves)
+local function saveNotifiedPlayers()
+    local file = io.open(NOTIFIED_PLAYERS_FILE, "w")
+    if file then
+        -- Write PID first
+        file:write(tostring(currentPid) .. "\n")
+        -- Then GUIDs
+        for guid, _ in pairs(notifiedPlayers) do
+            file:write(guid .. "\n")
+        end
+        file:close()
+    end
+end
+
+-- Clear notified players (reset in memory)
+local function clearNotifiedPlayers()
+    notifiedPlayers = {}
+end
+
+--[[
     UTILITY FUNCTIONS
 ]]--
 
@@ -113,6 +196,20 @@ local function getOtherHumanPlayers(excludeClientNum)
     return players
 end
 
+-- Get player's GUID from userinfo
+local function getPlayerGuid(clientNum)
+    local userinfo = et.trap_GetUserinfo(clientNum)
+    if userinfo then
+        local guid = et.Info_ValueForKey(userinfo, "cl_guid")
+        if guid and guid ~= "" then
+            return guid
+        end
+    end
+    -- Fallback: use IP address if no GUID
+    local ip = et.Info_ValueForKey(et.trap_GetUserinfo(clientNum), "ip") or ""
+    return "ip_" .. ip
+end
+
 -- Send notification via ntfy (non-blocking using shell background)
 local function sendNtfyNotification(title, message, priority)
     if not config.ntfy_enabled then return end
@@ -143,6 +240,18 @@ function et_InitGame(levelTime, randomSeed, restart)
     log("^2Server initializing...")
     log("^3ET:Legacy with Lua scripting")
 
+    -- Handle notification tracking persistence
+    -- Uses server PID to detect new sessions (server restart)
+    local loaded = loadNotifiedPlayers()
+    local count = 0
+    for _ in pairs(notifiedPlayers) do count = count + 1 end
+
+    if loaded and count > 0 then
+        log("^3Continuing session (PID " .. tostring(currentPid) .. ") - loaded " .. count .. " notified player(s)")
+    else
+        log("^3New session (PID " .. tostring(currentPid) .. ") - starting fresh notification tracking")
+    end
+
     -- Load crazy mode if enabled
     -- Order: crazymode.cfg first (defaults), then map config (overrides)
     if config.crazy_mode then
@@ -169,6 +278,9 @@ end
 
 function et_ShutdownGame(restart)
     log("^1Server shutting down...")
+
+    -- Don't clear notification tracking here - the timestamp mechanism handles stale sessions
+    -- restart parameter is unreliable for detecting true server shutdown vs map change
 
     -- Shutdown Rick Roll Mode
     if rickrollEnabled and rickroll then
@@ -212,6 +324,19 @@ function et_ClientBegin(clientNum)
         return
     end
 
+    -- Check if we've already notified for this player this session
+    -- Uses GUID to track across map changes
+    local guid = getPlayerGuid(clientNum)
+    if notifiedPlayers[guid] then
+        -- Already notified for this player, skip (map change)
+        debug("Skipping notification for " .. name .. " (already notified, GUID: " .. guid .. ")")
+        return
+    end
+
+    -- Mark as notified for this session and save to file
+    notifiedPlayers[guid] = true
+    saveNotifiedPlayers()
+
     local cleanName = stripColors(name)
     local mapname = et.trap_Cvar_Get("mapname") or "unknown"
 
@@ -236,6 +361,14 @@ function et_ClientDisconnect(clientNum)
     -- Skip bots
     if name:find("%[BOT%]") then
         return
+    end
+
+    -- Clear from notified list so they get notified again if they rejoin
+    local guid = getPlayerGuid(clientNum)
+    if guid then
+        notifiedPlayers[guid] = nil
+        saveNotifiedPlayers()
+        debug("Cleared notification tracking for " .. name .. " (GUID: " .. guid .. ")")
     end
 
     local cleanName = stripColors(name)
