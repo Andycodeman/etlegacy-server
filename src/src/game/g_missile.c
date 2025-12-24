@@ -42,17 +42,24 @@
 // RickRoll: Homing Missiles
 //=============================================================================
 
-#define HOMING_SPEED        2000    // Slightly slower than stock 2500 for better tracking visuals
-#define HOMING_TURN_RATE    0.08f   // 8% blend per frame (~4° per 50ms) - gradual turns
-#define HOMING_RANGE        1500    // Detection range in units
+// Predefined homing presets:
+// BALANCED:  speed=2000, turn=0.08, range=1500 (gradual turns, skilled play)
+// STRONG:    speed=2200, turn=0.15, range=2000 (noticeable homing)
+// LEGENDARY: speed=2000, turn=0.20, range=2500 (smooth tracking, wide cone)
+// INSANE:    speed=2000, turn=0.50, range=2500 (instant lock - too jerky!)
+
+// Current preset: LEGENDARY with full hemisphere cone
+#define HOMING_SPEED        2000    // Keep slower for dramatic tracking visuals
+#define HOMING_TURN_RATE    0.20f   // 20% blend per frame - smooth curves, not jerky
+#define HOMING_RANGE        2500    // Long detection range
 #define HOMING_THINK_TIME   50      // Think every 50ms
 
 // Cone angles based on power level (set by Lua in rickrollHomingRockets):
 // Power 1 (MILD):      45° cone - weak homing, must aim well
 // Power 2 (MODERATE):  60° cone - decent homing
-// Power 3 (STRONG):    90° cone - good homing (default)
+// Power 3 (STRONG):    90° cone - good homing
 // Power 4 (EXTREME):  120° cone - strong homing
-// Power 5 (LEGENDARY):150° cone - almost full hemisphere tracking
+// Power 5 (LEGENDARY):150° cone - almost full hemisphere tracking (current)
 
 /**
  * @brief Find the best homing target for a missile
@@ -92,6 +99,12 @@ static gentity_t *G_FindHomingTarget(gentity_t *ent, int ownerTeam, int coneAngl
 
 		// Skip dead players
 		if (target->health <= 0)
+		{
+			continue;
+		}
+
+		// Skip frozen players (already frozen, don't keep tracking them)
+		if (target->client->rickrollFreezeUntil > 0 && level.time < target->client->rickrollFreezeUntil)
 		{
 			continue;
 		}
@@ -185,18 +198,35 @@ void G_HomingMissileThink(gentity_t *ent)
 	// Check if we already have a locked target
 	target = ent->enemy;
 
+	// Validate existing target - release lock if dead or frozen
+	if (target)
+	{
+		if (!target->inuse || !target->client || target->health <= 0)
+		{
+			// Target is dead or invalid - release lock to find new target
+			ent->enemy = NULL;
+			target = NULL;
+		}
+		else if (target->client->rickrollFreezeUntil > 0 && level.time < target->client->rickrollFreezeUntil)
+		{
+			// Target is frozen - release lock to find new target
+			ent->enemy = NULL;
+			target = NULL;
+		}
+	}
+
 	if (!target)
 	{
-		// No target locked yet - find one and lock on
+		// No target locked - find one and lock on
 		target = G_FindHomingTarget(ent, ownerTeam, coneAngle);
 		if (target)
 		{
-			// Lock onto this target permanently
+			// Lock onto this target
 			ent->enemy = target;
 		}
 	}
 
-	// If we have a locked target, track it (even if dead - go to last position)
+	// If we have a valid locked target, track it
 	if (target)
 	{
 		vec3_t currentDir, targetDir;

@@ -1456,6 +1456,29 @@ static void CG_Missile(centity_t *cent)
 	{
 		// add to refresh list, possibly with quad glow
 		CG_AddRefEntityWithPowerups(&ent, s1->powerups, TEAM_FREE, s1, vec3_origin);
+
+		// RocketMode: Add colored glow effect for freeze/homing rockets (same technique as frozen players)
+		// Frame values: 0=normal, 1=freeze, 2=homing, 3=freeze+homing
+		if (cent->currentState.weapon == WP_PANZERFAUST || cent->currentState.weapon == WP_BAZOOKA)
+		{
+			int rocketMode = cent->currentState.frame;
+
+			if (rocketMode == 1 && cgs.media.rocketFreezeTrailShader)  // Freeze - blue glow
+			{
+				ent.customShader = cgs.media.rocketFreezeTrailShader;
+				trap_R_AddRefEntityToScene(&ent);
+			}
+			else if (rocketMode == 2 && cgs.media.rocketHomingTrailShader)  // Homing - green glow
+			{
+				ent.customShader = cgs.media.rocketHomingTrailShader;
+				trap_R_AddRefEntityToScene(&ent);
+			}
+			else if (rocketMode == 3 && cgs.media.rocketFreezeHomingTrailShader)  // Freeze+Homing - purple glow
+			{
+				ent.customShader = cgs.media.rocketFreezeHomingTrailShader;
+				trap_R_AddRefEntityToScene(&ent);
+			}
+		}
 	}
 
 #ifdef FEATURE_EDV

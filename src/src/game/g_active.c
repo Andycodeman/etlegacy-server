@@ -1266,6 +1266,8 @@ void ClientThink_real(gentity_t *ent)
 		// Set frozen visual flag for cgame rendering - use both ent->s.eFlags and client->ps.eFlags
 		ent->s.eFlags |= EF_SPARE0;
 		client->ps.eFlags |= EF_SPARE0;
+		// Send freeze end time to client for red/blue warning flash in last 3 seconds
+		ent->s.time2 = client->rickrollFreezeUntil;
 		// Zero out velocity to stop sliding
 		VectorClear(client->ps.velocity);
 		// Clear all movement commands (important for bots!)
@@ -1292,6 +1294,7 @@ void ClientThink_real(gentity_t *ent)
 		client->rickrollFreezeUntil = 0;
 		ent->s.eFlags &= ~EF_SPARE0;
 		client->ps.eFlags &= ~EF_SPARE0;
+		ent->s.time2 = 0;  // Clear freeze end time
 	}
 
 	// RickRoll: Handle slippery/ice mode

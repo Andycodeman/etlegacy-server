@@ -4335,6 +4335,9 @@ static void CG_Draw2D(void)
 	// Rick Roll effect timer (shows when effect is active)
 	CG_RickRoll_DrawTimer();
 
+	// Rocket Mode indicator (shows when holding panzer)
+	CG_DrawRocketMode();
+
 #ifdef FEATURE_EDV
 	if (!cgs.demoCamera.renderingFreeCam && !cgs.demoCamera.renderingWeaponCam)
 #endif

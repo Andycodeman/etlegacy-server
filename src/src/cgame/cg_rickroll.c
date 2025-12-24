@@ -1153,3 +1153,97 @@ void CG_RickRoll_DrawTimer(void) {
 			rr.effectDescription, 0, 0, ITEM_TEXTSTYLE_SHADOWED, &cgs.media.limboFont2);
 	}
 }
+
+
+/**
+ * @brief Handle rocketmode command from server
+ * Format: rocketmode <mode>
+ * mode: 0=normal, 1=freeze, 2=homing
+ */
+void CG_RocketMode_Update(void) {
+	int mode = atoi(CG_Argv(1));
+
+	CG_Printf("^2[RocketMode] CG_RocketMode_Update called, mode=%d\n", mode);
+
+	cg.rocketMode = mode;
+	cg.rocketModeDisplayUntil = cg.time + 5000;  // Show for 5 seconds (then fade)
+}
+
+/**
+ * @brief Draw rocket mode indicator on HUD when holding panzer
+ * Called from CG_DrawActiveFrame or similar
+ * Shows for 5 seconds after switching, then fades out over 1 second
+ */
+void CG_DrawRocketMode(void) {
+	const char *modeText;
+	vec4_t modeColor;
+	vec4_t hintColor;
+	float centerX, y, textWidth;
+	float alpha = 1.0f;
+	int elapsed;
+	int displayDuration = 5000;  // 5 seconds display
+	int fadeDuration = 1000;     // 1 second fade
+
+	// Safety check
+	if (!cg.snap) {
+		return;
+	}
+
+	// Only show when player has panzer/bazooka equipped
+	if (cg.snap->ps.weapon != WP_PANZERFAUST && cg.snap->ps.weapon != WP_BAZOOKA) {
+		return;
+	}
+
+	// Check if we should still display (5 second timer + 1 second fade)
+	if (cg.rocketModeDisplayUntil <= 0) {
+		return;
+	}
+
+	elapsed = cg.time - (cg.rocketModeDisplayUntil - displayDuration);
+	if (elapsed > displayDuration + fadeDuration) {
+		return;  // Past display + fade time
+	}
+
+	// Calculate fade alpha (fade during last second)
+	if (elapsed > displayDuration) {
+		alpha = 1.0f - ((float)(elapsed - displayDuration) / fadeDuration);
+		if (alpha < 0) alpha = 0;
+	}
+
+	// Set mode text and color
+	// Mode values from server: 0=normal, 1=freeze, 2=homing, 3=freeze+homing
+	switch (cg.rocketMode) {
+		case 1:  // Freeze
+			modeText = "FREEZE ROCKETS";
+			Vector4Set(modeColor, 0.2f, 0.5f, 1.0f, alpha);  // Blue
+			break;
+		case 2:  // Homing
+			modeText = "HOMING ROCKETS";
+			Vector4Set(modeColor, 0.2f, 1.0f, 0.3f, alpha);  // Green
+			break;
+		case 3:  // Freeze + Homing
+			modeText = "FREEZE+HOMING ROCKETS";
+			Vector4Set(modeColor, 1.0f, 0.2f, 1.0f, alpha);  // Magenta/Purple
+			break;
+		default:  // Normal
+			modeText = "NORMAL ROCKETS";
+			Vector4Set(modeColor, 1.0f, 1.0f, 1.0f, alpha);  // White
+			break;
+	}
+
+	// Draw centered above crosshair - use Ccg_WideX for proper widescreen centering
+	centerX = Ccg_WideX(SCREEN_WIDTH) / 2.0f;
+	y = SCREEN_HEIGHT / 2.0f - 60.0f;
+
+	textWidth = CG_Text_Width_Ext(modeText, 0.25f, 0, &cgs.media.limboFont2);
+	CG_Text_Paint_Ext(centerX - textWidth / 2.0f, y, 0.25f, 0.25f, modeColor,
+		modeText, 0, 0, ITEM_TEXTSTYLE_SHADOWED, &cgs.media.limboFont2);
+
+	// Draw hint below with same fade
+	Vector4Set(hintColor, 1.0f, 1.0f, 1.0f, alpha * 0.7f);
+	y += 15.0f;
+	textWidth = CG_Text_Width_Ext("Press 3 again to cycle", 0.15f, 0, &cgs.media.limboFont2);
+	CG_Text_Paint_Ext(centerX - textWidth / 2.0f, y, 0.15f, 0.15f, hintColor,
+		"Press 3 again to cycle", 0, 0, ITEM_TEXTSTYLE_SHADOWED, &cgs.media.limboFont2);
+}
+

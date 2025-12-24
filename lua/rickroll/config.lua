@@ -240,13 +240,8 @@ rickroll.effects = {
             name = "DAMAGE BOOST",
             description = "Your hits deal more damage!",
             color = "^2"
-        },
-        {
-            id = "homing_rockets",
-            name = "HOMING ROCKETS",
-            description = "Your rockets seek enemies!",
-            color = "^2"
         }
+        -- REMOVED: homing_rockets - now available to all players via rocket mode cycling
     },
 
     --=========================================================================
@@ -374,12 +369,7 @@ rickroll.effects = {
             description = "Sudden nap attacks!",
             color = "^3"
         },
-        {
-            id = "panzer_freeze",
-            name = "PANZER FREEZE",
-            description = "Rockets freeze enemies!",
-            color = "^4"
-        },
+        -- REMOVED: panzer_freeze - now available to all players via rocket mode cycling
         {
             id = "projectile_speed",
             name = "PROJECTILE SPEED",

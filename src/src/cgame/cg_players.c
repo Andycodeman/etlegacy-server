@@ -2708,9 +2708,28 @@ void CG_AddRefEntityWithPowerups(refEntity_t *ent, int powerups, int team, entit
 	}
 
 	// ETMan: Add frozen visual effect (blue ice glow)
+	// Alternates red/blue in last 3 seconds based on freeze end time stored in es->time2
 	if (es->eFlags & EF_SPARE0)
 	{
-		ent->customShader = cgs.media.frozenShader;
+		int timeRemaining = es->time2 - cg.time;
+
+		// If time2 is set and less than 3 seconds remain, alternate red/blue
+		if (es->time2 > 0 && timeRemaining > 0 && timeRemaining < 3000)
+		{
+			// Alternate every 200ms (5 times per second)
+			if ((cg.time / 200) % 2 == 0)
+			{
+				ent->customShader = cgs.media.frozenShader;  // Blue
+			}
+			else
+			{
+				ent->customShader = cgs.media.frozenWarningShader;  // Red
+			}
+		}
+		else
+		{
+			ent->customShader = cgs.media.frozenShader;  // Blue (normal frozen)
+		}
 		trap_R_AddRefEntityToScene(ent);
 	}
 

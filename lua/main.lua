@@ -12,23 +12,31 @@
 ]]--
 
 -- Module registration
-et.RegisterModname("ETMan Server v1.4.0 - Rick Roll Edition")
+et.RegisterModname("ETMan Server v1.5.0 - Rocket Mode Edition")
 
 --[[
     RICK ROLL MODE - The ultimate lottery system
     Randomly triggers "Never Gonna Give You Up" with spinning wheels!
+    Controlled by g_rickrollEnabled cvar (0 = disabled, 1 = enabled)
 ]]--
-local rickrollEnabled = true
+local rickrollEnabled = false  -- Will be set from cvar in et_InitGame
 local rickroll = nil
 
--- Load Rick Roll Mode (wrapped in pcall for safety)
-if rickrollEnabled then
+--[[
+    ROCKET MODE - Cycling between Normal, Freeze, and Homing rockets
+    All players can cycle by pressing panzer key while holding panzer
+]]--
+local rocketModeEnabled = true
+local rocketMode = nil
+
+-- Load Rocket Mode (wrapped in pcall for safety)
+if rocketModeEnabled then
     local success, err = pcall(function()
-        rickroll = dofile("legacy/lua/rickroll/init.lua")
+        rocketMode = dofile("legacy/lua/rocket_mode.lua")
     end)
     if not success then
-        et.G_Print("^1[ERROR] ^7Failed to load Rick Roll Mode: " .. tostring(err) .. "\n")
-        rickrollEnabled = false
+        et.G_Print("^1[ERROR] ^7Failed to load Rocket Mode: " .. tostring(err) .. "\n")
+        rocketModeEnabled = false
     end
 end
 
@@ -268,9 +276,29 @@ function et_InitGame(levelTime, randomSeed, restart)
         log("^3Map config: mapconfigs/" .. mapname .. ".cfg")
     end
 
-    -- Initialize Rick Roll Mode
-    if rickrollEnabled and rickroll then
-        rickroll.init(levelTime, randomSeed)
+    -- Initialize Rick Roll Mode (check cvar)
+    local rickrollCvar = et.trap_Cvar_Get("g_rickrollEnabled")
+    rickrollEnabled = (rickrollCvar == "1")
+
+    if rickrollEnabled then
+        -- Load rickroll module if enabled
+        local success, err = pcall(function()
+            rickroll = dofile("legacy/lua/rickroll/init.lua")
+        end)
+        if success and rickroll then
+            rickroll.init(levelTime, randomSeed)
+            log("^2Rick Roll Mode ^3ENABLED")
+        else
+            et.G_Print("^1[ERROR] ^7Failed to load Rick Roll Mode: " .. tostring(err) .. "\n")
+            rickrollEnabled = false
+        end
+    else
+        log("^7Rick Roll Mode ^1DISABLED ^7(set g_rickrollEnabled 1 to enable)")
+    end
+
+    -- Initialize Rocket Mode
+    if rocketModeEnabled and rocketMode then
+        rocketMode.init()
     end
 
     log("^2Initialization complete!")
@@ -286,6 +314,11 @@ function et_ShutdownGame(restart)
     if rickrollEnabled and rickroll then
         rickroll.shutdown()
     end
+
+    -- Shutdown Rocket Mode
+    if rocketModeEnabled and rocketMode then
+        rocketMode.shutdown()
+    end
 end
 
 --[[
@@ -296,6 +329,11 @@ function et_ClientConnect(clientNum, firstTime, isBot)
     -- IMPORTANT: In Lua, 0 is truthy! Must compare explicitly.
     -- isBot is 0 for humans, 1 for bots
 
+    -- Initialize rocket mode for this player (humans only)
+    if isBot == 0 and rocketModeEnabled and rocketMode then
+        rocketMode.initPlayer(clientNum)
+    end
+
     -- Welcome message for new human players
     -- Note: firstTime in Lua can be 0 or 1, not boolean
     if firstTime == 1 and isBot == 0 then
@@ -305,6 +343,11 @@ function et_ClientConnect(clientNum, firstTime, isBot)
         -- Welcome message
         et.trap_SendServerCommand(clientNum,
             'cp "^3Welcome to ETMan\'s Server!\n^5Experimental RickRoll mode enabled\n^7Check back often as changes are daily. Enjoy!"')
+
+        -- Schedule rocket mode welcome message
+        if rocketModeEnabled and rocketMode then
+            rocketMode.showWelcomeMessage(clientNum)
+        end
     end
 
     return nil  -- Allow connection
@@ -358,6 +401,11 @@ end
 function et_ClientDisconnect(clientNum)
     local name = et.gentity_get(clientNum, "pers.netname") or "Unknown"
 
+    -- Clean up rocket mode state
+    if rocketModeEnabled and rocketMode then
+        rocketMode.cleanupPlayer(clientNum)
+    end
+
     -- Skip bots
     if name:find("%[BOT%]") then
         return
@@ -394,6 +442,11 @@ function et_ClientSpawn(clientNum, revived, teamChange, restoreHealth)
     -- Re-apply Rick Roll effects after respawn
     if rickrollEnabled and rickroll then
         rickroll.onPlayerSpawn(clientNum, revived)
+    end
+
+    -- Re-apply Rocket Mode effects after respawn
+    if rocketModeEnabled and rocketMode then
+        rocketMode.onSpawn(clientNum)
     end
 end
 
@@ -475,6 +528,11 @@ function et_RunFrame(levelTime)
     if rickrollEnabled and rickroll then
         rickroll.runFrame(levelTime)
     end
+
+    -- Update Rocket Mode (for pending welcome messages)
+    if rocketModeEnabled and rocketMode then
+        rocketMode.runFrame(levelTime)
+    end
 end
 
 --[[
@@ -517,6 +575,18 @@ end
 function et_ClientCommand(clientNum, command)
     local cmd = et.trap_Argv(0):lower()
     local name = et.gentity_get(clientNum, "pers.netname") or "Unknown"
+
+    -- DEBUG: Log all client commands
+    et.G_Print("[DEBUG] et_ClientCommand: client=" .. clientNum .. " cmd='" .. cmd .. "'\n")
+
+    -- Handle rocket mode cycling commands: /rocket, /r, /rockets, /rocketmode, /cyclerocket
+    if rocketModeEnabled and rocketMode then
+        et.G_Print("[DEBUG] rocketMode enabled, checking command...\n")
+        if rocketMode.handleCommand(clientNum, cmd) then
+            et.G_Print("[DEBUG] rocketMode.handleCommand returned true\n")
+            return 1  -- Command handled
+        end
+    end
 
     -- Custom commands
     if cmd == "crazymode" then

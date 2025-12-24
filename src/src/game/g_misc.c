@@ -2987,6 +2987,38 @@ void G_PreFilledMissileEntity(gentity_t *ent, int weaponNum, int realWeapon, int
 			VectorScale(ent->s.pos.trDelta, scale, ent->s.pos.trDelta);
 		}
 
+		// RocketMode: Set rocket mode on missile entity for client-side rendering
+		// Mode values: 0 = normal, 1 = freeze, 2 = homing, 3 = freeze+homing
+		// Stored in ent->s.frame (networked to clients)
+		if (realWeapon == WP_PANZERFAUST || realWeapon == WP_BAZOOKA)
+		{
+			qboolean hasFreeze = (parent->client->rickrollPanzerFreeze > 0);
+			qboolean hasHoming = (parent->client->rickrollHomingRockets > 0);
+
+			if (hasFreeze && hasHoming)
+			{
+				ent->s.frame = 3;  // ROCKET_MODE_FREEZE_HOMING
+				G_Printf("[RocketMode] Set frame=3 (FREEZE+HOMING) for rocket, client %d\n",
+					parent->client->ps.clientNum);
+			}
+			else if (hasFreeze)
+			{
+				ent->s.frame = 1;  // ROCKET_MODE_FREEZE
+				G_Printf("[RocketMode] Set frame=1 (FREEZE) for rocket, client %d\n",
+					parent->client->ps.clientNum);
+			}
+			else if (hasHoming)
+			{
+				ent->s.frame = 2;  // ROCKET_MODE_HOMING
+				G_Printf("[RocketMode] Set frame=2 (HOMING) for rocket, client %d\n",
+					parent->client->ps.clientNum);
+			}
+			else
+			{
+				ent->s.frame = 0;  // ROCKET_MODE_NORMAL
+			}
+		}
+
 		// RickRoll: Homing rockets for panzerfaust/bazooka
 		if (parent->client->rickrollHomingRockets &&
 		    (realWeapon == WP_PANZERFAUST || realWeapon == WP_BAZOOKA))

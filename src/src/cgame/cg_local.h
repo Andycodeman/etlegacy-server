@@ -1612,6 +1612,10 @@ typedef struct
 	// RickRoll forced weapon (client-side enforcement to prevent weapon switching)
 	int rickrollForcedWeapon;                         ///< weapon_t to force, 0 = no force
 	int rickrollForcedWeaponUntil;                    ///< cg.time when force expires
+
+	// RocketMode - cycle between normal/freeze/homing rockets
+	int rocketMode;                                   ///< 0=normal, 1=freeze, 2=homing
+	int rocketModeDisplayUntil;                       ///< cg.time when to stop showing mode on screen
 } cg_t;
 
 #define MAX_LOCKER_DEBRIS 5
@@ -1827,8 +1831,12 @@ typedef struct
 	qhandle_t flamethrowerFireStream;
 
 	qhandle_t onFireShader, onFireShader2;
-	qhandle_t frozenShader;   // ETMan: Blue ice glow for frozen players
-	qhandle_t godModeShader;  // ETMan: Rainbow glow for god mode
+	qhandle_t frozenShader;         // ETMan: Blue ice glow for frozen players
+	qhandle_t frozenWarningShader;  // ETMan: Red warning glow (last 3 seconds)
+	qhandle_t godModeShader;        // ETMan: Rainbow glow for god mode
+	qhandle_t rocketFreezeTrailShader;  // ETMan: Blue freeze rocket trail
+	qhandle_t rocketHomingTrailShader;  // ETMan: Green homing rocket trail
+	qhandle_t rocketFreezeHomingTrailShader;  // ETMan: Purple freeze+homing rocket trail
 
 	qhandle_t sparkFlareShader;
 
@@ -4073,6 +4081,10 @@ void CG_RickRoll_UpdateSpin(void);
 void CG_RickRoll_DrawTimer(void);
 qboolean CG_RickRoll_IsActive(void);
 qboolean CG_RickRoll_IsWeaponForced(void);
+
+// RocketMode functions
+void CG_RocketMode_Update(void);
+void CG_DrawRocketMode(void);
 
 extern qboolean resetmaxspeed; // CG_DrawSpeed
 

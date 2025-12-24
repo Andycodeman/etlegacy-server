@@ -1211,7 +1211,11 @@ static void CG_RegisterGraphics(void)
 	cgs.media.onFireShader2 = trap_R_RegisterShader("entityOnFire1");
 	cgs.media.onFireShader  = trap_R_RegisterShader("entityOnFire2");
 	cgs.media.frozenShader  = trap_R_RegisterShader("entityFrozen");   // ETMan: Blue ice effect
+	cgs.media.frozenWarningShader = trap_R_RegisterShader("entityFrozenWarning");  // ETMan: Red warning (last 3s)
 	cgs.media.godModeShader = trap_R_RegisterShader("entityGodMode");  // ETMan: Rainbow god mode
+	cgs.media.rocketFreezeTrailShader = trap_R_RegisterShader("gfx/misc/rocketFreezeTrail");  // ETMan: Blue freeze rocket
+	cgs.media.rocketHomingTrailShader = trap_R_RegisterShader("gfx/misc/rocketHomingTrail");  // ETMan: Green homing rocket
+	cgs.media.rocketFreezeHomingTrailShader = trap_R_RegisterShader("gfx/misc/rocketFreezeHomingTrail");  // ETMan: Purple freeze+homing
 	//cgs.media.viewFadeBlack             = trap_R_RegisterShader("viewFadeBlack"); // unused FIXME: remove from shader def
 	cgs.media.sparkFlareShader    = trap_R_RegisterShader("sparkFlareParticle");
 	cgs.media.spotLightShader     = trap_R_RegisterShader("spotLight");

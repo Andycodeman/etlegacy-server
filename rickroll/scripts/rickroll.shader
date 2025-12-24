@@ -81,6 +81,20 @@ entityFrozen
 	}
 }
 
+// Frozen player warning - red glow for alternating flash
+// Used when freeze is about to expire (last 3 seconds)
+entityFrozenWarning
+{
+	cull none
+	nofog
+	{
+		map $whiteimage
+		blendFunc GL_SRC_ALPHA GL_ONE
+		rgbGen const ( 1.0 0.2 0.2 )
+		alphaGen wave sin 0.4 0.3 0 3
+	}
+}
+
 // God mode effect - pulsing golden glow
 entityGodMode
 {
@@ -91,5 +105,44 @@ entityGodMode
 		blendFunc GL_SRC_ALPHA GL_ONE
 		rgbGen const ( 1.0 0.75 0.0 )
 		alphaGen wave sin 0.4 0.35 0 1.5
+	}
+}
+
+// Freeze rocket trail - blue icy glow
+// Used when player has freeze rocket mode enabled
+gfx/misc/rocketFreezeTrail
+{
+	cull none
+	nofog
+	{
+		map $whiteimage
+		blendFunc GL_ONE GL_ONE
+		rgbGen const ( 0.2 0.6 1.0 )
+	}
+}
+
+// Homing rocket trail - green tracking glow
+// Used when player has homing rocket mode enabled
+gfx/misc/rocketHomingTrail
+{
+	cull none
+	nofog
+	{
+		map $whiteimage
+		blendFunc GL_ONE GL_ONE
+		rgbGen const ( 0.2 1.0 0.3 )
+	}
+}
+
+// Freeze+Homing rocket trail - purple/magenta glow
+// Used when player has combined freeze+homing rocket mode enabled
+gfx/misc/rocketFreezeHomingTrail
+{
+	cull none
+	nofog
+	{
+		map $whiteimage
+		blendFunc GL_ONE GL_ONE
+		rgbGen const ( 1.0 0.2 1.0 )
 	}
 }

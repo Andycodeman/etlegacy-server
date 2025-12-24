@@ -140,18 +140,34 @@ ssh $SSH_OPTS "$REMOTE_HOST" "
     fi
 "
 
-# Step 8: Validate pk3 checksums match across all locations
-echo -e "${YELLOW}Step 8: Validating pk3 checksums...${NC}"
+# Step 8: Update local ET client pk3 (for testing)
+echo -e "${YELLOW}Step 8: Updating local ET client pk3...${NC}"
 PK3_NAME="zzz_etman_etlegacy.pk3"
+CLIENT_LEGACY="$HOME/.var/app/com.etlegacy.ETLegacy/.etlegacy/legacy"
+if [ -d "$CLIENT_LEGACY" ]; then
+    # Remove any loose .so/.dll files that might override pk3
+    rm -f "$CLIENT_LEGACY"/*.so "$CLIENT_LEGACY"/*.dll 2>/dev/null && echo "  - Cleaned loose module files from client"
+    # Copy pk3 to dlcache
+    mkdir -p "$CLIENT_LEGACY/dlcache"
+    cp "$DIST_DIR/$PK3_NAME" "$CLIENT_LEGACY/dlcache/"
+    echo "  - Updated client dlcache pk3"
+else
+    echo "  - Client folder not found (skipping)"
+fi
+
+# Step 9: Validate pk3 checksums match across all locations
+echo -e "${YELLOW}Step 9: Validating pk3 checksums...${NC}"
 DIST_MD5=$(md5sum "$DIST_DIR/$PK3_NAME" 2>/dev/null | cut -d' ' -f1)
 LOCAL_MD5=$(md5sum "$LOCAL_SERVER/legacy/$PK3_NAME" 2>/dev/null | cut -d' ' -f1)
 REMOTE_MD5=$(ssh $SSH_OPTS "$REMOTE_HOST" "md5sum $REMOTE_DIR/legacy/$PK3_NAME 2>/dev/null | cut -d' ' -f1")
+CLIENT_MD5=$(md5sum "$CLIENT_LEGACY/dlcache/$PK3_NAME" 2>/dev/null | cut -d' ' -f1)
 
 echo "  Dist:   $DIST_MD5"
 echo "  Local:  $LOCAL_MD5"
 echo "  VPS:    $REMOTE_MD5"
+echo "  Client: $CLIENT_MD5"
 
-if [ "$DIST_MD5" = "$LOCAL_MD5" ] && [ "$LOCAL_MD5" = "$REMOTE_MD5" ]; then
+if [ "$DIST_MD5" = "$LOCAL_MD5" ] && [ "$LOCAL_MD5" = "$REMOTE_MD5" ] && [ "$REMOTE_MD5" = "$CLIENT_MD5" ]; then
     echo -e "  ${GREEN}✓ All pk3 checksums match!${NC}"
 else
     echo -e "  ${RED}✗ CHECKSUM MISMATCH! Players may get kicked by sv_pure.${NC}"

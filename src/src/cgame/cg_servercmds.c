@@ -3813,6 +3813,9 @@ static void CG_ServerCommand(void)
 	case 261775:  // "rickroll_spin_reset"
 		CG_RickRoll_SpinReset();
 		return;
+	case 131965:  // "rocketmode" - hash via BG_StringHashValue
+		CG_RocketMode_Update();
+		return;
 	default:
 		CG_Printf("Unknown client game command: %s [%lu]\n", cmd, hash);
 		break;

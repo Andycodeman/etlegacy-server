@@ -574,9 +574,10 @@ void CG_RocketTrail(centity_t *ent)
 	int           lastContents, startTime = ent->trailTime;
 	entityState_t *es = &ent->currentState;
 	int           t   = step * ((startTime + step) / step);
-
 	BG_EvaluateTrajectory(&es->pos, cg.time, origin, qfalse, es->effect2Time);
 	contents = CG_PointContents(origin, -1);
+
+	// RocketMode: Colored dynamic light is handled in cg_ents.c CG_Missile()
 
 	// if object (e.g. grenade) is stationary, don't toss up smoke
 	if ((ent->currentState.eType != ET_RAMJET) && es->pos.trType == TR_STATIONARY)
@@ -4276,6 +4277,21 @@ void CG_WeaponBank_f(void)
 	}
 
 	CG_WeaponIndex(cg.weaponSelect, &curbank, &curcycle);  // get bank/cycle of current weapon
+
+	// RocketMode: Show HUD anytime bank 3 is pressed and player has panzer/bazooka
+	if (bank == 3 && (COM_BitCheck(cg.snap->ps.weapons, WP_PANZERFAUST) || COM_BitCheck(cg.snap->ps.weapons, WP_BAZOOKA)))
+	{
+		// If already holding panzer/bazooka, cycle rocket mode
+		if (bank == curbank && (cg.weaponSelect == WP_PANZERFAUST || cg.weaponSelect == WP_BAZOOKA))
+		{
+			// Send rocket cycle command to server
+			trap_SendClientCommand("rocket");
+			return;
+		}
+
+		// Always show current mode for 5 seconds when pressing 3
+		cg.rocketModeDisplayUntil = cg.time + 5000;
+	}
 
 	if (bank == curbank)
 	{
