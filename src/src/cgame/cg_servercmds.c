@@ -3816,6 +3816,9 @@ static void CG_ServerCommand(void)
 	case 131965:  // "rocketmode" - hash via BG_StringHashValue
 		CG_RocketMode_Update();
 		return;
+	case 219677:  // "panzerfest_bonus"
+		CG_PanzerfestBonus_Update();
+		return;
 	default:
 		CG_Printf("Unknown client game command: %s [%lu]\n", cmd, hash);
 		break;

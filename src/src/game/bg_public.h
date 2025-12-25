@@ -668,6 +668,10 @@ typedef struct
 	int smgFireRate;               ///< SMG fire rate in ms (0 = use default 150)
 	int grenadeFireRate;           ///< Grenade throw rate in ms (0 = use default 1600)
 	int grenadeInstant;            ///< Instant throw grenades - no cooking (1=yes, 0=no)
+
+	// ETMan: Per-player fire rate modifiers (for kill streak / panzerfest)
+	int fireRateMultiplier;        ///< Fire rate multiplier (100 = normal, 200 = 2x faster)
+	int fireRateDelay;             ///< Additional delay in ms (for panzerfest slowdown phases)
 } pmove_t;
 
 // if a full pmove isn't done on the client, you can just update the angles

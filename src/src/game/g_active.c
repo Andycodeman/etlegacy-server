@@ -644,6 +644,9 @@ void SpectatorThink(gentity_t *ent, usercmd_t *ucmd)
 		pm.smgFireRate     = g_smgFireRate.integer;
 		pm.grenadeFireRate = g_grenadeFireRate.integer;
 		pm.grenadeInstant  = g_grenadeInstant.integer;
+		// ETMan: Per-player fire rate modifiers (from Lua for kill streak / panzerfest)
+		pm.fireRateMultiplier = client->rickrollFireRateMultiplier;
+		pm.fireRateDelay      = client->rickrollFireRateDelay;
 
 		Pmove(&pm);
 
@@ -1599,6 +1602,9 @@ void ClientThink_real(gentity_t *ent)
 	pm.smgFireRate     = g_smgFireRate.integer;
 	pm.grenadeFireRate = g_grenadeFireRate.integer;
 	pm.grenadeInstant  = g_grenadeInstant.integer;
+	// ETMan: Per-player fire rate modifiers (from Lua for kill streak / panzerfest)
+	pm.fireRateMultiplier = client->rickrollFireRateMultiplier;
+	pm.fireRateDelay      = client->rickrollFireRateDelay;
 
 	// RickRoll: Override weapon in pm.cmd BEFORE Pmove processes it
 	// This prevents the client's old weapon command from switching back

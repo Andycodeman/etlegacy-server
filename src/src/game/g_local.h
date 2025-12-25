@@ -1047,6 +1047,14 @@ struct gclient_s
 	// RickRoll homing rockets mode (if > 0, panzerfaust/bazooka rockets track nearest enemy)
 	int rickrollHomingRockets;
 
+	// ETMan: Fire rate multiplier for kill streak / panzerfest (100 = normal, 200 = 2x faster, etc.)
+	// Set via Lua: et.gentity_set(clientNum, "client.rickrollFireRateMultiplier", 200)
+	int rickrollFireRateMultiplier;
+
+	// ETMan: Fire rate delay in ms (for panzerfest phase 3-4, adds delay between shots)
+	// Set via Lua: et.gentity_set(clientNum, "client.rickrollFireRateDelay", 1000)
+	int rickrollFireRateDelay;
+
 	unsigned int combatState;
 
 	// antilag

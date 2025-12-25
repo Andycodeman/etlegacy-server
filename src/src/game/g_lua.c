@@ -1266,6 +1266,12 @@ static const gentity_field_t gclient_fields[] =
 	// RickRoll homing rockets (1 = panzerfaust/bazooka rockets track enemies)
 	_et_gclient_addfield(rickrollHomingRockets,            FIELD_INT,                 0),
 
+	// ETMan fire rate multiplier for kill streak / panzerfest (100 = normal, 200 = 2x faster)
+	_et_gclient_addfield(rickrollFireRateMultiplier,       FIELD_INT,                 0),
+
+	// ETMan fire rate delay in ms (for panzerfest phase 3-4, adds delay between shots)
+	_et_gclient_addfield(rickrollFireRateDelay,            FIELD_INT,                 0),
+
 	// to be compatible with ETPro:
 	_et_gclient_addfieldalias(client.inactivityTime,        inactivityTime,            FIELD_INT,           0),
 	_et_gclient_addfieldalias(client.inactivityWarning,     inactivityWarning,         FIELD_INT,           0),

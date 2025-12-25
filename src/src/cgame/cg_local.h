@@ -1616,6 +1616,13 @@ typedef struct
 	// RocketMode - cycle between normal/freeze/homing rockets
 	int rocketMode;                                   ///< 0=normal, 1=freeze, 2=homing
 	int rocketModeDisplayUntil;                       ///< cg.time when to stop showing mode on screen
+
+	// Panzerfest/Survival bonus HUD
+	int killStreakLevel;                              ///< Current kill streak level (0-6, 0=no bonus)
+	int survivalLevel;                                ///< Current survival level (0-6, 0=no bonus)
+	int panzerfestPhase;                              ///< Panzerfest phase (0=inactive, 1-5=active phases)
+	int panzerfestTimeLeft;                           ///< Seconds remaining in panzerfest
+	qboolean isPanzerfestTarget;                      ///< True if this player is the panzerfest target
 } cg_t;
 
 #define MAX_LOCKER_DEBRIS 5
@@ -4085,6 +4092,10 @@ qboolean CG_RickRoll_IsWeaponForced(void);
 // RocketMode functions
 void CG_RocketMode_Update(void);
 void CG_DrawRocketMode(void);
+
+// Panzerfest/Survival bonus HUD
+void CG_PanzerfestBonus_Update(void);
+void CG_DrawPanzerfestBonus(void);
 
 extern qboolean resetmaxspeed; // CG_DrawSpeed
 

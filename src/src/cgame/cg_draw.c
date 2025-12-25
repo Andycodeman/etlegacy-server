@@ -4338,6 +4338,9 @@ static void CG_Draw2D(void)
 	// Rocket Mode indicator (shows when holding panzer)
 	CG_DrawRocketMode();
 
+	// Panzerfest/Survival bonus bars
+	CG_DrawPanzerfestBonus();
+
 #ifdef FEATURE_EDV
 	if (!cgs.demoCamera.renderingFreeCam && !cgs.demoCamera.renderingWeaponCam)
 #endif

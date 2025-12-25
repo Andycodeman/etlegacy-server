@@ -4190,6 +4190,24 @@ static void PM_Weapon(void)
 		addTime = 1000;  // 1 second between shots
 	}
 
+	// ETMan: Apply per-player fire rate multiplier (for kill streak / panzerfest)
+	// 100 = normal, 200 = 2x faster (half addTime), 700 = 7x faster
+	if (pm->fireRateMultiplier > 0 && pm->fireRateMultiplier != 100)
+	{
+		addTime = (addTime * 100) / pm->fireRateMultiplier;
+		if (addTime < 50)  // Minimum 50ms between shots to prevent overflow
+		{
+			addTime = 50;
+		}
+	}
+
+	// ETMan: Apply per-player fire rate delay (for panzerfest slowdown phases)
+	// Adds extra milliseconds between shots
+	if (pm->fireRateDelay > 0)
+	{
+		addTime += pm->fireRateDelay;
+	}
+
 	pm->ps->weaponTime += addTime;
 
 #ifdef CGAMEDLL

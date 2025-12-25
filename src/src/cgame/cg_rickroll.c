@@ -1247,3 +1247,192 @@ void CG_DrawRocketMode(void) {
 		"Press 3 again to cycle", 0, 0, ITEM_TEXTSTYLE_SHADOWED, &cgs.media.limboFont2);
 }
 
+/**
+ * @brief Handle panzerfest_bonus command from server
+ * Format: panzerfest_bonus <killStreakLevel> <survivalLevel> <panzerfestPhase> <timeLeft> <isTarget>
+ */
+void CG_PanzerfestBonus_Update(void) {
+	cg.killStreakLevel = atoi(CG_Argv(1));
+	cg.survivalLevel = atoi(CG_Argv(2));
+	cg.panzerfestPhase = atoi(CG_Argv(3));
+	cg.panzerfestTimeLeft = atoi(CG_Argv(4));
+	cg.isPanzerfestTarget = atoi(CG_Argv(5)) ? qtrue : qfalse;
+
+	// Debug: log when we receive updates
+	if (cg.killStreakLevel > 0 || cg.survivalLevel > 0 || cg.panzerfestPhase > 0) {
+		CG_Printf("^2[PanzerfestHUD] Received: kill=%d surv=%d phase=%d time=%d target=%d\n",
+			cg.killStreakLevel, cg.survivalLevel, cg.panzerfestPhase,
+			cg.panzerfestTimeLeft, cg.isPanzerfestTarget);
+	}
+}
+
+/**
+ * @brief Draw panzerfest/survival bonus bars on HUD
+ * Shows kill streak fire rate level and survival speed level as bars
+ * Positioned in bottom-left area, above the stamina bar
+ */
+void CG_DrawPanzerfestBonus(void) {
+	float x, y, w, h;
+	float barWidth;
+	int i;
+	vec4_t bgColor = { 0.0f, 0.0f, 0.0f, 0.5f };
+	vec4_t borderColor = { 1.0f, 1.0f, 1.0f, 0.5f };
+	vec4_t fireColor = { 1.0f, 0.3f, 0.0f, 0.9f };       // Orange/red for fire rate
+	vec4_t speedColor = { 0.0f, 1.0f, 0.3f, 0.9f };      // Green for speed
+	vec4_t segmentEmpty = { 0.2f, 0.2f, 0.2f, 0.6f };    // Dark gray for empty segments
+	vec4_t labelColor = { 1.0f, 1.0f, 1.0f, 0.8f };
+	vec4_t panzerfestColor;
+	char text[32];
+
+	// Don't draw if no bonuses and not in panzerfest
+	if (cg.killStreakLevel == 0 && cg.survivalLevel == 0 && cg.panzerfestPhase == 0) {
+		return;
+	}
+
+	// Position in bottom-left, above stamina area
+	x = 8.0f;
+	y = SCREEN_HEIGHT - 100.0f;
+	w = 80.0f;
+	h = 10.0f;
+	barWidth = 10.0f;  // Width of each segment
+
+	// === KILL STREAK (Fire Rate) Bar ===
+	if (cg.killStreakLevel > 0 || cg.panzerfestPhase > 0) {
+		// Label
+		CG_Text_Paint_Ext(x, y - 2.0f, 0.12f, 0.12f, labelColor,
+			"FIRE", 0, 0, ITEM_TEXTSTYLE_SHADOWED, &cgs.media.limboFont2);
+
+		// Background
+		CG_FillRect(x, y, w, h, bgColor);
+		CG_DrawRect_FixedBorder(x, y, w, h, 1, borderColor);
+
+		// Draw 6 segments
+		for (i = 0; i < 6; i++) {
+			float segX = x + 2.0f + (i * (barWidth + 2.0f));
+			float segW = barWidth;
+			float segH = h - 4.0f;
+			float segY = y + 2.0f;
+
+			if (i < cg.killStreakLevel) {
+				// Filled segment - pulse effect on max level
+				if (cg.killStreakLevel == 6) {
+					float pulse = 0.7f + 0.3f * sin((float)cg.time * 0.01f);
+					fireColor[3] = pulse;
+				}
+				CG_FillRect(segX, segY, segW, segH, fireColor);
+			} else {
+				CG_FillRect(segX, segY, segW, segH, segmentEmpty);
+			}
+		}
+
+		// Level text
+		Com_sprintf(text, sizeof(text), "%dx", cg.killStreakLevel + 1);
+		CG_Text_Paint_Ext(x + w + 4.0f, y + 8.0f, 0.12f, 0.12f, fireColor,
+			text, 0, 0, ITEM_TEXTSTYLE_SHADOWED, &cgs.media.limboFont2);
+
+		y -= 16.0f;  // Move up for next bar
+	}
+
+	// === SURVIVAL (Speed) Bar ===
+	if (cg.survivalLevel > 0 || cg.panzerfestPhase > 0) {
+		// Label
+		CG_Text_Paint_Ext(x, y - 2.0f, 0.12f, 0.12f, labelColor,
+			"SPEED", 0, 0, ITEM_TEXTSTYLE_SHADOWED, &cgs.media.limboFont2);
+
+		// Background
+		CG_FillRect(x, y, w, h, bgColor);
+		CG_DrawRect_FixedBorder(x, y, w, h, 1, borderColor);
+
+		// Draw 6 segments
+		for (i = 0; i < 6; i++) {
+			float segX = x + 2.0f + (i * (barWidth + 2.0f));
+			float segW = barWidth;
+			float segH = h - 4.0f;
+			float segY = y + 2.0f;
+
+			if (i < cg.survivalLevel) {
+				// Filled segment - pulse effect on max level
+				if (cg.survivalLevel == 6) {
+					float pulse = 0.7f + 0.3f * sin((float)cg.time * 0.008f);
+					speedColor[3] = pulse;
+				}
+				CG_FillRect(segX, segY, segW, segH, speedColor);
+			} else {
+				CG_FillRect(segX, segY, segW, segH, segmentEmpty);
+			}
+		}
+
+		// Level text (speed multiplier)
+		Com_sprintf(text, sizeof(text), "%.1fx", 1.0f + (cg.survivalLevel * 0.5f));
+		CG_Text_Paint_Ext(x + w + 4.0f, y + 8.0f, 0.12f, 0.12f, speedColor,
+			text, 0, 0, ITEM_TEXTSTYLE_SHADOWED, &cgs.media.limboFont2);
+
+		y -= 16.0f;
+	}
+
+	// === PANZERFEST Indicator ===
+	if (cg.panzerfestPhase > 0) {
+		const char *phaseText;
+		int mins, secs;
+
+		// Dramatic color based on phase
+		switch (cg.panzerfestPhase) {
+			case 1:  // Boost
+				phaseText = "PANZERFEST!";
+				Vector4Set(panzerfestColor, 1.0f, 0.8f, 0.0f, 1.0f);  // Gold
+				break;
+			case 2:  // Both slowdown
+				phaseText = "SLOWING...";
+				Vector4Set(panzerfestColor, 1.0f, 0.5f, 0.0f, 1.0f);  // Orange
+				break;
+			case 3:  // Fire slowdown
+				phaseText = "PENALIZED!";
+				Vector4Set(panzerfestColor, 1.0f, 0.2f, 0.0f, 1.0f);  // Red-orange
+				break;
+			case 4:  // Survive
+				phaseText = "SURVIVE!";
+				Vector4Set(panzerfestColor, 1.0f, 0.0f, 0.0f, 1.0f);  // Red
+				break;
+			case 5:  // Victory
+				phaseText = "LEGEND!";
+				// Rainbow effect
+				{
+					int colorPhase = (cg.time / 100) % 6;
+					switch (colorPhase) {
+						case 0: Vector4Set(panzerfestColor, 1.0f, 0.0f, 0.0f, 1.0f); break;
+						case 1: Vector4Set(panzerfestColor, 1.0f, 1.0f, 0.0f, 1.0f); break;
+						case 2: Vector4Set(panzerfestColor, 0.0f, 1.0f, 0.0f, 1.0f); break;
+						case 3: Vector4Set(panzerfestColor, 0.0f, 1.0f, 1.0f, 1.0f); break;
+						case 4: Vector4Set(panzerfestColor, 0.0f, 0.0f, 1.0f, 1.0f); break;
+						case 5: Vector4Set(panzerfestColor, 1.0f, 0.0f, 1.0f, 1.0f); break;
+					}
+				}
+				break;
+			default:
+				phaseText = "";
+				Vector4Set(panzerfestColor, 1.0f, 1.0f, 1.0f, 1.0f);
+				break;
+		}
+
+		// Draw panzerfest label
+		CG_Text_Paint_Ext(x, y - 2.0f, 0.14f, 0.14f, panzerfestColor,
+			phaseText, 0, 0, ITEM_TEXTSTYLE_SHADOWED, &cgs.media.limboFont2);
+
+		// Timer
+		if (cg.panzerfestTimeLeft > 0) {
+			mins = cg.panzerfestTimeLeft / 60;
+			secs = cg.panzerfestTimeLeft % 60;
+			Com_sprintf(text, sizeof(text), "%d:%02d", mins, secs);
+			CG_Text_Paint_Ext(x + 65.0f, y - 2.0f, 0.14f, 0.14f, panzerfestColor,
+				text, 0, 0, ITEM_TEXTSTYLE_SHADOWED, &cgs.media.limboFont2);
+		}
+
+		// Target indicator
+		if (cg.isPanzerfestTarget) {
+			y -= 14.0f;
+			CG_Text_Paint_Ext(x, y - 2.0f, 0.12f, 0.12f, panzerfestColor,
+				"YOU ARE THE TARGET!", 0, 0, ITEM_TEXTSTYLE_SHADOWED, &cgs.media.limboFont2);
+		}
+	}
+}
+

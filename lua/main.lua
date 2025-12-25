@@ -41,6 +41,27 @@ if rocketModeEnabled then
 end
 
 --[[
+    PANZERFEST & SURVIVAL MODE
+    Kill streak = faster fire rate
+    Survival = faster movement
+    Panzerfest = everyone vs you at 30 kills!
+    Uses CVARs: g_killstreakEnabled, g_survivalEnabled, g_panzerfestEnabled
+]]--
+local panzerfestEnabled = true
+local panzerfest = nil
+
+-- Load Panzerfest/Survival Mode (wrapped in pcall for safety)
+if panzerfestEnabled then
+    local success, err = pcall(function()
+        panzerfest = dofile("legacy/lua/panzerfest_survival.lua")
+    end)
+    if not success then
+        et.G_Print("^1[ERROR] ^7Failed to load Panzerfest/Survival: " .. tostring(err) .. "\n")
+        panzerfestEnabled = false
+    end
+end
+
+--[[
     MODULE LOADING
 ]]--
 
@@ -54,9 +75,6 @@ end
 local config = {
     -- Feature toggles
     crazy_mode = true,  -- Must exec crazymode.cfg on each map load (CVARs reset between maps)
-    panzerfest_enabled = false,  -- TODO: implement
-    survival_bonus_enabled = false,  -- TODO: implement
-    killstreak_enabled = false,  -- TODO: implement
 
     -- Notifications
     ntfy_enabled = true,
@@ -301,6 +319,11 @@ function et_InitGame(levelTime, randomSeed, restart)
         rocketMode.init()
     end
 
+    -- Initialize Panzerfest/Survival Mode
+    if panzerfestEnabled and panzerfest then
+        panzerfest.onInit(levelTime)
+    end
+
     log("^2Initialization complete!")
 end
 
@@ -319,6 +342,11 @@ function et_ShutdownGame(restart)
     if rocketModeEnabled and rocketMode then
         rocketMode.shutdown()
     end
+
+    -- Shutdown Panzerfest/Survival Mode
+    if panzerfestEnabled and panzerfest then
+        panzerfest.onShutdown()
+    end
 end
 
 --[[
@@ -332,6 +360,11 @@ function et_ClientConnect(clientNum, firstTime, isBot)
     -- Initialize rocket mode for this player (humans only)
     if isBot == 0 and rocketModeEnabled and rocketMode then
         rocketMode.initPlayer(clientNum)
+    end
+
+    -- Initialize panzerfest/survival for this player
+    if panzerfestEnabled and panzerfest then
+        panzerfest.onPlayerConnect(clientNum, isBot)
     end
 
     -- Welcome message for new human players
@@ -406,6 +439,11 @@ function et_ClientDisconnect(clientNum)
         rocketMode.cleanupPlayer(clientNum)
     end
 
+    -- Clean up panzerfest/survival state
+    if panzerfestEnabled and panzerfest then
+        panzerfest.onPlayerDisconnect(clientNum)
+    end
+
     -- Skip bots
     if name:find("%[BOT%]") then
         return
@@ -448,6 +486,11 @@ function et_ClientSpawn(clientNum, revived, teamChange, restoreHealth)
     if rocketModeEnabled and rocketMode then
         rocketMode.onSpawn(clientNum)
     end
+
+    -- Handle panzerfest/survival spawn
+    if panzerfestEnabled and panzerfest then
+        panzerfest.onPlayerSpawn(clientNum, revived)
+    end
 end
 
 --[[
@@ -456,6 +499,16 @@ end
 
 function et_Obituary(victim, killer, meansOfDeath)
     -- Stats are now tracked in C (g_etpanel.c)
+
+    -- Track kills and deaths for panzerfest/survival
+    if panzerfestEnabled and panzerfest then
+        -- Track the kill for the killer
+        if killer >= 0 and killer ~= victim and killer ~= 1022 then
+            panzerfest.onPlayerKill(killer, victim)
+        end
+        -- Track death for the victim
+        panzerfest.onPlayerDeath(victim)
+    end
 
     -- Additional logging for debugging
     if config.debug and killer >= 0 and killer ~= victim and killer ~= 1022 then
@@ -532,6 +585,11 @@ function et_RunFrame(levelTime)
     -- Update Rocket Mode (for pending welcome messages)
     if rocketModeEnabled and rocketMode then
         rocketMode.runFrame(levelTime)
+    end
+
+    -- Update Panzerfest/Survival Mode
+    if panzerfestEnabled and panzerfest then
+        panzerfest.onRunFrame(levelTime)
     end
 end
 
