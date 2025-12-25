@@ -645,8 +645,16 @@ void SpectatorThink(gentity_t *ent, usercmd_t *ucmd)
 		pm.grenadeFireRate = g_grenadeFireRate.integer;
 		pm.grenadeInstant  = g_grenadeInstant.integer;
 		// ETMan: Per-player fire rate modifiers (from Lua for kill streak / panzerfest)
-		pm.fireRateMultiplier = client->rickrollFireRateMultiplier;
-		pm.fireRateDelay      = client->rickrollFireRateDelay;
+		// Set in pmext which is synced to client for prediction (JayMod-style)
+		if (client->rickrollFireRateMultiplier > 0 && client->rickrollFireRateMultiplier != 100)
+		{
+			client->pmext.fireRateMultiplier = 100.0f / (float)client->rickrollFireRateMultiplier;
+		}
+		else
+		{
+			client->pmext.fireRateMultiplier = 1.0f;
+		}
+		client->pmext.fireRateDelay = client->rickrollFireRateDelay;
 
 		Pmove(&pm);
 
@@ -1603,8 +1611,18 @@ void ClientThink_real(gentity_t *ent)
 	pm.grenadeFireRate = g_grenadeFireRate.integer;
 	pm.grenadeInstant  = g_grenadeInstant.integer;
 	// ETMan: Per-player fire rate modifiers (from Lua for kill streak / panzerfest)
-	pm.fireRateMultiplier = client->rickrollFireRateMultiplier;
-	pm.fireRateDelay      = client->rickrollFireRateDelay;
+	// Set in pmext which is synced to client for prediction (JayMod-style)
+	// rickrollFireRateMultiplier: 100 = normal, 200 = 2x faster, 700 = 7x faster
+	// Convert to float: 1.0 = normal, 0.5 = 2x faster, 0.14 = 7x faster
+	if (client->rickrollFireRateMultiplier > 0 && client->rickrollFireRateMultiplier != 100)
+	{
+		client->pmext.fireRateMultiplier = 100.0f / (float)client->rickrollFireRateMultiplier;
+	}
+	else
+	{
+		client->pmext.fireRateMultiplier = 1.0f;
+	}
+	client->pmext.fireRateDelay = client->rickrollFireRateDelay;
 
 	// RickRoll: Override weapon in pm.cmd BEFORE Pmove processes it
 	// This prevents the client's old weapon command from switching back

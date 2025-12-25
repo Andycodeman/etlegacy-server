@@ -1249,20 +1249,35 @@ void CG_DrawRocketMode(void) {
 
 /**
  * @brief Handle panzerfest_bonus command from server
- * Format: panzerfest_bonus <killStreakLevel> <survivalLevel> <panzerfestPhase> <timeLeft> <isTarget>
+ * Format: panzerfest_bonus <killStreakLevel> <survivalLevel> <panzerfestPhase> <timeLeft> <isTarget> <killCount> <killsNeeded> <fireRateMultiplier>
  */
 void CG_PanzerfestBonus_Update(void) {
+	int oldFireRate = cg.fireRateMultiplier;
+
 	cg.killStreakLevel = atoi(CG_Argv(1));
 	cg.survivalLevel = atoi(CG_Argv(2));
 	cg.panzerfestPhase = atoi(CG_Argv(3));
 	cg.panzerfestTimeLeft = atoi(CG_Argv(4));
 	cg.isPanzerfestTarget = atoi(CG_Argv(5)) ? qtrue : qfalse;
+	cg.panzerfestKillCount = atoi(CG_Argv(6));
+	cg.panzerfestKillsNeeded = atoi(CG_Argv(7));
+	cg.fireRateMultiplier = atoi(CG_Argv(8));
 
-	// Debug: log when we receive updates
-	if (cg.killStreakLevel > 0 || cg.survivalLevel > 0 || cg.panzerfestPhase > 0) {
-		CG_Printf("^2[PanzerfestHUD] Received: kill=%d surv=%d phase=%d time=%d target=%d\n",
-			cg.killStreakLevel, cg.survivalLevel, cg.panzerfestPhase,
-			cg.panzerfestTimeLeft, cg.isPanzerfestTarget);
+	// Default kills needed if not sent (backwards compatibility)
+	if (cg.panzerfestKillsNeeded <= 0) {
+		cg.panzerfestKillsNeeded = 30;
+	}
+
+	// Default fire rate if not sent (backwards compatibility)
+	if (cg.fireRateMultiplier <= 0) {
+		cg.fireRateMultiplier = 100;
+	}
+
+	// ETMan: If fire rate changed, invalidate prediction optimization cache
+	// This forces re-prediction with the new fire rate instead of using stale backup states
+	if (cg.fireRateMultiplier != oldFireRate) {
+		cg.backupStateTop = 0;
+		cg.backupStateTail = 0;
 	}
 }
 
@@ -1284,23 +1299,25 @@ void CG_DrawPanzerfestBonus(void) {
 	vec4_t panzerfestColor;
 	char text[32];
 
-	// Don't draw if no bonuses and not in panzerfest
-	if (cg.killStreakLevel == 0 && cg.survivalLevel == 0 && cg.panzerfestPhase == 0) {
+	// Don't draw if no bonuses, no kills, and not in panzerfest
+	if (cg.killStreakLevel == 0 && cg.survivalLevel == 0 && cg.panzerfestPhase == 0 && cg.panzerfestKillCount == 0) {
 		return;
 	}
 
-	// Position in bottom-left, above stamina area
-	x = 8.0f;
-	y = SCREEN_HEIGHT - 100.0f;
+	// Position in bottom-right, above stamina area - close to edge
+	// Use Ccg_WideX for widescreen support
 	w = 80.0f;
 	h = 10.0f;
 	barWidth = 10.0f;  // Width of each segment
+	x = Ccg_WideX(SCREEN_WIDTH) - w - 4.0f;  // Right-aligned with 4px margin (close to edge)
+	y = SCREEN_HEIGHT - 100.0f;
 
 	// === KILL STREAK (Fire Rate) Bar ===
 	if (cg.killStreakLevel > 0 || cg.panzerfestPhase > 0) {
-		// Label
-		CG_Text_Paint_Ext(x, y - 2.0f, 0.12f, 0.12f, labelColor,
-			"FIRE", 0, 0, ITEM_TEXTSTYLE_SHADOWED, &cgs.media.limboFont2);
+		// Level text (left of bar)
+		Com_sprintf(text, sizeof(text), "%dx", cg.killStreakLevel + 1);
+		CG_Text_Paint_Ext(x - 22.0f, y + 8.0f, 0.12f, 0.12f, fireColor,
+			text, 0, 0, ITEM_TEXTSTYLE_SHADOWED, &cgs.media.limboFont2);
 
 		// Background
 		CG_FillRect(x, y, w, h, bgColor);
@@ -1325,19 +1342,19 @@ void CG_DrawPanzerfestBonus(void) {
 			}
 		}
 
-		// Level text
-		Com_sprintf(text, sizeof(text), "%dx", cg.killStreakLevel + 1);
-		CG_Text_Paint_Ext(x + w + 4.0f, y + 8.0f, 0.12f, 0.12f, fireColor,
-			text, 0, 0, ITEM_TEXTSTYLE_SHADOWED, &cgs.media.limboFont2);
+		// Label (right of bar)
+		CG_Text_Paint_Ext(x + w + 4.0f, y + 8.0f, 0.12f, 0.12f, labelColor,
+			"FIRE", 0, 0, ITEM_TEXTSTYLE_SHADOWED, &cgs.media.limboFont2);
 
 		y -= 16.0f;  // Move up for next bar
 	}
 
 	// === SURVIVAL (Speed) Bar ===
 	if (cg.survivalLevel > 0 || cg.panzerfestPhase > 0) {
-		// Label
-		CG_Text_Paint_Ext(x, y - 2.0f, 0.12f, 0.12f, labelColor,
-			"SPEED", 0, 0, ITEM_TEXTSTYLE_SHADOWED, &cgs.media.limboFont2);
+		// Level text (left of bar)
+		Com_sprintf(text, sizeof(text), "%.1fx", 1.0f + (cg.survivalLevel * 0.5f));
+		CG_Text_Paint_Ext(x - 28.0f, y + 8.0f, 0.12f, 0.12f, speedColor,
+			text, 0, 0, ITEM_TEXTSTYLE_SHADOWED, &cgs.media.limboFont2);
 
 		// Background
 		CG_FillRect(x, y, w, h, bgColor);
@@ -1362,10 +1379,9 @@ void CG_DrawPanzerfestBonus(void) {
 			}
 		}
 
-		// Level text (speed multiplier)
-		Com_sprintf(text, sizeof(text), "%.1fx", 1.0f + (cg.survivalLevel * 0.5f));
-		CG_Text_Paint_Ext(x + w + 4.0f, y + 8.0f, 0.12f, 0.12f, speedColor,
-			text, 0, 0, ITEM_TEXTSTYLE_SHADOWED, &cgs.media.limboFont2);
+		// Label (right of bar)
+		CG_Text_Paint_Ext(x + w + 4.0f, y + 8.0f, 0.12f, 0.12f, labelColor,
+			"SPEED", 0, 0, ITEM_TEXTSTYLE_SHADOWED, &cgs.media.limboFont2);
 
 		y -= 16.0f;
 	}
@@ -1433,6 +1449,33 @@ void CG_DrawPanzerfestBonus(void) {
 			CG_Text_Paint_Ext(x, y - 2.0f, 0.12f, 0.12f, panzerfestColor,
 				"YOU ARE THE TARGET!", 0, 0, ITEM_TEXTSTYLE_SHADOWED, &cgs.media.limboFont2);
 		}
+	}
+
+	// === PANZERFEST PROGRESS (always show kill count if > 0 and not in panzerfest) ===
+	if (cg.panzerfestKillCount > 0 && cg.panzerfestPhase == 0 && cg.panzerfestKillsNeeded > 0) {
+		vec4_t progressColor;
+		float percentage = (float)cg.panzerfestKillCount / (float)cg.panzerfestKillsNeeded;
+
+		// Position above other HUD elements, right-aligned close to edge
+		// Use Ccg_WideX for widescreen support
+		float progressX = Ccg_WideX(SCREEN_WIDTH) - 90.0f;  // Close to right edge
+		float progressY = SCREEN_HEIGHT - 130.0f;
+
+		// Color gradient: white -> yellow -> orange -> red as you get closer
+		if (percentage >= 0.8f) {
+			Vector4Set(progressColor, 1.0f, 0.0f, 0.0f, 1.0f);  // Red - almost there!
+		} else if (percentage >= 0.6f) {
+			Vector4Set(progressColor, 1.0f, 0.5f, 0.0f, 1.0f);  // Orange
+		} else if (percentage >= 0.4f) {
+			Vector4Set(progressColor, 1.0f, 1.0f, 0.0f, 1.0f);  // Yellow
+		} else {
+			Vector4Set(progressColor, 1.0f, 1.0f, 1.0f, 0.8f);  // White
+		}
+
+		// Draw "PANZERFEST X/30" text - right aligned close to edge
+		Com_sprintf(text, sizeof(text), "PANZERFEST %d/%d", cg.panzerfestKillCount, cg.panzerfestKillsNeeded);
+		CG_Text_Paint_Ext(progressX, progressY, 0.14f, 0.14f, progressColor,
+			text, 0, 0, ITEM_TEXTSTYLE_SHADOWED, &cgs.media.limboFont2);
 	}
 }
 

@@ -44,6 +44,10 @@ mode.config = {
     panzerfestCooldown = 60000, -- 1 minute cooldown
     panzerfestMultiplier = 7,   -- 7x fire rate boost (phase 1)
     panzerfestSpeedBoost = 400, -- 4x speed (400%)
+
+    -- Killing spree announcements
+    killingSpreeEnabled = true,
+    killingSpreeThresholds = {5, 10, 15, 20, 25},  -- Announce at these kill counts
 }
 
 -- State tracking
@@ -91,6 +95,18 @@ mode.failureMessages = {
     "^1SKILL ISSUE DETECTED!"
 }
 
+-- Killing spree messages (announced globally)
+mode.killingSpreeMessages = {
+    [5]  = "is on a ^3KILLING SPREE^7!",
+    [10] = "is ^1UNSTOPPABLE^7!",
+    [15] = "is a ^6DOMINATING^7!",
+    [20] = "is ^1GODLIKE^7!",
+    [25] = "is ^5LEGENDARY^7! ^1SOMEONE STOP THEM!",
+}
+
+-- Center screen fade message queue (for smooth fade-out)
+mode.fadeMessages = {}  -- { [clientNum] = { message, startTime, duration } }
+
 --=============================================================================
 -- HELPER FUNCTIONS
 --=============================================================================
@@ -120,16 +136,30 @@ local function isPlayerActive(clientNum)
     return team == 1 or team == 2  -- TEAM_AXIS or TEAM_ALLIES
 end
 
-local function sendCP(clientNum, msg)
-    et.trap_SendServerCommand(clientNum, 'cp "' .. msg .. '"')
+-- Send center print to one player (duration in seconds, default 2)
+local function sendCP(clientNum, msg, duration)
+    duration = duration or 2
+    et.trap_SendServerCommand(clientNum, 'cp "' .. msg .. '" ' .. duration)
 end
 
+-- Send center print to all players (duration in seconds, default 3)
+local function sendCPAll(msg, duration)
+    duration = duration or 3
+    et.trap_SendServerCommand(-1, 'cp "' .. msg .. '" ' .. duration)
+end
+
+-- Aliases for compatibility
+local function sendCPFade(clientNum, msg, duration)
+    sendCP(clientNum, msg, duration or 2)
+end
+
+local function sendCPFadeAll(msg, duration)
+    sendCPAll(msg, duration or 3)
+end
+
+-- Send chat message to all players
 local function sendChat(msg)
     et.trap_SendServerCommand(-1, 'chat "' .. msg .. '"')
-end
-
-local function sendCPAll(msg)
-    et.trap_SendServerCommand(-1, 'cp "' .. msg .. '"')
 end
 
 --=============================================================================
@@ -169,18 +199,19 @@ function mode.initPlayer(clientNum)
         killstreakLevel = 0,
         survivalLevel = 0,
         lastHudUpdate = 0,
+        lastSpreeAnnounced = 0,  -- Track last killing spree milestone announced
     }
     clearEffects(clientNum)
 end
 
 -- Send HUD bonus update to client (graphical bars)
--- Format: panzerfest_bonus <killStreakLevel> <survivalLevel> <panzerfestPhase> <timeLeft> <isTarget>
+-- Format: panzerfest_bonus <killStreakLevel> <survivalLevel> <panzerfestPhase> <timeLeft> <isTarget> <killCount> <killsNeeded> <fireRateMultiplier>
 local function sendHudUpdate(clientNum, levelTime)
     local state = mode.playerState[clientNum]
     if not state then return end
 
-    -- Only update HUD every 500ms to reduce network traffic but keep responsive
-    if levelTime - (state.lastHudUpdate or 0) < 500 then
+    -- Only update HUD every 100ms for more responsive fire rate updates
+    if levelTime - (state.lastHudUpdate or 0) < 100 then
         return
     end
     state.lastHudUpdate = levelTime
@@ -190,6 +221,11 @@ local function sendHudUpdate(clientNum, levelTime)
     local panzerfestPhase = mode.panzerfest.phase or 0
     local timeLeft = 0
     local isTarget = 0
+    local killCount = state.kills or 0
+    local killsNeeded = mode.config.panzerfestKills or 30
+
+    -- Calculate fire rate multiplier (for client-side prediction)
+    local fireRateMultiplier = 100 + (killstreakLevel * 100)
 
     -- Calculate panzerfest time left if active
     if mode.panzerfest.active then
@@ -200,17 +236,20 @@ local function sendHudUpdate(clientNum, levelTime)
 
         if mode.panzerfest.targetClientNum == clientNum then
             isTarget = 1
+            -- During panzerfest, target gets special fire rate from panzerfest phases
+            fireRateMultiplier = mode.panzerfest.currentMultiplier or 100
         end
     end
 
     -- Only send if there's something to show (avoid spamming zeros)
-    if killstreakLevel == 0 and survivalLevel == 0 and panzerfestPhase == 0 then
+    -- Now also send if player has kills (for panzerfest progress)
+    if killstreakLevel == 0 and survivalLevel == 0 and panzerfestPhase == 0 and killCount == 0 then
         return
     end
 
-    -- Send update to client (custom command for C HUD rendering)
-    local cmd = string.format("panzerfest_bonus %d %d %d %d %d",
-        killstreakLevel, survivalLevel, panzerfestPhase, timeLeft, isTarget)
+    -- Send update to client (custom command for C HUD rendering + client-side prediction)
+    local cmd = string.format("panzerfest_bonus %d %d %d %d %d %d %d %d",
+        killstreakLevel, survivalLevel, panzerfestPhase, timeLeft, isTarget, killCount, killsNeeded, fireRateMultiplier)
     et.trap_SendServerCommand(clientNum, cmd)
 
     -- Debug log (remove after testing)
@@ -234,29 +273,38 @@ local function updateKillStreakBonus(clientNum)
     local state = mode.playerState[clientNum]
     if not state then return end
 
-    -- Calculate bonus level
+    -- Calculate bonus level based on kills
     local newLevel = math.floor(state.kills / mode.config.killsPerLevel)
     if newLevel > mode.config.maxKillstreakLevel then
         newLevel = mode.config.maxKillstreakLevel
     end
 
-    if newLevel ~= state.killstreakLevel then
-        state.killstreakLevel = newLevel
+    -- ALWAYS apply the fire rate multiplier on each kill to ensure it's set correctly
+    -- Level 0 = 100 (1x), Level 1 = 200 (2x), ... Level 6 = 700 (7x)
+    local multiplier = 100 + (newLevel * 100)
+    setFireRateMultiplier(clientNum, multiplier)
 
-        -- Apply fire rate multiplier: Level 1 = 200 (2x), Level 6 = 700 (7x)
-        local multiplier = 100 + (newLevel * 100)
-        setFireRateMultiplier(clientNum, multiplier)
+    -- Update killstreakLevel BEFORE sending HUD update so client gets correct fireRate
+    local levelChanged = (newLevel ~= state.killstreakLevel)
+    state.killstreakLevel = newLevel
 
-        -- Notify player
-        if newLevel > 0 then
-            if newLevel == mode.config.maxKillstreakLevel then
-                sendCP(clientNum, "^1KILL STREAK: ^6MAXIMUM FIRE RATE!")
-            else
-                sendCP(clientNum, "^1KILL STREAK: ^3Fire Rate Level " .. newLevel)
-            end
+    -- IMMEDIATELY send HUD update with new fire rate for client-side prediction
+    -- This bypasses the 100ms throttle to ensure client gets the new rate ASAP
+    local killCount = state.kills or 0
+    local killsNeeded = mode.config.panzerfestKills or 30
+    local cmd = string.format("panzerfest_bonus %d %d %d %d %d %d %d %d",
+        state.killstreakLevel, state.survivalLevel or 0, mode.panzerfest.phase or 0,
+        0, 0, killCount, killsNeeded, multiplier)
+    et.trap_SendServerCommand(clientNum, cmd)
+    state.lastHudUpdate = et.trap_Milliseconds()  -- Reset throttle timer
+
+    -- Show notification when level changes (center screen, 2 seconds)
+    if levelChanged and newLevel > 0 then
+        if newLevel == mode.config.maxKillstreakLevel then
+            sendCP(clientNum, "^6MAXIMUM FIRE RATE!\n^37x Speed - MACHINE GUN ROCKETS!", 2)
+        else
+            sendCP(clientNum, "^1FIRE RATE UP!\n^3Level " .. newLevel .. " - " .. (newLevel + 1) .. "x Speed", 2)
         end
-
-        log("Player " .. clientNum .. " kill streak level: " .. newLevel .. " (fire rate: " .. multiplier .. "%)")
     end
 
     -- Check for panzerfest trigger
@@ -293,16 +341,16 @@ local function updateSurvivalBonus(clientNum, levelTime)
         local speedScale = 100 + (newLevel * mode.config.speedBonusPerLevel)
         setSpeedScale(clientNum, speedScale)
 
-        -- Notify player
+        -- Notify player with center screen message (2 seconds)
         if newLevel > 0 then
+            local speedMultiplier = string.format("%.1fx", speedScale / 100)
             if newLevel == mode.config.maxSurvivalLevel then
-                sendCP(clientNum, "^2SURVIVAL: ^6MAXIMUM SPEED!")
+                sendCP(clientNum, "^6MAXIMUM SPEED!\n^2" .. speedMultiplier .. " Movement Speed!", 2)
             else
-                sendCP(clientNum, "^2SURVIVAL: ^3Speed Level " .. newLevel)
+                sendCP(clientNum, "^2SPEED UP!\n^3Level " .. newLevel .. " - " .. speedMultiplier .. " Speed", 2)
             end
         end
 
-        log("Player " .. clientNum .. " survival level: " .. newLevel .. " (speed: " .. speedScale .. "%)")
     end
 end
 
@@ -368,7 +416,7 @@ function mode.startPanzerfest(clientNum)
         end
     end
 
-    -- BIG ANNOUNCEMENT
+    -- BIG ANNOUNCEMENT (6 second display like JayMod)
     sendCPAll("\n^1=================================\n" ..
               "^3" .. targetName .. "\n" ..
               "^1IS A BADASS AND THE PANZER GODS\n" ..
@@ -376,11 +424,10 @@ function mode.startPanzerfest(clientNum)
               "^6*** ^1P^3A^1N^3Z^1E^3R^1F^3E^1S^3T^1! ^6***\n" ..
               "^1=================================\n" ..
               "^27x FIRE RATE + 4x SPEED!\n" ..
-              "^2GO GET EM!!!")
+              "^2GO GET EM!!!", 6)
 
     sendChat("^1*** ^6PANZERFEST! ^1*** ^3" .. targetName .. " ^7is a ^1BADASS^7! ^27x FIRE + 4x SPEED! ^22 MINUTES TO SURVIVE!")
 
-    log("PANZERFEST started! Target: " .. targetName .. " with " .. mode.playerState[clientNum].kills .. " kills")
 end
 
 function mode.endPanzerfest(targetDied)
@@ -398,7 +445,7 @@ function mode.endPanzerfest(targetDied)
                   "^3" .. targetName .. "\n" ..
                   msg .. "\n" ..
                   "^1=================================\n" ..
-                  "^2THE PEASANTS WIN THIS ROUND!")
+                  "^2THE PEASANTS WIN THIS ROUND!", 4)
         sendChat("^1*** PANZERFEST OVER! *** ^3" .. targetName .. " ^1GOT REKT! ^7" .. msg)
     end
 
@@ -439,7 +486,6 @@ function mode.endPanzerfest(targetDied)
     mode.panzerfest.phase = 0
     mode.panzerfest.originalTeams = {}
 
-    log("PANZERFEST ended. Target died: " .. tostring(targetDied))
 end
 
 function mode.updatePanzerfest(levelTime)
@@ -460,10 +506,9 @@ function mode.updatePanzerfest(levelTime)
             mode.panzerfest.lastTick = now
             mode.panzerfest.messageIndex = 1
 
-            sendCPAll("^1THE PANZER GODS GROW WEARY...\n^3Your power begins to fade!")
+            sendCPAll("^1THE PANZER GODS GROW WEARY...\n^3Your power begins to fade!", 3)
             sendChat("^1*** PHASE 2: SLOWDOWN! *** ^3Fire rate AND speed decreasing! 90 seconds left...")
 
-            log("PANZERFEST Phase 2 - Both decreasing")
         end
 
     -- Phase 2: BOTH SLOWDOWN (30 seconds, both decrease every 5s)
@@ -510,10 +555,9 @@ function mode.updatePanzerfest(levelTime)
             setFireRateMultiplier(targetClient, 100)
             setSpeedScale(targetClient, 100)
 
-            sendCPAll("^1SPEED LOCKED AT NORMAL!\n^3Fire rate still dropping!")
+            sendCPAll("^1SPEED LOCKED AT NORMAL!\n^3Fire rate still dropping!", 3)
             sendChat("^1*** PHASE 3: FIRE RATE PENALTY! *** ^3Speed normal, fire rate getting WORSE! 60 seconds left...")
 
-            log("PANZERFEST Phase 3 - Fire rate delay")
         end
 
     -- Phase 3: FIRE SLOWDOWN (30 seconds, speed at 1x, fire rate adds delay)
@@ -545,10 +589,9 @@ function mode.updatePanzerfest(levelTime)
 
             setFireRateDelay(targetClient, 6000)
 
-            sendCPAll("^1MAXIMUM PENALTY!\n^3SURVIVE 30 MORE SECONDS!")
+            sendCPAll("^1MAXIMUM PENALTY!\n^3SURVIVE 30 MORE SECONDS!", 3)
             sendChat("^1*** PHASE 4: SURVIVE! *** ^3Max delay, normal speed. ^230 SECONDS TO GO!")
 
-            log("PANZERFEST Phase 4 - Survive")
         end
 
     -- Phase 4: SURVIVE (30 seconds at max penalty)
@@ -569,11 +612,10 @@ function mode.updatePanzerfest(levelTime)
                       "\n" ..
                       "^6**** ^2ABSOLUTE LEGEND ^6****\n" ..
                       "^2SURVIVED 2 FULL MINUTES!\n" ..
-                      "^6*****************************************")
+                      "^6*****************************************", 5)
 
             sendChat("^6*** ^2INCREDIBLE! ^6*** ^3" .. targetName .. " ^2SURVIVED 2 MINUTES! ^6A TRUE WARRIOR! ^2ALL HAIL THE PANZER GOD!")
 
-            log("PANZERFEST: " .. targetName .. " SURVIVED!")
         end
 
     -- Victory Pause (3 seconds)
@@ -604,12 +646,6 @@ end
 
 -- Load config from CVARs (called after a short delay to let exec commands run)
 local function loadConfig()
-    -- Debug: log raw CVAR values
-    log("^3Loading CVARs...")
-    log("  g_killstreakEnabled = '" .. tostring(et.trap_Cvar_Get("g_killstreakEnabled")) .. "'")
-    log("  g_survivalEnabled = '" .. tostring(et.trap_Cvar_Get("g_survivalEnabled")) .. "'")
-    log("  g_panzerfestEnabled = '" .. tostring(et.trap_Cvar_Get("g_panzerfestEnabled")) .. "'")
-
     mode.config.killstreakEnabled = tonumber(getCvar("g_killstreakEnabled", "1")) == 1
     mode.config.killsPerLevel = tonumber(getCvar("g_killstreakKillsPerLevel", "5")) or 5
     mode.config.maxKillstreakLevel = tonumber(getCvar("g_killstreakMaxLevel", "6")) or 6
@@ -625,11 +661,6 @@ local function loadConfig()
     mode.config.panzerfestCooldown = tonumber(getCvar("g_panzerfestCooldown", "0")) or 0
 
     mode.configLoaded = true
-
-    log("^2Panzerfest & Survival Mode config loaded")
-    log("  Kill Streak: " .. (mode.config.killstreakEnabled and "^2ENABLED" or "^1DISABLED"))
-    log("  Survival: " .. (mode.config.survivalEnabled and "^2ENABLED" or "^1DISABLED"))
-    log("  Panzerfest: " .. (mode.config.panzerfestEnabled and "^2ENABLED" or "^1DISABLED"))
 end
 
 function mode.onInit(levelTime)
@@ -659,13 +690,11 @@ function mode.onInit(levelTime)
     mode.configLoaded = false
     mode.configLoadTime = levelTime + 500  -- Wait 500ms for exec commands to run
 
-    log("^2Panzerfest & Survival Mode initialized (config loads after 500ms)")
 end
 
 function mode.onShutdown()
     -- CRITICAL: If panzerfest is active during map change, restore teams FIRST
     if mode.panzerfest.active then
-        log("^1WARNING: Map changing during active Panzerfest! Restoring teams...")
 
         -- Restore original teams before map ends
         for clientNum, originalTeam in pairs(mode.panzerfest.originalTeams) do
@@ -673,7 +702,6 @@ function mode.onShutdown()
                 -- Use immediate exec instead of append for map change
                 local teamName = (originalTeam == 1) and "red" or "blue"
                 et.trap_SendConsoleCommand(et.EXEC_NOW, "forceteam " .. clientNum .. " " .. teamName .. "\n")
-                log("  Restored player " .. clientNum .. " to team " .. teamName)
             end
         end
 
@@ -689,7 +717,6 @@ function mode.onShutdown()
     mode.playerState = {}
     mode.configLoaded = false
 
-    log("^2Panzerfest & Survival Mode shutdown - all state reset")
 end
 
 function mode.onPlayerConnect(clientNum, isBot)
@@ -738,9 +765,27 @@ function mode.onPlayerKill(killer, victim)
     if victim == 1022 then return end  -- World kill
 
     local state = mode.playerState[killer]
-    if not state then return end
+    if not state then
+        -- Initialize state if missing (can happen if player was already connected before module loaded)
+        mode.initPlayer(killer)
+        state = mode.playerState[killer]
+        if not state then return end
+    end
 
     state.kills = state.kills + 1
+    local killerName = et.gentity_get(killer, "pers.netname") or "Unknown"
+
+    -- Check for killing spree announcements FIRST (before updateKillStreakBonus which might start panzerfest)
+    if mode.config.killingSpreeEnabled then
+        local spreeMessage = mode.killingSpreeMessages[state.kills]
+        if spreeMessage then
+            -- Announce killing spree to everyone (center screen, 3 seconds)
+            sendChat("^7" .. killerName .. " ^7" .. spreeMessage .. " ^3(" .. state.kills .. " kills)")
+            sendCPAll("^3" .. killerName .. "\n" .. spreeMessage, 3)
+        end
+    end
+
+    -- Update kill streak bonus (handles fire rate and panzerfest trigger)
     updateKillStreakBonus(killer)
 end
 
@@ -755,8 +800,8 @@ function mode.onPlayerDeath(clientNum)
     end
     clearEffects(clientNum)
 
-    -- Send HUD reset to client (all zeros)
-    et.trap_SendServerCommand(clientNum, "panzerfest_bonus 0 0 0 0 0")
+    -- Send HUD reset to client (all zeros, fire rate back to normal 100)
+    et.trap_SendServerCommand(clientNum, "panzerfest_bonus 0 0 0 0 0 0 30 100")
 
     -- Check if panzerfest target died
     if mode.panzerfest.active and mode.panzerfest.targetClientNum == clientNum then

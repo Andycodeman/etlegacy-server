@@ -596,6 +596,10 @@ typedef struct pmoveExt_s
 
 	qboolean doubleJumped;         ///< ETMan: track if player has used double jump
 
+	// ETMan: Panzerfest/Kill streak fire rate bonus
+	float fireRateMultiplier;      ///< Fire rate multiplier (1.0 = normal, 0.5 = 2x faster, 0.14 = 7x faster)
+	int fireRateDelay;             ///< Additional delay in ms between shots (for panzerfest phases 3-4)
+
 } pmoveExt_t;  ///< data used both in client and server - store it here
 ///< instead of playerstate to prevent different engine versions of playerstate between XP and MP
 

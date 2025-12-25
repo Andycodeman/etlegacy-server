@@ -1120,6 +1120,19 @@ void CG_PredictPlayerState(void)
 	cg_pmove.noWeapClips   = qfalse;
 	cg_pmove.gameMiscFlags = cgs.gameMiscFlags;  // ETMan: panzer war, double jump, etc.
 
+	// ETMan: Calculate fire rate multiplier for client-side prediction
+	// cg.fireRateMultiplier comes from panzerfest_bonus server command (100 = normal, 200 = 2x, etc.)
+	// Convert to float multiplier: 1.0 = normal, 0.5 = 2x faster, 0.14 = 7x faster
+	if (cg.fireRateMultiplier > 0 && cg.fireRateMultiplier != 100)
+	{
+		cg.pmext.fireRateMultiplier = 100.0f / (float)cg.fireRateMultiplier;
+	}
+	else
+	{
+		cg.pmext.fireRateMultiplier = 1.0f;
+	}
+	cg.pmext.fireRateDelay = 0;  // TODO: Add delay support if needed
+
 	// save the state before the pmove so we can detect transitions
 	oldPlayerState = cg.predictedPlayerState;
 
@@ -1424,6 +1437,17 @@ void CG_PredictPlayerState(void)
 		// previously ran this cmd (or, this will be the
 		// current predicted data if this is the current cmd)  (#166)
 		Com_Memcpy(&pmext, &oldpmext[cmdNum & cg.cmdMask], sizeof(pmoveExt_t));
+
+		// ETMan: ALWAYS override fire rate with current value from server
+		// This ensures client prediction uses the latest fire rate, not old stored values
+		if (cg.fireRateMultiplier > 0 && cg.fireRateMultiplier != 100)
+		{
+			pmext.fireRateMultiplier = 100.0f / (float)cg.fireRateMultiplier;
+		}
+		else
+		{
+			pmext.fireRateMultiplier = 1.0f;
+		}
 
 		fflush(stdout);
 

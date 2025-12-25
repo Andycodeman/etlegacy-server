@@ -4191,10 +4191,11 @@ static void PM_Weapon(void)
 	}
 
 	// ETMan: Apply per-player fire rate multiplier (for kill streak / panzerfest)
-	// 100 = normal, 200 = 2x faster (half addTime), 700 = 7x faster
-	if (pm->fireRateMultiplier > 0 && pm->fireRateMultiplier != 100)
+	// Uses pmext which is synced between server and client
+	// 1.0 = normal, 0.5 = 2x faster, 0.14 = 7x faster (like JayMod)
+	if (pm->pmext && pm->pmext->fireRateMultiplier > 0.0f && pm->pmext->fireRateMultiplier != 1.0f)
 	{
-		addTime = (addTime * 100) / pm->fireRateMultiplier;
+		addTime = (int)(addTime * pm->pmext->fireRateMultiplier);
 		if (addTime < 50)  // Minimum 50ms between shots to prevent overflow
 		{
 			addTime = 50;
@@ -4203,9 +4204,9 @@ static void PM_Weapon(void)
 
 	// ETMan: Apply per-player fire rate delay (for panzerfest slowdown phases)
 	// Adds extra milliseconds between shots
-	if (pm->fireRateDelay > 0)
+	if (pm->pmext && pm->pmext->fireRateDelay > 0)
 	{
-		addTime += pm->fireRateDelay;
+		addTime += pm->pmext->fireRateDelay;
 	}
 
 	pm->ps->weaponTime += addTime;

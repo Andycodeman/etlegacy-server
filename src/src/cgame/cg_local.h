@@ -1623,6 +1623,9 @@ typedef struct
 	int panzerfestPhase;                              ///< Panzerfest phase (0=inactive, 1-5=active phases)
 	int panzerfestTimeLeft;                           ///< Seconds remaining in panzerfest
 	qboolean isPanzerfestTarget;                      ///< True if this player is the panzerfest target
+	int panzerfestKillCount;                          ///< Current kill count toward panzerfest
+	int panzerfestKillsNeeded;                        ///< Kills needed to trigger panzerfest (default 30)
+	int fireRateMultiplier;                           ///< Fire rate multiplier (100 = normal, 200 = 2x faster)
 } cg_t;
 
 #define MAX_LOCKER_DEBRIS 5
