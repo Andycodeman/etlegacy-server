@@ -400,6 +400,14 @@ function et_ClientBegin(clientNum)
         return
     end
 
+    -- Check if player is using vanilla ET (not ET:Legacy) and warn about voice chat
+    local userinfo = et.trap_GetUserinfo(clientNum)
+    local etVersion = et.Info_ValueForKey(userinfo, "cg_etVersion") or ""
+    if etVersion:find("ET 2%.60") and not etVersion:find("Legacy") then
+        -- Vanilla ET client detected - send them a private message
+        et.trap_SendServerCommand(clientNum, "chat \"^3[SERVER] ^7Voice chat requires ^2ET:Legacy ^7- free at ^5etlegacy.com\"")
+    end
+
     -- Check if we've already notified for this player this session
     -- Uses GUID to track across map changes
     local guid = getPlayerGuid(clientNum)

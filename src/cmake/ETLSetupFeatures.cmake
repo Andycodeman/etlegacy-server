@@ -392,6 +392,78 @@ if(BUILD_MOD)
 		target_compile_definitions(cgame_libraries INTERFACE FEATURE_EDV)
 	endif()
 
+	if(FEATURE_VOICE)
+		# Use bundled STATIC voice libraries (PortAudio + Opus)
+		# These are statically linked to avoid runtime dependency issues on client machines
+		set(VOICE_LIBS_DIR "${CMAKE_SOURCE_DIR}/libs/voice")
+		set(VOICE_INCLUDE_DIR "${VOICE_LIBS_DIR}/include")
+
+		if(WIN32)
+			if(CMAKE_SIZEOF_VOID_P EQUAL 8)
+				set(VOICE_PLATFORM_DIR "${VOICE_LIBS_DIR}/win64")
+			else()
+				set(VOICE_PLATFORM_DIR "${VOICE_LIBS_DIR}/win32")
+			endif()
+			# Static libraries for Windows (built with MinGW)
+			set(PORTAUDIO_LIBRARY "${VOICE_PLATFORM_DIR}/libportaudio.a")
+			set(OPUS_LIBRARY "${VOICE_PLATFORM_DIR}/libopus.a")
+			# Windows system libs are linked at the end (after static libs) for proper link order
+			# Use bundled headers for cross-compilation
+			set(PORTAUDIO_INCLUDE_DIR "${VOICE_INCLUDE_DIR}")
+			set(OPUS_INCLUDE_DIR "${VOICE_INCLUDE_DIR}")
+		elseif(UNIX AND NOT APPLE)
+			if(CMAKE_SIZEOF_VOID_P EQUAL 8)
+				set(VOICE_PLATFORM_DIR "${VOICE_LIBS_DIR}/linux64")
+			else()
+				set(VOICE_PLATFORM_DIR "${VOICE_LIBS_DIR}/linux32")
+			endif()
+			# Static libraries for Linux
+			set(PORTAUDIO_LIBRARY "${VOICE_PLATFORM_DIR}/libportaudio.a")
+			set(OPUS_LIBRARY "${VOICE_PLATFORM_DIR}/libopus.a")
+			# Linux system libs are linked at the end (after static libs) for proper link order
+			# Use bundled headers
+			set(PORTAUDIO_INCLUDE_DIR "${VOICE_INCLUDE_DIR}")
+			set(OPUS_INCLUDE_DIR "${VOICE_INCLUDE_DIR}")
+		elseif(APPLE)
+			# macOS - use system libraries for now (or add bundled later)
+			find_package(PortAudio REQUIRED)
+			find_package(Opus REQUIRED)
+			set(PORTAUDIO_LIBRARY ${PORTAUDIO_LIBRARIES})
+			set(OPUS_LIBRARY ${OPUS_LIBRARIES})
+			find_library(COREAUDIO_FRAMEWORK CoreAudio)
+			find_library(AUDIOUNIT_FRAMEWORK AudioUnit)
+			find_library(AUDIOTOOLBOX_FRAMEWORK AudioToolbox)
+			if(COREAUDIO_FRAMEWORK)
+				target_link_libraries(cgame_libraries INTERFACE
+					${COREAUDIO_FRAMEWORK}
+					${AUDIOUNIT_FRAMEWORK}
+					${AUDIOTOOLBOX_FRAMEWORK}
+				)
+			endif()
+			find_path(PORTAUDIO_INCLUDE_DIR portaudio.h)
+			find_path(OPUS_INCLUDE_DIR opus/opus.h)
+		endif()
+
+		# Link order matters for static libs: static libs first, then system libs they depend on
+		if(WIN32)
+			target_link_libraries(cgame_libraries INTERFACE ${PORTAUDIO_LIBRARY} ${OPUS_LIBRARY} winmm ole32 uuid ws2_32)
+		elseif(UNIX AND NOT APPLE)
+			target_link_libraries(cgame_libraries INTERFACE ${PORTAUDIO_LIBRARY} ${OPUS_LIBRARY} asound pthread m)
+		else()
+			target_link_libraries(cgame_libraries INTERFACE ${PORTAUDIO_LIBRARY} ${OPUS_LIBRARY})
+		endif()
+		if(PORTAUDIO_INCLUDE_DIR)
+			target_include_directories(cgame_libraries INTERFACE ${PORTAUDIO_INCLUDE_DIR})
+		endif()
+		if(OPUS_INCLUDE_DIR)
+			target_include_directories(cgame_libraries INTERFACE ${OPUS_INCLUDE_DIR})
+		endif()
+		target_compile_definitions(cgame_libraries INTERFACE FEATURE_VOICE)
+
+		message(STATUS "Voice chat enabled (STATIC): PortAudio=${PORTAUDIO_LIBRARY}, Opus=${OPUS_LIBRARY}")
+		message(STATUS "Voice includes: PortAudio=${PORTAUDIO_INCLUDE_DIR}, Opus=${OPUS_INCLUDE_DIR}")
+	endif()
+
 	if (FEATURE_AUTH)
 		target_compile_definitions(mod_libraries INTERFACE LEGACY_AUTH)
 	endif()

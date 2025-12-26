@@ -417,16 +417,17 @@ function mode.startPanzerfest(clientNum)
     end
 
     -- BIG ANNOUNCEMENT (6 second display like JayMod)
-    sendCPAll("\n^1=================================\n" ..
+    sendCPAll("^1========= ^6PANZERFEST! ^1=========\n\n" ..
               "^3" .. targetName .. "\n" ..
-              "^1IS A BADASS AND THE PANZER GODS\n" ..
-              "^1HAVE REWARDED THEM WITH\n" ..
-              "^6*** ^1P^3A^1N^3Z^1E^3R^1F^3E^1S^3T^1! ^6***\n" ..
-              "^1=================================\n" ..
+              "^1IS A BADASS!\n\n" ..
               "^27x FIRE RATE + 4x SPEED!\n" ..
-              "^2GO GET EM!!!", 6)
+              "^22 MINUTES TO SURVIVE!", 6)
 
-    sendChat("^1*** ^6PANZERFEST! ^1*** ^3" .. targetName .. " ^7is a ^1BADASS^7! ^27x FIRE + 4x SPEED! ^22 MINUTES TO SURVIVE!")
+    sendChat("")
+    sendChat("^1*******************************************")
+    sendChat("^1*** ^6PANZERFEST! ^1*** ^3" .. targetName .. " ^7is a ^1BADASS!")
+    sendChat("^27x FIRE + 4x SPEED! 2 MINUTES TO SURVIVE!")
+    sendChat("^1*******************************************")
 
 end
 
@@ -441,12 +442,15 @@ function mode.endPanzerfest(targetDied)
     -- Announcement
     if targetDied then
         local msg = mode.failureMessages[math.random(#mode.failureMessages)]
-        sendCPAll("\n^1=================================\n" ..
+        sendCPAll("^1======= PANZERFEST OVER! =======\n\n" ..
                   "^3" .. targetName .. "\n" ..
-                  msg .. "\n" ..
-                  "^1=================================\n" ..
+                  msg .. "\n\n" ..
                   "^2THE PEASANTS WIN THIS ROUND!", 4)
-        sendChat("^1*** PANZERFEST OVER! *** ^3" .. targetName .. " ^1GOT REKT! ^7" .. msg)
+        sendChat("")
+        sendChat("^1*******************************************")
+        sendChat("^1*** PANZERFEST OVER! *** ^3" .. targetName .. " ^1GOT REKT!")
+        sendChat("^7" .. msg)
+        sendChat("^1*******************************************")
     end
 
     -- Restore original teams
@@ -603,25 +607,27 @@ function mode.updatePanzerfest(levelTime)
 
             local targetName = et.gentity_get(targetClient, "pers.netname") or "Unknown"
 
-            sendCPAll("\n^6*****************************************\n" ..
-                      "^2           MOMENT OF SILENCE\n" ..
-                      "^6*****************************************\n" ..
-                      "\n" ..
+            sendCPAll("^6********** ^2MOMENT OF SILENCE ^6**********\n\n" ..
                       "^3" .. targetName .. "\n" ..
-                      "^2HAS ACHIEVED THE IMPOSSIBLE!\n" ..
-                      "\n" ..
+                      "^2HAS ACHIEVED THE IMPOSSIBLE!\n\n" ..
                       "^6**** ^2ABSOLUTE LEGEND ^6****\n" ..
-                      "^2SURVIVED 2 FULL MINUTES!\n" ..
-                      "^6*****************************************", 5)
+                      "^2SURVIVED 2 FULL MINUTES!", 6)
 
-            sendChat("^6*** ^2INCREDIBLE! ^6*** ^3" .. targetName .. " ^2SURVIVED 2 MINUTES! ^6A TRUE WARRIOR! ^2ALL HAIL THE PANZER GOD!")
+            sendChat("")  -- blank line for spacing
+            sendChat("^6*******************************************")
+            sendChat("^6*** ^2" .. targetName .. " ^2SURVIVED PANZERFEST! ^6***")
+            sendChat("^6*** ^2ALL HAIL THE PANZER GOD! ^6***")
+            sendChat("^6*******************************************")
 
         end
 
     -- Victory Pause (3 seconds)
     elseif mode.panzerfest.phase == 5 then
         if phaseElapsed >= 3000 then
-            sendChat("^2*** PANZERFEST COMPLETE! *** ^7Resuming normal play. ALL HAIL THE CHAMPION!")
+            sendChat("")
+            sendChat("^2*** PANZERFEST COMPLETE! ***")
+            sendChat("^7Resuming normal play. ALL HAIL THE CHAMPION!")
+            sendChat("")
             mode.endPanzerfest(false)
         end
     end

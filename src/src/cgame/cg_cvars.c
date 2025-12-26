@@ -50,6 +50,16 @@ vmCvar_t cg_teamChatsOnly;
 vmCvar_t cg_teamVoiceChatsOnly;
 vmCvar_t cg_voiceChats;
 vmCvar_t cg_voiceText;
+
+#ifdef FEATURE_VOICE
+// Voice chat cvars (built-in voice)
+vmCvar_t voice_enable;
+vmCvar_t voice_volume;
+vmCvar_t voice_inputGain;
+vmCvar_t voice_showTalking;
+vmCvar_t voice_showMeter;
+vmCvar_t voice_serverPort;
+#endif
 vmCvar_t cg_drawStatus;
 vmCvar_t cg_animSpeed;
 vmCvar_t cg_railTrailTime;
@@ -626,6 +636,16 @@ static cvarTable_t cvarTable[] =
 	{ &cg_scopeReticleDotThickness,           "cg_scopeReticleDotThickness",           "2.0",         CVAR_ARCHIVE,                 0 },
 
 	{ &cg_commandMapTime,                     "cg_commandMapTime",                     "0",           CVAR_ARCHIVE,                 0 },
+
+#ifdef FEATURE_VOICE
+	// Voice chat cvars - NOT archived so defaults always apply (users can still override in autoexec.cfg)
+	{ &voice_enable,                          "voice_enable",                          "1",           0,                            0 },
+	{ &voice_volume,                          "voice_volume",                          "50.0",        0,                            0 },  // 50x output - must overpower game sounds
+	{ &voice_inputGain,                       "voice_inputGain",                       "5.0",         0,                            0 },  // 5x input gain
+	{ &voice_showTalking,                     "voice_showTalking",                     "1",           0,                            0 },
+	{ &voice_showMeter,                       "voice_showMeter",                       "1",           0,                            0 },
+	{ &voice_serverPort,                      "voice_serverPort",                      "1",           0,                            0 },
+#endif
 };
 
 static const unsigned int cvarTableSize = sizeof(cvarTable) / sizeof(cvarTable[0]);

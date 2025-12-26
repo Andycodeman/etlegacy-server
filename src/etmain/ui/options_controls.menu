@@ -3,9 +3,9 @@
 
 // Defines //
 #define WINDOW_X		16
-#define WINDOW_Y		16
+#define WINDOW_Y		4
 #define WINDOW_WIDTH	608
-#define WINDOW_HEIGHT	448
+#define WINDOW_HEIGHT	472
 #define GROUP_NAME		"grpOptionsControls"
 
 // Subwindows //
@@ -82,15 +82,17 @@ menuDef {
 
 // Chat //
 #define CHAT_Y 174
-	SUBWINDOW( 6+(SUBWINDOW_WIDTH)+6, CHAT_Y, (SUBWINDOW_WIDTH), 76, _("CHAT") )
+	SUBWINDOW( 6+(SUBWINDOW_WIDTH)+6, CHAT_Y, (SUBWINDOW_WIDTH), 100, _("CHAT") )
 	BIND( 6+(SUBWINDOW_WIDTH)+6+2, CHAT_Y+16, (SUBWINDOW_WIDTH)-4, 10, _("Chat:"), .2, 8, "messagemode", "" )
 	BIND( 6+(SUBWINDOW_WIDTH)+6+2, CHAT_Y+28, (SUBWINDOW_WIDTH)-4, 10, _("Team Chat:"), .2, 8, "messagemode2", "" )
 	BIND( 6+(SUBWINDOW_WIDTH)+6+2, CHAT_Y+40, (SUBWINDOW_WIDTH)-4, 10, _("Fireteam Chat:"), .2, 8, "messagemode3", "" )
 	BIND( 6+(SUBWINDOW_WIDTH)+6+2, CHAT_Y+52, (SUBWINDOW_WIDTH)-4, 10, _("Quick Chat:"), .2, 8, "mp_QuickMessage", "" )
 	BIND( 6+(SUBWINDOW_WIDTH)+6+2, CHAT_Y+64, (SUBWINDOW_WIDTH)-4, 10, _("Fireteam Quick Chat:"), .2, 8, "mp_fireteammsg", "" )
+	BIND( 6+(SUBWINDOW_WIDTH)+6+2, CHAT_Y+76, (SUBWINDOW_WIDTH)-4, 10, _("Voice Chat (Team):"), .2, 8, "+voiceteam", _("Hold to transmit voice to team") )
+	BIND( 6+(SUBWINDOW_WIDTH)+6+2, CHAT_Y+88, (SUBWINDOW_WIDTH)-4, 10, _("Voice Chat (All):"), .2, 8, "+voiceall", _("Hold to transmit voice to everyone") )
 
 // Input //
-#define INPUT_Y 256
+#define INPUT_Y 280
 	SUBWINDOW( 6+(SUBWINDOW_WIDTH)+6, INPUT_Y, (SUBWINDOW_WIDTH), 64, _("INPUT") )
 	CHECKBOXALIGNXACTION(  6+(SUBWINDOW_WIDTH)+6+2, INPUT_Y+16, .5*((SUBWINDOW_WIDTH)-6), 10,_("Invert Mouse:"), .2, 24, 8, "ui_mousePitch", uiScript update ui_mousePitch, _("Invert mouse pitch") )
 	CHECKBOXALIGNX( 6+(SUBWINDOW_WIDTH)+6+2+(.5*((SUBWINDOW_WIDTH)-6))+2, INPUT_Y+16, .5*((SUBWINDOW_WIDTH)-6), 10, _("Smooth Mouse:"), .2, 24, 8, "m_filter", _("Smooth out the mouse using interpolation") )
@@ -101,7 +103,7 @@ menuDef {
     SLIDER( 6+(SUBWINDOW_WIDTH)+6+2, INPUT_Y+52, (SUBWINDOW_WIDTH)-4, 10, _("Scoped Sensitivity:"), .2, 8, "cg_scopedSensitivityScaler" 5 0 30, _("Set scoped mouse sensitivity. The value is a scalar used to calculate the sensitivity\ndepending on field of view when scoped(zoom value)") )
 
 // Miscellaneous //
-#define MISC_Y 326
+#define MISC_Y 350
 	SUBWINDOW( 6+(SUBWINDOW_WIDTH)+6, MISC_Y, (SUBWINDOW_WIDTH), 90, _("MISCELLANEOUS") )
 	BIND( 6+(SUBWINDOW_WIDTH)+6+2, MISC_Y+16, (SUBWINDOW_WIDTH)-4, 10, _("Vote Yes:"), .2, 8, "vote yes", "" )
 	BIND( 6+(SUBWINDOW_WIDTH)+6+2, MISC_Y+28, (SUBWINDOW_WIDTH)-4, 10, _("Vote No:"), .2, 8, "vote no", "" )

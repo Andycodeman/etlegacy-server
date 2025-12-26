@@ -107,12 +107,54 @@ sudo mv /tmp/etserver.service /etc/systemd/system/etserver.service && sudo syste
 
 echo "  - etserver.service updated for ET:Legacy (64-bit)"
 
+# Step 5b: Sync voice server binary
+echo -e "${YELLOW}Step 5b: Syncing voice server to VPS...${NC}"
+VOICE_SERVER_SRC="$PROJECT_DIR/voice-server/voice_server"
+if [ -f "$VOICE_SERVER_SRC" ]; then
+    # Stop voice-server first so binary isn't locked
+    ssh $SSH_OPTS "$REMOTE_HOST" "sudo systemctl stop voice-server 2>/dev/null || true"
+    rsync -avz --progress \
+        "$VOICE_SERVER_SRC" \
+        "$REMOTE_HOST:$REMOTE_DIR/"
+    ssh $SSH_OPTS "$REMOTE_HOST" "chmod +x $REMOTE_DIR/voice_server"
+    echo "  - voice_server synced"
+else
+    echo "  - voice_server not found at $VOICE_SERVER_SRC (skipping)"
+fi
+
+# Step 5c: Create/update voice-server.service on VPS
+echo -e "${YELLOW}Step 5c: Updating voice-server.service on VPS...${NC}"
+ssh $SSH_OPTS "$REMOTE_HOST" "cat > /tmp/voice-server.service << 'EOF'
+[Unit]
+Description=ET:Legacy Voice Chat Server
+After=network.target etserver.service
+Wants=etserver.service
+
+[Service]
+Type=simple
+User=andy
+WorkingDirectory=/home/andy/etlegacy
+ExecStart=/home/andy/etlegacy/voice_server 27961 27960
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+EOF
+sudo mv /tmp/voice-server.service /etc/systemd/system/voice-server.service && sudo systemctl daemon-reload && sudo systemctl enable voice-server"
+echo "  - voice-server.service updated"
+
 # Step 6: Restart server and monitor
 echo -e "${YELLOW}Step 6: Restarting services...${NC}"
 ssh $SSH_OPTS "$REMOTE_HOST" "
     echo '  Restarting etserver...'
     sudo systemctl restart etserver
     sleep 2
+
+    echo '  Restarting voice-server...'
+    sudo systemctl restart voice-server 2>/dev/null || echo '    (voice-server not started - may need voice_server binary)'
 
     echo '  Restarting et-monitor...'
     sudo systemctl restart et-monitor 2>/dev/null || echo '    (et-monitor service not found)'
@@ -133,6 +175,12 @@ ssh $SSH_OPTS "$REMOTE_HOST" "
         echo '  ✗ etserver NOT running'
     fi
 
+    if pgrep -f voice_server > /dev/null; then
+        echo '  ✓ voice-server running (port 27961)'
+    else
+        echo '  ✗ voice-server NOT running'
+    fi
+
     if pgrep -f server-monitor.sh > /dev/null; then
         echo '  ✓ et-monitor running'
     else
@@ -140,17 +188,15 @@ ssh $SSH_OPTS "$REMOTE_HOST" "
     fi
 "
 
-# Step 8: Update local ET client pk3 (for testing)
-echo -e "${YELLOW}Step 8: Updating local ET client pk3...${NC}"
+# Step 8: Clean local ET client pk3 (force re-download from server)
+echo -e "${YELLOW}Step 8: Cleaning local ET client pk3 (to test downloads)...${NC}"
 PK3_NAME="zzz_etman_etlegacy.pk3"
 CLIENT_LEGACY="$HOME/.var/app/com.etlegacy.ETLegacy/.etlegacy/legacy"
 if [ -d "$CLIENT_LEGACY" ]; then
     # Remove any loose .so/.dll files that might override pk3
     rm -f "$CLIENT_LEGACY"/*.so "$CLIENT_LEGACY"/*.dll 2>/dev/null && echo "  - Cleaned loose module files from client"
-    # Copy pk3 to dlcache
-    mkdir -p "$CLIENT_LEGACY/dlcache"
-    cp "$DIST_DIR/$PK3_NAME" "$CLIENT_LEGACY/dlcache/"
-    echo "  - Updated client dlcache pk3"
+    # Remove pk3 from dlcache to force re-download
+    rm -f "$CLIENT_LEGACY/dlcache/$PK3_NAME" 2>/dev/null && echo "  - Removed client dlcache pk3 (will re-download on connect)"
 else
     echo "  - Client folder not found (skipping)"
 fi
@@ -160,14 +206,12 @@ echo -e "${YELLOW}Step 9: Validating pk3 checksums...${NC}"
 DIST_MD5=$(md5sum "$DIST_DIR/$PK3_NAME" 2>/dev/null | cut -d' ' -f1)
 LOCAL_MD5=$(md5sum "$LOCAL_SERVER/legacy/$PK3_NAME" 2>/dev/null | cut -d' ' -f1)
 REMOTE_MD5=$(ssh $SSH_OPTS "$REMOTE_HOST" "md5sum $REMOTE_DIR/legacy/$PK3_NAME 2>/dev/null | cut -d' ' -f1")
-CLIENT_MD5=$(md5sum "$CLIENT_LEGACY/dlcache/$PK3_NAME" 2>/dev/null | cut -d' ' -f1)
 
 echo "  Dist:   $DIST_MD5"
 echo "  Local:  $LOCAL_MD5"
 echo "  VPS:    $REMOTE_MD5"
-echo "  Client: $CLIENT_MD5"
 
-if [ "$DIST_MD5" = "$LOCAL_MD5" ] && [ "$LOCAL_MD5" = "$REMOTE_MD5" ] && [ "$REMOTE_MD5" = "$CLIENT_MD5" ]; then
+if [ "$DIST_MD5" = "$LOCAL_MD5" ] && [ "$LOCAL_MD5" = "$REMOTE_MD5" ]; then
     echo -e "  ${GREEN}✓ All pk3 checksums match!${NC}"
 else
     echo -e "  ${RED}✗ CHECKSUM MISMATCH! Players may get kicked by sv_pure.${NC}"

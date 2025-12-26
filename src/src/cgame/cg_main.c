@@ -35,6 +35,9 @@
 
 #include "cg_local.h"
 #include "cg_cvars.h"
+#ifdef FEATURE_VOICE
+#include "cg_voice.h"
+#endif
 
 displayContextDef_t cgDC;
 
@@ -2434,6 +2437,14 @@ void CG_Init(int serverMessageNum, int serverCommandSequence, int clientNum, qbo
 	cgs.demoCamera.noclip    = qfalse;
 	cgs.currentMenuLevel     = ML_MAIN;
 #endif
+
+#ifdef FEATURE_VOICE
+	// Initialize voice chat system
+	if (!demoPlayback)
+	{
+		Voice_Init();
+	}
+#endif
 }
 
 /**
@@ -2443,6 +2454,10 @@ void CG_Shutdown(void)
 {
 	// some mods may need to do cleanup work here,
 	// like closing files or archiving session data
+
+#ifdef FEATURE_VOICE
+	Voice_Shutdown();
+#endif
 
 	CG_EventHandling(CGAME_EVENT_NONE, qtrue);
 	if (cg.demoPlayback)

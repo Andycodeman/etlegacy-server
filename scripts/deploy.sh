@@ -55,6 +55,19 @@ elif [ -f "$BUILD_DIR/legacy/qagame.mp.x86_64.so" ]; then
     echo "  - qagame.mp.x86_64.so"
 fi
 
+# Deploy voice server
+echo -e "${YELLOW}Deploying voice server...${NC}"
+VOICE_SERVER_SRC="$PROJECT_DIR/voice-server/voice_server"
+if [ -f "$VOICE_SERVER_SRC" ]; then
+    # Kill any running local voice_server so binary isn't locked
+    pkill -f "voice_server" 2>/dev/null || true
+    cp "$VOICE_SERVER_SRC" "$SERVER_DIR/"
+    chmod +x "$SERVER_DIR/voice_server"
+    echo "  - voice_server"
+else
+    echo "  - voice_server not found at $VOICE_SERVER_SRC (skipping)"
+fi
+
 # Deploy legacy mod pk3 (from dist or from build)
 echo -e "${YELLOW}Deploying mod pk3s...${NC}"
 # Remove old etman pk3s (all naming variations)

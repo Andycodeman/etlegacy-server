@@ -35,6 +35,9 @@
  */
 
 #include "cg_local.h"
+#ifdef FEATURE_VOICE
+#include "cg_voice.h"
+#endif
 
 char *Binding_FromName(const char *cvar);
 
@@ -3470,6 +3473,17 @@ static consoleCommand_t commands[] =
 	{ "cg_crosshairY_f",        CG_CrosshairSizePos_f     },
 	{ "cg_crosshairScaleX_f",   CG_CrosshairSizePos_f     },
 	{ "cg_crosshairScaleY_f",   CG_CrosshairSizePos_f     },
+
+#ifdef FEATURE_VOICE
+	// Voice chat commands (push-to-talk)
+	{ "+voiceteam",             Voice_Cmd_VoiceTeam_f     },
+	{ "-voiceteam",             Voice_Cmd_VoiceTeam_f     },
+	{ "+voiceall",              Voice_Cmd_VoiceAll_f      },
+	{ "-voiceall",              Voice_Cmd_VoiceAll_f      },
+	{ "voicemute",              Voice_Cmd_VoiceMute_f     },
+	{ "voiceunmute",            Voice_Cmd_VoiceUnmute_f   },
+	{ "voicestatus",            Voice_Cmd_VoiceStatus_f   },
+#endif
 
 	{ NULL,                     NULL                      }
 };

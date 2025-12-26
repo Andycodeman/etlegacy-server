@@ -8,13 +8,16 @@
 build/
 dist/
 *.o
-*.a
 *.so
 *.dll
 *.dylib
 *.exe
 *.lib
 *.out
+
+# Static libraries are ignored except for bundled voice libs
+*.a
+!src/libs/voice/**/*.a
 
 # CMake
 CMakeCache.txt

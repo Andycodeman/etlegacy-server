@@ -1,0 +1,21 @@
+[Unit]
+Description=ET:Legacy Voice Chat Server
+After=network.target etserver.service
+Wants=etserver.service
+
+[Service]
+Type=simple
+User=andy
+WorkingDirectory=/home/andy/etlegacy
+ExecStart=/home/andy/etlegacy/voice_server 27961 27960
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+# Resource limits
+LimitNOFILE=65535
+MemoryMax=256M
+
+[Install]
+WantedBy=multi-user.target

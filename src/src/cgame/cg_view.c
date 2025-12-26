@@ -34,6 +34,9 @@
  */
 
 #include "cg_local.h"
+#ifdef FEATURE_VOICE
+#include "cg_voice.h"
+#endif
 
 /*
 =============================================================================
@@ -2619,6 +2622,11 @@ void CG_DrawActiveFrame(int serverTime, qboolean demoPlayback)
 
 		// play buffered voice chats
 		CG_PlayBufferedVoiceChats();
+
+#ifdef FEATURE_VOICE
+		// Process built-in voice chat
+		Voice_Frame();
+#endif
 
 		DEBUGTIME
 		// trails

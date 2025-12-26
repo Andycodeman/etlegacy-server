@@ -17,8 +17,13 @@
 #   ./build-all.sh windows      # Build all Windows targets
 #   ./build-all.sh mod          # Build mod for all client platforms
 #   ./build-all.sh --clean      # Clean all build directories first
+#   ./build-all.sh --no-voice   # Disable voice chat (enabled by default)
+#   ./build-all.sh voice-server # Build standalone voice server only
 
 set -e
+
+# Feature flags - Voice is ON by default
+FEATURE_VOICE=ON
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
@@ -135,6 +140,7 @@ build_mod_linux() {
         -DBUILD_MOD_PK3=OFF \
         -DFEATURE_LUA=ON \
         -DFEATURE_OMNIBOT=OFF \
+        -DFEATURE_VOICE=$FEATURE_VOICE \
         -DINSTALL_EXTRA=OFF
 
     make -j$(nproc)
@@ -188,6 +194,7 @@ build_mod_windows() {
         -DBUILD_MOD_PK3=OFF \
         -DFEATURE_LUA=ON \
         -DFEATURE_OMNIBOT=OFF \
+        -DFEATURE_VOICE=$FEATURE_VOICE \
         -DINSTALL_EXTRA=OFF \
         -DBUNDLED_LIBS=ON
 
@@ -206,6 +213,25 @@ build_mod_windows() {
     fi
 
     log_info "Windows ${arch}-bit client modules built successfully!"
+}
+
+# Build the voice server
+build_voice_server() {
+    local build_dir="$BUILD_BASE/voice-server"
+
+    log_step "Building voice server..."
+
+    mkdir -p "$build_dir"
+    cd "$build_dir"
+
+    cmake "$PROJECT_DIR/voice-server"
+    make -j$(nproc)
+
+    # Copy output
+    mkdir -p "$OUTPUT_DIR/server"
+    cp -v voice_server "$OUTPUT_DIR/server/" 2>/dev/null || true
+
+    log_info "Voice server built successfully!"
 }
 
 # Build the rickroll pk3 (separate from main mod pk3 for HTTP downloads)
@@ -263,21 +289,30 @@ create_mod_pk3() {
         [ -d "$PROJECT_DIR/rickroll/sound" ] && cp -r "$PROJECT_DIR/rickroll/sound" .
     fi
 
+    # Copy custom UI menu files (overrides for controls, etc.)
+    if [ -d "$SRC_DIR/etmain/ui" ]; then
+        log_info "Including custom UI menus..."
+        mkdir -p ui
+        cp "$SRC_DIR/etmain/ui/options_controls.menu" ui/ 2>/dev/null || true
+        cp "$SRC_DIR/etmain/ui/ingame_serverinfo.menu" ui/ 2>/dev/null || true
+    fi
+
     # Create pk3 with modules at root level
     # List what we're packaging
     log_info "Packaging the following files:"
     ls -la *.so *.dll 2>/dev/null || true
 
     rm -f "$OUTPUT_DIR/$pk3_name"
-    # Include all available directories: modules + lua + weapons + rickroll assets
-    zip -r "$OUTPUT_DIR/$pk3_name" *.so *.dll lua/ weapons/ gfx/ scripts/ sound/ 2>/dev/null \
-        || zip -r "$OUTPUT_DIR/$pk3_name" *.so *.dll lua/ gfx/ scripts/ sound/ 2>/dev/null \
+    # Include all available directories: modules + lua + weapons + rickroll assets + ui
+    zip -r "$OUTPUT_DIR/$pk3_name" *.so *.dll lua/ weapons/ gfx/ scripts/ sound/ ui/ 2>/dev/null \
+        || zip -r "$OUTPUT_DIR/$pk3_name" *.so *.dll lua/ gfx/ scripts/ sound/ ui/ 2>/dev/null \
+        || zip -r "$OUTPUT_DIR/$pk3_name" *.so *.dll lua/ ui/ 2>/dev/null \
         || zip -r "$OUTPUT_DIR/$pk3_name" *.so *.dll lua/ 2>/dev/null \
         || zip -r "$OUTPUT_DIR/$pk3_name" *.so *.dll
 
     # Cleanup
     rm -f *.so *.dll
-    rm -rf lua weapons gfx scripts sound
+    rm -rf lua weapons gfx scripts sound ui
 
     log_info "Created $OUTPUT_DIR/$pk3_name"
 }
@@ -303,6 +338,10 @@ main() {
             --clean)
                 clean=true
                 ;;
+            --no-voice)
+                FEATURE_VOICE=OFF
+                log_info "Voice chat feature DISABLED"
+                ;;
         esac
     done
 
@@ -324,14 +363,17 @@ main() {
             build_mod_windows 64
             create_mod_pk3
             build_rickroll_pk3
+            build_voice_server
             ;;
         server)
             build_server_linux64
+            build_voice_server
             ;;
         linux)
             build_server_linux64
             build_mod_linux 32
             build_mod_linux 64
+            build_voice_server
             ;;
         windows)
             build_mod_windows 32
@@ -360,27 +402,32 @@ main() {
         pk3)
             create_mod_pk3
             ;;
+        voice-server)
+            build_voice_server
+            ;;
         clean)
             clean_all
             ;;
         *)
-            echo "Usage: $0 [target] [--clean]"
+            echo "Usage: $0 [target] [--clean] [--voice]"
             echo ""
             echo "Targets:"
-            echo "  all      - Build everything (default)"
-            echo "  server   - Build Linux 64-bit server only"
-            echo "  linux    - Build all Linux targets"
-            echo "  windows  - Build all Windows targets"
-            echo "  mod      - Build client modules for all platforms + pk3"
-            echo "  linux32  - Build Linux 32-bit client modules"
-            echo "  linux64  - Build Linux 64-bit client modules"
-            echo "  win32    - Build Windows 32-bit client modules"
-            echo "  win64    - Build Windows 64-bit client modules"
-            echo "  pk3      - Create mod pk3 from existing builds"
-            echo "  clean    - Remove all build directories"
+            echo "  all          - Build everything (default)"
+            echo "  server       - Build Linux 64-bit server only"
+            echo "  linux        - Build all Linux targets"
+            echo "  windows      - Build all Windows targets"
+            echo "  mod          - Build client modules for all platforms + pk3"
+            echo "  linux32      - Build Linux 32-bit client modules"
+            echo "  linux64      - Build Linux 64-bit client modules"
+            echo "  win32        - Build Windows 32-bit client modules"
+            echo "  win64        - Build Windows 64-bit client modules"
+            echo "  pk3          - Create mod pk3 from existing builds"
+            echo "  voice-server - Build standalone voice chat server"
+            echo "  clean        - Remove all build directories"
             echo ""
             echo "Options:"
-            echo "  --clean  - Clean before building"
+            echo "  --clean    - Clean before building"
+            echo "  --no-voice - Disable voice chat feature (enabled by default)"
             exit 1
             ;;
     esac

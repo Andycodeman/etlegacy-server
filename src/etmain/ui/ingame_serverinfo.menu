@@ -43,18 +43,276 @@ menuDef {
 		decoration
 	}
 
-// Subwindows //
-#define SUBWINDOW_WIDTH		384
-#define SUBWINDOW_HEIGHT	320
-#define SUBWINDOW_X			.5*(WINDOW_WIDTH-SUBWINDOW_WIDTH)
-#define SUBWINDOW_Y			.5*(WINDOW_HEIGHT-SUBWINDOW_HEIGHT)
+// Subwindows - Two panel layout //
+#define LEFT_WIDTH		300
+#define RIGHT_WIDTH		300
+#define PANEL_HEIGHT	400
+#define LEFT_X			20
+#define RIGHT_X			340
+#define PANEL_Y			52
 
-	SUBWINDOWBLACK( SUBWINDOW_X, SUBWINDOW_Y, SUBWINDOW_WIDTH, SUBWINDOW_HEIGHT, _("SERVER INFO") )
+// LEFT PANEL: ETMan Server Features //
+	SUBWINDOWBLACK( LEFT_X, PANEL_Y, LEFT_WIDTH, PANEL_HEIGHT, _("^1ETMAN'S ^7SERVER FEATURES") )
+
+	// Voice Chat Section
+	itemDef {
+		name		"voiceheader"
+		rect		$evalfloat(LEFT_X+10) $evalfloat(PANEL_Y+32) $evalfloat(LEFT_WIDTH-20) 12
+		text		"^2>>> LIVE VOICE CHAT <<<"
+		textfont	UI_FONT_ARIBLK_16
+		textscale	.22
+		textalign	ITEM_ALIGN_CENTER
+		textalignx	$evalfloat((LEFT_WIDTH-20)/2)
+		forecolor	0.2 1 0.2 1
+		visible		1
+		decoration
+	}
+	itemDef {
+		name		"voiceinfo1"
+		rect		$evalfloat(LEFT_X+10) $evalfloat(PANEL_Y+48) $evalfloat(LEFT_WIDTH-20) 10
+		text		"^7Hold ^3, ^7(comma) = Team voice"
+		textfont	UI_FONT_COURBD_21
+		textscale	.18
+		forecolor	0.8 0.8 0.8 1
+		visible		1
+		decoration
+	}
+	itemDef {
+		name		"voiceinfo2"
+		rect		$evalfloat(LEFT_X+10) $evalfloat(PANEL_Y+60) $evalfloat(LEFT_WIDTH-20) 10
+		text		"^7Hold ^3. ^7(period) = All voice"
+		textfont	UI_FONT_COURBD_21
+		textscale	.18
+		forecolor	0.8 0.8 0.8 1
+		visible		1
+		decoration
+	}
+	itemDef {
+		name		"voiceinfo3"
+		rect		$evalfloat(LEFT_X+10) $evalfloat(PANEL_Y+72) $evalfloat(LEFT_WIDTH-20) 10
+		text		"^7Rebind in ESC > Options > Controls > Chat"
+		textfont	UI_FONT_COURBD_21
+		textscale	.16
+		forecolor	0.6 0.6 0.6 1
+		visible		1
+		decoration
+	}
+
+	// Rocket Modes Section
+	itemDef {
+		name		"rocketheader"
+		rect		$evalfloat(LEFT_X+10) $evalfloat(PANEL_Y+92) $evalfloat(LEFT_WIDTH-20) 12
+		text		"^5>>> CUSTOM ROCKET MODES <<<"
+		textfont	UI_FONT_ARIBLK_16
+		textscale	.22
+		textalign	ITEM_ALIGN_CENTER
+		textalignx	$evalfloat((LEFT_WIDTH-20)/2)
+		forecolor	0.4 0.8 1 1
+		visible		1
+		decoration
+	}
+	itemDef {
+		name		"rocketinfo1"
+		rect		$evalfloat(LEFT_X+10) $evalfloat(PANEL_Y+108) $evalfloat(LEFT_WIDTH-20) 10
+		text		"^7Select Panzer again to cycle modes:"
+		textfont	UI_FONT_COURBD_21
+		textscale	.17
+		forecolor	0.8 0.8 0.8 1
+		visible		1
+		decoration
+	}
+	itemDef {
+		name		"rocketinfo2"
+		rect		$evalfloat(LEFT_X+10) $evalfloat(PANEL_Y+122) $evalfloat(LEFT_WIDTH-20) 10
+		text		"^3Normal ^7- Standard rockets"
+		textfont	UI_FONT_COURBD_21
+		textscale	.17
+		forecolor	0.7 0.7 0.7 1
+		visible		1
+		decoration
+	}
+	itemDef {
+		name		"rocketinfo3"
+		rect		$evalfloat(LEFT_X+10) $evalfloat(PANEL_Y+134) $evalfloat(LEFT_WIDTH-20) 10
+		text		"^3Homing ^7- Rockets track enemies"
+		textfont	UI_FONT_COURBD_21
+		textscale	.17
+		forecolor	0.7 0.7 0.7 1
+		visible		1
+		decoration
+	}
+	itemDef {
+		name		"rocketinfo4"
+		rect		$evalfloat(LEFT_X+10) $evalfloat(PANEL_Y+146) $evalfloat(LEFT_WIDTH-20) 10
+		text		"^3Freeze ^7- Freeze enemies on hit"
+		textfont	UI_FONT_COURBD_21
+		textscale	.17
+		forecolor	0.7 0.7 0.7 1
+		visible		1
+		decoration
+	}
+	itemDef {
+		name		"rocketinfo5"
+		rect		$evalfloat(LEFT_X+10) $evalfloat(PANEL_Y+158) $evalfloat(LEFT_WIDTH-20) 10
+		text		"^3Freeze+Homing ^7- Both combined!"
+		textfont	UI_FONT_COURBD_21
+		textscale	.17
+		forecolor	0.7 0.7 0.7 1
+		visible		1
+		decoration
+	}
+
+	// Survival/Panzerfest Section
+	itemDef {
+		name		"survivalheader"
+		rect		$evalfloat(LEFT_X+10) $evalfloat(PANEL_Y+178) $evalfloat(LEFT_WIDTH-20) 12
+		text		"^6>>> SURVIVAL & PANZERFEST <<<"
+		textfont	UI_FONT_ARIBLK_16
+		textscale	.22
+		textalign	ITEM_ALIGN_CENTER
+		textalignx	$evalfloat((LEFT_WIDTH-20)/2)
+		forecolor	1 0.8 0.2 1
+		visible		1
+		decoration
+	}
+	itemDef {
+		name		"survivalinfo1"
+		rect		$evalfloat(LEFT_X+10) $evalfloat(PANEL_Y+194) $evalfloat(LEFT_WIDTH-20) 10
+		text		"^7Kill enemies to earn ^3POWER-UPS^7:"
+		textfont	UI_FONT_COURBD_21
+		textscale	.17
+		forecolor	0.8 0.8 0.8 1
+		visible		1
+		decoration
+	}
+	itemDef {
+		name		"survivalinfo2"
+		rect		$evalfloat(LEFT_X+10) $evalfloat(PANEL_Y+208) $evalfloat(LEFT_WIDTH-20) 10
+		text		"^2+5 Kills ^7= Level up ^3FIRING RATE"
+		textfont	UI_FONT_COURBD_21
+		textscale	.17
+		forecolor	0.7 0.7 0.7 1
+		visible		1
+		decoration
+	}
+	itemDef {
+		name		"survivalinfo3"
+		rect		$evalfloat(LEFT_X+10) $evalfloat(PANEL_Y+222) $evalfloat(LEFT_WIDTH-20) 10
+		text		"^2+30 Sec Alive ^7= Level up ^3MOVEMENT SPEED"
+		textfont	UI_FONT_COURBD_21
+		textscale	.17
+		forecolor	0.7 0.7 0.7 1
+		visible		1
+		decoration
+	}
+	itemDef {
+		name		"survivalinfo4"
+		rect		$evalfloat(LEFT_X+10) $evalfloat(PANEL_Y+240) $evalfloat(LEFT_WIDTH-20) 10
+		text		"^6>>> PANZERFEST MODE <<<"
+		textfont	UI_FONT_COURBD_21
+		textscale	.18
+		textalign	ITEM_ALIGN_CENTER
+		textalignx	$evalfloat((LEFT_WIDTH-20)/2)
+		forecolor	1 0.6 0.2 1
+		visible		1
+		decoration
+	}
+	itemDef {
+		name		"survivalinfo5"
+		rect		$evalfloat(LEFT_X+10) $evalfloat(PANEL_Y+256) $evalfloat(LEFT_WIDTH-20) 10
+		text		"^330 KILLS ^7= PANZERFEST ACTIVATED!"
+		textfont	UI_FONT_COURBD_21
+		textscale	.17
+		forecolor	0.8 0.8 0.8 1
+		visible		1
+		decoration
+	}
+	itemDef {
+		name		"survivalinfo6"
+		rect		$evalfloat(LEFT_X+10) $evalfloat(PANEL_Y+270) $evalfloat(LEFT_WIDTH-20) 10
+		text		"^7You vs EVERYONE - panzer only!"
+		textfont	UI_FONT_COURBD_21
+		textscale	.17
+		forecolor	0.7 0.7 0.7 1
+		visible		1
+		decoration
+	}
+	itemDef {
+		name		"survivalinfo7"
+		rect		$evalfloat(LEFT_X+10) $evalfloat(PANEL_Y+286) $evalfloat(LEFT_WIDTH-20) 10
+		text		"^1Die = lose all power-ups!"
+		textfont	UI_FONT_COURBD_21
+		textscale	.17
+		forecolor	1 0.3 0.3 1
+		visible		1
+		decoration
+	}
+
+	// Gameplay Features Section
+	itemDef {
+		name		"gameplayheader"
+		rect		$evalfloat(LEFT_X+10) $evalfloat(PANEL_Y+306) $evalfloat(LEFT_WIDTH-20) 12
+		text		"^3>>> GAMEPLAY FEATURES <<<"
+		textfont	UI_FONT_ARIBLK_16
+		textscale	.22
+		textalign	ITEM_ALIGN_CENTER
+		textalignx	$evalfloat((LEFT_WIDTH-20)/2)
+		forecolor	1 1 0.3 1
+		visible		1
+		decoration
+	}
+	itemDef {
+		name		"gameplay1"
+		rect		$evalfloat(LEFT_X+10) $evalfloat(PANEL_Y+322) $evalfloat(LEFT_WIDTH-20) 10
+		text		"^7- Double jump enabled"
+		textfont	UI_FONT_COURBD_21
+		textscale	.17
+		forecolor	0.7 0.7 0.7 1
+		visible		1
+		decoration
+	}
+	itemDef {
+		name		"gameplay2"
+		rect		$evalfloat(LEFT_X+10) $evalfloat(PANEL_Y+334) $evalfloat(LEFT_WIDTH-20) 10
+		text		"^7- Low gravity, high knockback"
+		textfont	UI_FONT_COURBD_21
+		textscale	.17
+		forecolor	0.7 0.7 0.7 1
+		visible		1
+		decoration
+	}
+	itemDef {
+		name		"gameplay3"
+		rect		$evalfloat(LEFT_X+10) $evalfloat(PANEL_Y+346) $evalfloat(LEFT_WIDTH-20) 10
+		text		"^7- Fast weapon switch"
+		textfont	UI_FONT_COURBD_21
+		textscale	.17
+		forecolor	0.7 0.7 0.7 1
+		visible		1
+		decoration
+	}
+
+	// Website/Discord
+	itemDef {
+		name		"footer"
+		rect		$evalfloat(LEFT_X+10) $evalfloat(PANEL_Y+370) $evalfloat(LEFT_WIDTH-20) 10
+		text		"^7Questions? Ask in voice chat!"
+		textfont	UI_FONT_COURBD_21
+		textscale	.18
+		textalign	ITEM_ALIGN_CENTER
+		textalignx	$evalfloat((LEFT_WIDTH-20)/2)
+		forecolor	0.5 0.5 0.5 1
+		visible		1
+		decoration
+	}
+
+// RIGHT PANEL: Standard Server Info //
+	SUBWINDOWBLACK( RIGHT_X, PANEL_Y, RIGHT_WIDTH, PANEL_HEIGHT, _("SERVER INFO") )
 
 	itemDef {
 		name			"serverInfo"
 		group			GROUP_NAME
-		rect			 $evalfloat((SUBWINDOW_X)+6)  $evalfloat((SUBWINDOW_Y)+20)  $evalfloat((SUBWINDOW_WIDTH)-12)  $evalfloat((SUBWINDOW_HEIGHT)-20-26)
+		rect			$evalfloat(RIGHT_X+6) $evalfloat(PANEL_Y+20) $evalfloat(RIGHT_WIDTH-12) $evalfloat(PANEL_HEIGHT-20-26)
 		type			ITEM_TYPE_LISTBOX
 		textfont		UI_FONT_COURBD_21
 		textstyle		ITEM_TEXTSTYLE_SHADOWED
@@ -63,7 +321,7 @@ menuDef {
 		forecolor		.6 .6 .6 1
 		feeder			FEEDER_SERVERSTATUS
 		elementtype		LISTBOX_TEXT
-		elementwidth	$evalfloat((SUBWINDOW_WIDTH)-12)
+		elementwidth	$evalfloat(RIGHT_WIDTH-12)
 		elementheight	12
 		columns			4	0	40	20
 							40	40	10
@@ -73,9 +331,10 @@ menuDef {
 		notselectable
 	}
 
-	BUTTON( (SUBWINDOW_X)+6, (SUBWINDOW_Y)+(SUBWINDOW_HEIGHT)-24, .25*((SUBWINDOW_WIDTH)-24), 18, _("BACK"), .3, 14, close ingame_serverinfo ; open ingame_main )
-	BUTTON( (SUBWINDOW_X)+6+.25*((SUBWINDOW_WIDTH)-24)+6, (SUBWINDOW_Y)+(SUBWINDOW_HEIGHT)-24, .25*((SUBWINDOW_WIDTH)-24), 18, _("REFRESH"), .3, 14, uiScript ServerStatus )
-	BUTTON( (SUBWINDOW_X)+6+.25*((SUBWINDOW_WIDTH)-24)+6+.25*((SUBWINDOW_WIDTH)-24)+6, (SUBWINDOW_Y)+(SUBWINDOW_HEIGHT)-24, .5*((SUBWINDOW_WIDTH)-24), 18, _("FAVORITE"), .3, 14, clearFocus ; close ingame_serverinfo ; uiScript clientCheckFavorite ;
+// Bottom Buttons //
+	BUTTON( LEFT_X, PANEL_Y+PANEL_HEIGHT+6, 90, 18, _("BACK"), .3, 14, close ingame_serverinfo ; open ingame_main )
+	BUTTON( LEFT_X+96, PANEL_Y+PANEL_HEIGHT+6, 90, 18, _("REFRESH"), .3, 14, uiScript ServerStatus )
+	BUTTON( LEFT_X+192, PANEL_Y+PANEL_HEIGHT+6, 120, 18, _("ADD FAVORITE"), .3, 14, clearFocus ; close ingame_serverinfo ; uiScript clientCheckFavorite ;
 		conditionalScript cg_ui_favorite 0
         ( "open popupRemoveFavorite" )
 		( "open popupAddFavorite" ) )
