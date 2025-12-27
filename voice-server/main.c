@@ -55,6 +55,7 @@
 #define VOICE_CHAN_NONE     0
 #define VOICE_CHAN_TEAM     1
 #define VOICE_CHAN_ALL      2
+#define VOICE_CHAN_SOUND    3
 
 /*
  * Packet Types (must match cgame)
@@ -284,6 +285,7 @@ static void routeVoicePacket(ClientInfo *sender, uint8_t *packet, int packetLen,
 
         switch (channel) {
             case VOICE_CHAN_ALL:
+            case VOICE_CHAN_SOUND:
                 /* Send to everyone (except spectators) */
                 shouldSend = (recipient->team != TEAM_SPECTATOR);
                 break;

@@ -7,6 +7,7 @@
  */
 
 #include "cg_voice.h"
+#include "cg_customsound.h"
 
 #ifdef FEATURE_VOICE
 
@@ -615,6 +616,38 @@ static int Voice_InputCallback(const void *input, void *output,
 	(void)statusFlags;
 	(void)userData;
 
+	/* Check if custom sound is playing - use that instead of mic */
+	if (CustomSound_IsPlaying() && voice.connected)
+	{
+		int16_t customFrame[VOICE_FRAME_SIZE];
+
+		if (CustomSound_GetNextFrame(customFrame))
+		{
+			/* Encode custom sound to Opus */
+			opusLen = opus_encode(voice.encoder, customFrame, VOICE_FRAME_SIZE,
+			                      opusData, sizeof(opusData));
+			if (opusLen > 0)
+			{
+				/* Build and send packet */
+				header = (voicePacketHeader_t *)packet;
+				header->type = VOICE_PKT_AUDIO;
+				header->clientId = htonl((uint32_t)cg.clientNum);
+				header->sequence = htonl(voice.sequence++);
+				header->channel = VOICE_CHAN_SOUND;
+				header->opusLen = htons((uint16_t)opusLen);
+
+				Com_Memcpy(packet + sizeof(voicePacketHeader_t), opusData, opusLen);
+				packetLen = sizeof(voicePacketHeader_t) + opusLen;
+
+				sendto(voice.socket, (char *)packet, packetLen, 0,
+				       (struct sockaddr *)&voice.serverAddr,
+				       sizeof(voice.serverAddr));
+				voice.packetsSent++;
+			}
+		}
+		return paContinue;
+	}
+
 	if (!voice.transmitting || !samples || !voice.connected)
 	{
 		voice.inputLevel = 0;
@@ -1024,6 +1057,9 @@ qboolean Voice_Init(void)
 	voice.initialized = qtrue;
 	voice.state = VOICE_STATE_IDLE;
 
+	/* Initialize custom sound system */
+	CustomSound_Init();
+
 	CG_Printf("^3Voice: [5/5] Auto-connecting to voice server...\n");
 	/* Auto-connect to voice server */
 	Voice_AutoConnect();
@@ -1038,6 +1074,9 @@ void Voice_Shutdown(void)
 	{
 		return;
 	}
+
+	/* Shutdown custom sound system */
+	CustomSound_Shutdown();
 
 	Voice_Disconnect();
 	Voice_ShutdownAudio();

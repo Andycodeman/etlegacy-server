@@ -23,9 +23,10 @@
  */
 typedef enum
 {
-	VOICE_CHAN_NONE = 0,
-	VOICE_CHAN_TEAM = 1,    // Team-only voice
-	VOICE_CHAN_ALL  = 2,    // Global voice
+	VOICE_CHAN_NONE  = 0,
+	VOICE_CHAN_TEAM  = 1,   // Team-only voice
+	VOICE_CHAN_ALL   = 2,   // Global voice
+	VOICE_CHAN_SOUND = 3,   // Custom sound playback (sent to all, like VOICE_CHAN_ALL)
 	VOICE_CHAN_MAX
 } voiceChannel_t;
 

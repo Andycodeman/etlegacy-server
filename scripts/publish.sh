@@ -109,7 +109,11 @@ echo "  - etserver.service updated for ET:Legacy (64-bit)"
 
 # Step 5b: Sync voice server binary
 echo -e "${YELLOW}Step 5b: Syncing voice server to VPS...${NC}"
-VOICE_SERVER_SRC="$PROJECT_DIR/voice-server/voice_server"
+# Check build directory first (where build.sh outputs), then fallback to dist
+VOICE_SERVER_SRC="$PROJECT_DIR/voice-server/build/voice_server"
+if [ ! -f "$VOICE_SERVER_SRC" ]; then
+    VOICE_SERVER_SRC="$PROJECT_DIR/dist/server/voice_server"
+fi
 if [ -f "$VOICE_SERVER_SRC" ]; then
     # Stop voice-server first so binary isn't locked
     ssh $SSH_OPTS "$REMOTE_HOST" "sudo systemctl stop voice-server 2>/dev/null || true"
@@ -117,9 +121,9 @@ if [ -f "$VOICE_SERVER_SRC" ]; then
         "$VOICE_SERVER_SRC" \
         "$REMOTE_HOST:$REMOTE_DIR/"
     ssh $SSH_OPTS "$REMOTE_HOST" "chmod +x $REMOTE_DIR/voice_server"
-    echo "  - voice_server synced"
+    echo "  - voice_server synced from $VOICE_SERVER_SRC"
 else
-    echo "  - voice_server not found at $VOICE_SERVER_SRC (skipping)"
+    echo -e "${RED}  - ERROR: voice_server not found! Build it first with: cd voice-server && ./build.sh${NC}"
 fi
 
 # Step 5c: Create/update voice-server.service on VPS

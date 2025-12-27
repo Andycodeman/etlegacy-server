@@ -37,6 +37,7 @@
 #include "cg_local.h"
 #ifdef FEATURE_VOICE
 #include "cg_voice.h"
+#include "cg_customsound.h"
 #endif
 
 char *Binding_FromName(const char *cvar);
@@ -3483,6 +3484,7 @@ static consoleCommand_t commands[] =
 	{ "voicemute",              Voice_Cmd_VoiceMute_f     },
 	{ "voiceunmute",            Voice_Cmd_VoiceUnmute_f   },
 	{ "voicestatus",            Voice_Cmd_VoiceStatus_f   },
+	{ "customsound",            CustomSound_Cmd_f         },
 #endif
 
 	{ NULL,                     NULL                      }
