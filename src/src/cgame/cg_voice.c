@@ -1385,9 +1385,11 @@ void Voice_DrawTalkingHUD(void)
 	int   i, y;
 	int   numTalking = 0;
 	float x;
-	float textScale = 0.2f;
+	float textScale = 0.18f;
+	float iconSize = 14.0f;
+	vec4_t white = {1.0f, 1.0f, 1.0f, 1.0f};
 
-	if (!voice.initialized || !voice_showTalking.integer)
+	if (!voice.initialized)
 	{
 		return;
 	}
@@ -1397,26 +1399,63 @@ void Voice_DrawTalkingHUD(void)
 
 	for (i = 0; i < MAX_CLIENTS; i++)
 	{
-		if (voice.clientInfo[i].talking && cgs.clientinfo[i].infoValid)
+		if (voice.clientInfo[i].talking)
 		{
-			vec4_t *teamColor = Voice_GetTeamColor(i);
+			vec4_t *teamColor;
 			char    nameStr[64];
+			qhandle_t teamIcon = 0;
+			int team = TEAM_FREE;
 
-			/* Build the display string: speaker icon + name */
-			Com_sprintf(nameStr, sizeof(nameStr), ">> %s",
-			           cgs.clientinfo[i].name);
+			/* Use player name if valid, otherwise show client slot */
+			if (cgs.clientinfo[i].infoValid)
+			{
+				teamColor = Voice_GetTeamColor(i);
+				team = cgs.clientinfo[i].team;
+				Q_strncpyz(nameStr, cgs.clientinfo[i].name, sizeof(nameStr));
 
-			/* Draw team-colored background bar */
+				/* Get team flag icon */
+				if (team == TEAM_AXIS)
+				{
+					teamIcon = cgs.media.axisFlag;
+				}
+				else if (team == TEAM_ALLIES)
+				{
+					teamIcon = cgs.media.alliedFlag;
+				}
+			}
+			else
+			{
+				static vec4_t defaultColor = {1.0f, 1.0f, 1.0f, 1.0f};
+				teamColor = &defaultColor;
+				Com_sprintf(nameStr, sizeof(nameStr), "[Client %d]", i);
+			}
+
+			/* Draw semi-transparent background bar */
 			{
 				vec4_t bgColor;
 				Vector4Copy(*teamColor, bgColor);
-				bgColor[3] = 0.3f;  /* Semi-transparent */
-				CG_FillRect(x - 2, y - 1, 115, VOICE_HUD_LINE_H - 2, bgColor);
+				bgColor[3] = 0.4f;
+				CG_FillRect(x - 2, y - 1, 130, VOICE_HUD_LINE_H, bgColor);
 			}
 
-			/* Draw the name with team color using proper cgame function */
-			CG_Text_Paint_Ext(x, y + VOICE_HUD_FONT_H, textScale, textScale,
-			                  *teamColor, nameStr, 0, 16, ITEM_TEXTSTYLE_SHADOWED, &cgs.media.limboFont2);
+			/* Draw voice chat icon (speaker) */
+			trap_R_SetColor(white);
+			CG_DrawPic(x, y, iconSize, iconSize, cgs.media.voiceChatShader);
+
+			/* Draw team flag icon if available */
+			if (teamIcon)
+			{
+				CG_DrawPic(x + iconSize + 2, y, iconSize, iconSize, teamIcon);
+			}
+
+			/* Draw the player name */
+			{
+				float textX = x + iconSize + (teamIcon ? iconSize + 6 : 4);
+				CG_Text_Paint_Ext(textX, y + 11, textScale, textScale,
+				                  *teamColor, nameStr, 0, 14, ITEM_TEXTSTYLE_SHADOWED, &cgs.media.limboFont2);
+			}
+
+			trap_R_SetColor(NULL);
 
 			y += VOICE_HUD_LINE_H;
 			numTalking++;
