@@ -8,6 +8,7 @@
 
 #include "cg_voice.h"
 #include "cg_customsound.h"
+#include "cg_etman.h"
 
 #ifdef FEATURE_VOICE
 
@@ -779,14 +780,14 @@ static int Voice_OutputCallback(const void *input, void *output,
 	// Mix all active clients
 	for (i = 0; i < MAX_CLIENTS; i++)
 	{
-		// Skip self
-		if (i == cg.clientNum)
+		// Skip self for regular voice chat (but NOT for custom sounds - we want to hear our own sounds)
+		if (i == cg.clientNum && voice.clientInfo[i].channel != VOICE_CHAN_SOUND)
 		{
 			continue;
 		}
 
-		// Skip muted
-		if (voice.clientInfo[i].muted)
+		// Skip muted (but not for custom sounds)
+		if (voice.clientInfo[i].muted && voice.clientInfo[i].channel != VOICE_CHAN_SOUND)
 		{
 			continue;
 		}
@@ -873,6 +874,13 @@ static void Voice_ProcessIncoming(void)
 		}
 
 		relay = (voiceRelayHeader_t *)buffer;
+
+		/* Check for ETMan response packets (0x20-0x24) */
+		if (buffer[0] >= 0x20 && buffer[0] <= 0x24)
+		{
+			ETMan_HandleResponse(buffer, received);
+			continue;
+		}
 
 		if (relay->type != VOICE_PKT_AUDIO)
 		{
@@ -1060,6 +1068,9 @@ qboolean Voice_Init(void)
 	/* Initialize custom sound system */
 	CustomSound_Init();
 
+	/* Initialize ETMan server-side sounds */
+	ETMan_Init();
+
 	CG_Printf("^3Voice: [5/5] Auto-connecting to voice server...\n");
 	/* Auto-connect to voice server */
 	Voice_AutoConnect();
@@ -1077,6 +1088,9 @@ void Voice_Shutdown(void)
 
 	/* Shutdown custom sound system */
 	CustomSound_Shutdown();
+
+	/* Shutdown ETMan */
+	ETMan_Shutdown();
 
 	Voice_Disconnect();
 	Voice_ShutdownAudio();
@@ -1127,6 +1141,9 @@ void Voice_Frame(void)
 
 	// Update client talking states
 	Voice_UpdateClientState();
+
+	// Process ETMan
+	ETMan_Frame();
 }
 
 void Voice_StartTransmit(voiceChannel_t channel)
@@ -1325,6 +1342,21 @@ void Voice_Disconnect(void)
 	{
 		voice.state = VOICE_STATE_IDLE;
 	}
+}
+
+/*
+ * Send a raw packet to the voice server (used by ETMan)
+ */
+void Voice_SendRawPacket(const uint8_t *data, int len)
+{
+	if (voice.socket == VOICE_INVALID_SOCKET || !voice.connected)
+	{
+		CG_Printf("^1Voice: Not connected to voice server\n");
+		return;
+	}
+
+	sendto(voice.socket, (char *)data, len, 0,
+	       (struct sockaddr *)&voice.serverAddr, sizeof(voice.serverAddr));
 }
 
 /*
@@ -1541,7 +1573,7 @@ void Voice_DrawTalkingHUD(void)
 				Q_strncpyz(nameStr, cgs.clientinfo[i].name, sizeof(nameStr));
 
 				/* Get team flag icon - only show for ALL chat since team is obvious for team chat */
-				if (channel == VOICE_CHAN_ALL)
+				if (channel == VOICE_CHAN_ALL || channel == VOICE_CHAN_SOUND)
 				{
 					if (team == TEAM_AXIS)
 					{

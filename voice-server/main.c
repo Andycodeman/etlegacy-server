@@ -23,6 +23,8 @@
 #include <signal.h>
 #include <time.h>
 
+#include "sound_manager.h"
+
 #ifdef _WIN32
     #include <winsock2.h>
     #include <ws2tcpip.h>
@@ -157,6 +159,17 @@ static int g_gameServerPort = DEFAULT_GAME_PORT;
 static uint64_t g_totalPacketsReceived = 0;
 static uint64_t g_totalPacketsRouted = 0;
 static uint64_t g_totalBytesReceived = 0;
+
+/* Sound playback timing */
+static uint64_t g_lastSoundPacketTime = 0;
+#define SOUND_PACKET_INTERVAL_MS 20  /* 20ms between Opus packets */
+
+/* Get current time in milliseconds */
+static uint64_t getTimeMs(void) {
+    struct timeval tv;
+    gettimeofday(&tv, NULL);
+    return (uint64_t)tv.tv_sec * 1000 + tv.tv_usec / 1000;
+}
 
 /*
  * Signal handler
@@ -577,6 +590,137 @@ static void printStats(void) {
 }
 
 /*
+ * Send response packet to a specific client
+ * Called by sound_manager.c
+ */
+void sendResponseToClient(uint32_t clientId, uint8_t respType, const char *message) {
+    ClientInfo *client = findClientById(clientId);
+    if (!client) {
+        return;
+    }
+
+    uint8_t packet[512];
+    int msgLen = strlen(message);
+    if (msgLen > 500) msgLen = 500;
+
+    packet[0] = respType;
+    memcpy(packet + 1, message, msgLen);
+    packet[1 + msgLen] = '\0';
+
+    int packetLen = 1 + msgLen + 1;
+
+    sendto(g_socket, (char *)packet, packetLen, 0,
+           (struct sockaddr *)&client->addr, sizeof(client->addr));
+
+    printf("[SOUND] Response to client %u: %s\n", clientId, message);
+}
+
+/*
+ * Broadcast Opus audio packet to all connected clients
+ * Called by sound_manager.c for sound playback
+ */
+void broadcastOpusPacket(uint8_t fromClient, uint8_t channel,
+                         uint32_t sequence, const uint8_t *opus, int opusLen) {
+    uint8_t relayBuffer[MAX_PACKET_SIZE];
+    RelayPacketHeader *relay = (RelayPacketHeader *)relayBuffer;
+
+    relay->type = VOICE_PKT_AUDIO;
+    relay->fromClient = fromClient;
+    relay->channel = channel;
+    relay->sequence = htonl(sequence);
+    relay->opusLen = htons((uint16_t)opusLen);
+
+    memcpy(relayBuffer + sizeof(RelayPacketHeader), opus, opusLen);
+    int relayLen = sizeof(RelayPacketHeader) + opusLen;
+
+    /* Send to all connected clients (including spectators for custom sounds) */
+    time_t now = time(NULL);
+    int sentCount = 0;
+    for (int i = 0; i < g_numClients; i++) {
+        ClientInfo *recipient = &g_clients[i];
+
+        /* Skip stale clients */
+        if (now - recipient->lastSeen > CLIENT_TIMEOUT_SEC) {
+            continue;
+        }
+
+        /* Note: We DO include spectators for custom sound playback
+         * (they can hear them too, makes spectating more fun) */
+
+        int sent = sendto(g_socket, (char *)relayBuffer, relayLen, 0,
+                         (struct sockaddr *)&recipient->addr,
+                         sizeof(recipient->addr));
+
+        if (sent > 0) {
+            recipient->packetsSent++;
+            g_totalPacketsRouted++;
+            sentCount++;
+        }
+    }
+
+    /* Log first packet of each playback for debugging */
+    static uint32_t lastLoggedSeq = 0xFFFFFFFF;
+    if (sequence == 0 || sequence - lastLoggedSeq > 50) {
+        printf("[SOUND] Broadcast seq=%u len=%d to %d clients\n", sequence, opusLen, sentCount);
+        lastLoggedSeq = sequence;
+    }
+}
+
+/*
+ * Process sound playback - streams Opus packets at correct interval
+ */
+static void processSoundPlayback(void) {
+    if (!SoundMgr_IsPlaying()) {
+        return;
+    }
+
+    /* Check timing - need to send packet every 20ms */
+    uint64_t nowMs = getTimeMs();
+
+    /* Debug timing on first packet */
+    static int packetCount = 0;
+    if (g_lastSoundPacketTime == 0) {
+        printf("SoundMgr: Starting playback stream at time %lu\n", (unsigned long)nowMs);
+        packetCount = 0;
+    }
+
+    if (g_lastSoundPacketTime > 0) {
+        uint64_t elapsed = nowMs - g_lastSoundPacketTime;
+        if (elapsed < SOUND_PACKET_INTERVAL_MS) {
+            return;  /* Not time yet */
+        }
+        /* Log if timing is way off */
+        if (packetCount < 5 || (packetCount % 100 == 0)) {
+            printf("SoundMgr: Packet %d, elapsed=%lums since last\n", packetCount, (unsigned long)elapsed);
+        }
+    }
+    g_lastSoundPacketTime = nowMs;
+    packetCount++;
+
+    /* Get next Opus packet and broadcast it */
+    uint8_t opusBuffer[512];
+    int opusLen = 0;
+
+    static uint32_t soundSeq = 0;
+    if (SoundMgr_GetNextOpusPacket(opusBuffer, &opusLen)) {
+        /* Use the actual client ID of who initiated the sound */
+        uint8_t initiatorId = (uint8_t)SoundMgr_GetPlaybackClientId();
+        broadcastOpusPacket(initiatorId, VOICE_CHAN_SOUND, soundSeq++, opusBuffer, opusLen);
+    } else {
+        /* Playback finished - reset timing */
+        g_lastSoundPacketTime = 0;
+        printf("SoundMgr: Playback finished\n");
+    }
+}
+
+/*
+ * Check if packet is a sound command (0x10-0x18 range)
+ */
+static bool isSoundCommand(uint8_t type) {
+    return type >= VOICE_CMD_SOUND_ADD && type <= VOICE_CMD_SOUND_STOP;
+}
+
+/*
  * Main server loop
  */
 static void serverLoop(void) {
@@ -584,15 +728,27 @@ static void serverLoop(void) {
     struct sockaddr_in clientAddr;
     socklen_t clientLen;
     time_t lastStatTime = time(NULL);
+    fd_set readfds;
+    struct timeval tv;
 
     printf("\nVoice server running. Press Ctrl+C to stop.\n");
     printf("Routing modes: TEAM (same team only), ALL (everyone)\n\n");
 
     while (g_running) {
-        clientLen = sizeof(clientAddr);
+        /* Use select with 10ms timeout to allow sound playback processing */
+        FD_ZERO(&readfds);
+        FD_SET(g_socket, &readfds);
+        tv.tv_sec = 0;
+        tv.tv_usec = 10000;  /* 10ms timeout */
 
-        int received = recvfrom(g_socket, (char*)buffer, sizeof(buffer), 0,
+        int selectResult = select(g_socket + 1, &readfds, NULL, NULL, &tv);
+
+        int received = 0;
+        if (selectResult > 0 && FD_ISSET(g_socket, &readfds)) {
+            clientLen = sizeof(clientAddr);
+            received = recvfrom(g_socket, (char*)buffer, sizeof(buffer), 0,
                                 (struct sockaddr*)&clientAddr, &clientLen);
+        }
 
         if (received > 0) {
             g_totalPacketsReceived++;
@@ -645,11 +801,27 @@ static void serverLoop(void) {
                         break;
 
                     default:
-                        /* Unknown packet type */
+                        /* Check for sound commands */
+                        if (isSoundCommand(type)) {
+                            /* Extract client ID from packet - after type byte */
+                            uint32_t clientId = 0;
+                            if (received >= 5) {
+                                memcpy(&clientId, buffer + 1, 4);
+                                clientId = ntohl(clientId);
+                            }
+                            /* Dispatch to sound manager */
+                            SoundMgr_HandlePacket(clientId, &clientAddr, buffer, received);
+                        }
                         break;
                 }
             }
         }
+
+        /* Process sound manager operations */
+        SoundMgr_Frame();
+
+        /* Process active sound playback */
+        processSoundPlayback();
 
         /* Print stats every 30 seconds */
         time_t now = time(NULL);
@@ -698,7 +870,8 @@ int main(int argc, char *argv[]) {
     }
 
     printf("===========================================\n");
-    printf("  ET:Legacy Voice Routing Server v1.0\n");
+    printf("  ET:Legacy Voice Routing Server v1.1\n");
+    printf("  (with ETMan Custom Sounds support)\n");
     printf("===========================================\n\n");
 
     /* Setup signal handler */
@@ -716,8 +889,17 @@ int main(int argc, char *argv[]) {
     /* Initialize client tracking */
     memset(g_clients, 0, sizeof(g_clients));
 
+    /* Initialize sound manager */
+    if (!SoundMgr_Init("./sounds")) {
+        fprintf(stderr, "Warning: Sound manager initialization failed\n");
+        /* Non-fatal - voice routing still works */
+    }
+
     /* Run server */
     serverLoop();
+
+    /* Shutdown sound manager */
+    SoundMgr_Shutdown();
 
     /* Print final stats */
     printStats();

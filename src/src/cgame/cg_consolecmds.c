@@ -38,6 +38,7 @@
 #ifdef FEATURE_VOICE
 #include "cg_voice.h"
 #include "cg_customsound.h"
+#include "cg_etman.h"
 #endif
 
 char *Binding_FromName(const char *cvar);
@@ -3485,6 +3486,7 @@ static consoleCommand_t commands[] =
 	{ "voiceunmute",            Voice_Cmd_VoiceUnmute_f   },
 	{ "voicestatus",            Voice_Cmd_VoiceStatus_f   },
 	{ "customsound",            CustomSound_Cmd_f         },
+	{ "etman",                  ETMan_Cmd_f               },
 #endif
 
 	{ NULL,                     NULL                      }

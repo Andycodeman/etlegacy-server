@@ -217,21 +217,25 @@ build_mod_windows() {
 
 # Build the voice server
 build_voice_server() {
-    local build_dir="$BUILD_BASE/voice-server"
+    local build_dir="$PROJECT_DIR/voice-server/build"
 
     log_step "Building voice server..."
 
     mkdir -p "$build_dir"
     cd "$build_dir"
 
-    cmake "$PROJECT_DIR/voice-server"
+    cmake ..
     make -j$(nproc)
 
-    # Copy output
+    # Copy output - fail if binary doesn't exist
     mkdir -p "$OUTPUT_DIR/server"
-    cp -v voice_server "$OUTPUT_DIR/server/" 2>/dev/null || true
-
-    log_info "Voice server built successfully!"
+    if [ -f "$build_dir/voice_server" ]; then
+        cp -v "$build_dir/voice_server" "$OUTPUT_DIR/server/"
+        log_info "Voice server built successfully!"
+    else
+        log_error "Voice server build failed - binary not found!"
+        return 1
+    fi
 }
 
 # Build the rickroll pk3 (separate from main mod pk3 for HTTP downloads)
