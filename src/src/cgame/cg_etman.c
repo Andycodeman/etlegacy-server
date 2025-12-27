@@ -348,7 +348,7 @@ static void ETMan_ShowHelp(void)
 	CG_Printf("^7  /etman renamesnd <old> <new>  ^5- Rename a sound\n");
 	CG_Printf("^7  /etman stopsnd                ^5- Stop playing sound\n");
 	CG_Printf("^7  /etman sharesnd <name> <player> ^5- Share with player (coming soon)\n");
-	CG_Printf("\n^3Sound Limits: ^7100 sounds, 2MB per file, 10 sec max duration\n");
+	CG_Printf("\n^3Sound Limits: ^7100 sounds, 5MB per file, 30 sec max duration\n");
 }
 
 /**

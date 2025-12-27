@@ -7,7 +7,6 @@
  */
 
 #include "cg_voice.h"
-#include "cg_customsound.h"
 #include "cg_etman.h"
 
 #ifdef FEATURE_VOICE
@@ -617,37 +616,7 @@ static int Voice_InputCallback(const void *input, void *output,
 	(void)statusFlags;
 	(void)userData;
 
-	/* Check if custom sound is playing - use that instead of mic */
-	if (CustomSound_IsPlaying() && voice.connected)
-	{
-		int16_t customFrame[VOICE_FRAME_SIZE];
-
-		if (CustomSound_GetNextFrame(customFrame))
-		{
-			/* Encode custom sound to Opus */
-			opusLen = opus_encode(voice.encoder, customFrame, VOICE_FRAME_SIZE,
-			                      opusData, sizeof(opusData));
-			if (opusLen > 0)
-			{
-				/* Build and send packet */
-				header = (voicePacketHeader_t *)packet;
-				header->type = VOICE_PKT_AUDIO;
-				header->clientId = htonl((uint32_t)cg.clientNum);
-				header->sequence = htonl(voice.sequence++);
-				header->channel = VOICE_CHAN_SOUND;
-				header->opusLen = htons((uint16_t)opusLen);
-
-				Com_Memcpy(packet + sizeof(voicePacketHeader_t), opusData, opusLen);
-				packetLen = sizeof(voicePacketHeader_t) + opusLen;
-
-				sendto(voice.socket, (char *)packet, packetLen, 0,
-				       (struct sockaddr *)&voice.serverAddr,
-				       sizeof(voice.serverAddr));
-				voice.packetsSent++;
-			}
-		}
-		return paContinue;
-	}
+	/* Custom sounds now handled server-side via ETMan */
 
 	if (!voice.transmitting || !samples || !voice.connected)
 	{
@@ -813,10 +782,10 @@ static int Voice_OutputCallback(const void *input, void *output,
 	if (numSources > 0)
 	{
 		// Apply user-configurable volume (voice_volume cvar, 0-100 range)
-		// Scale: 0 = silent, 50 = normal (2x), 100 = max (4x)
-		float vol = (voice_volume.value / 50.0f) * 2.0f;
+		// Scale: 0 = silent, 50 = unity (1.0x), 100 = max (2x)
+		float vol = voice_volume.value / 50.0f;
 		if (vol < 0.0f) vol = 0.0f;
-		if (vol > 4.0f) vol = 4.0f;
+		if (vol > 2.0f) vol = 2.0f;
 
 		for (j = 0; j < (int)(frameCount * VOICE_CHANNELS_OUT); j++)
 		{
@@ -1065,9 +1034,6 @@ qboolean Voice_Init(void)
 	voice.initialized = qtrue;
 	voice.state = VOICE_STATE_IDLE;
 
-	/* Initialize custom sound system */
-	CustomSound_Init();
-
 	/* Initialize ETMan server-side sounds */
 	ETMan_Init();
 
@@ -1085,9 +1051,6 @@ void Voice_Shutdown(void)
 	{
 		return;
 	}
-
-	/* Shutdown custom sound system */
-	CustomSound_Shutdown();
 
 	/* Shutdown ETMan */
 	ETMan_Shutdown();
@@ -1552,7 +1515,8 @@ void Voice_DrawTalkingHUD(void)
 		return;
 	}
 
-	x = VOICE_HUD_X;
+	/* Use Ccg_WideX for proper widescreen positioning - align to right edge */
+	x = Ccg_WideX(SCREEN_WIDTH) - 140;
 	y = VOICE_HUD_Y;
 
 	for (i = 0; i < MAX_CLIENTS; i++)

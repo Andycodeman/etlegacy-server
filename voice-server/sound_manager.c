@@ -283,23 +283,43 @@ void SoundMgr_HandlePacket(uint32_t clientId, struct sockaddr_in *clientAddr,
                 return;
             }
 
-            /* Build response message */
-            char response[2048];
-            int offset = snprintf(response, sizeof(response),
-                "You have %d sound%s:", count, count == 1 ? "" : "s");
-
-            for (int i = 0; i < count && offset < (int)sizeof(response) - 64; i++) {
-                offset += snprintf(response + offset, sizeof(response) - offset,
-                    "\n  %s (%.1f KB)", sounds[i].name,
-                    (float)sounds[i].fileSize / 1024.0f);
-            }
-
             if (count == 0) {
-                snprintf(response, sizeof(response),
+                sendResponseToClient(clientId, VOICE_RESP_LIST,
                     "No sounds. Use /etman add <url> <name> to add one!");
+                break;
             }
 
-            sendResponseToClient(clientId, VOICE_RESP_LIST, response);
+            /* Build response messages - split into chunks to avoid truncation */
+            /* Each sound entry is ~30 chars max, aim for ~25 per message */
+            #define SOUNDS_PER_MSG 25
+            #define RESP_BUF_SIZE 1024
+
+            int msgNum = 0;
+            int totalMsgs = (count + SOUNDS_PER_MSG - 1) / SOUNDS_PER_MSG;
+
+            for (int start = 0; start < count; start += SOUNDS_PER_MSG) {
+                char response[RESP_BUF_SIZE];
+                int offset;
+                int end = start + SOUNDS_PER_MSG;
+                if (end > count) end = count;
+
+                msgNum++;
+                if (totalMsgs == 1) {
+                    offset = snprintf(response, sizeof(response),
+                        "You have %d sound%s:", count, count == 1 ? "" : "s");
+                } else {
+                    offset = snprintf(response, sizeof(response),
+                        "Sounds (%d/%d) - %d total:", msgNum, totalMsgs, count);
+                }
+
+                for (int i = start; i < end && offset < (int)sizeof(response) - 64; i++) {
+                    offset += snprintf(response + offset, sizeof(response) - offset,
+                        "\n  %s (%.1fKB)", sounds[i].name,
+                        (float)sounds[i].fileSize / 1024.0f);
+                }
+
+                sendResponseToClient(clientId, VOICE_RESP_LIST, response);
+            }
             break;
         }
 
@@ -524,7 +544,16 @@ int SoundMgr_GetSoundCount(const char *guid) {
 }
 
 /*
- * List all sounds for a player
+ * Comparison function for sorting SoundInfo alphabetically by name
+ */
+static int compareSoundInfo(const void *a, const void *b) {
+    const SoundInfo *sa = (const SoundInfo *)a;
+    const SoundInfo *sb = (const SoundInfo *)b;
+    return strcasecmp(sa->name, sb->name);
+}
+
+/*
+ * List all sounds for a player (sorted alphabetically)
  */
 int SoundMgr_ListSounds(const char *guid, SoundInfo *outList, int maxCount) {
     char playerDir[512];
@@ -565,6 +594,12 @@ int SoundMgr_ListSounds(const char *guid, SoundInfo *outList, int maxCount) {
     }
 
     closedir(dir);
+
+    /* Sort alphabetically by name */
+    if (count > 1) {
+        qsort(outList, count, sizeof(SoundInfo), compareSoundInfo);
+    }
+
     return count;
 }
 
@@ -1060,7 +1095,53 @@ static void updateCooldown(const char *guid) {
 }
 
 /*
+ * Helper: Resample PCM from srcRate to dstRate using linear interpolation
+ * Returns newly allocated buffer (caller must free) and output sample count
+ */
+static int16_t* resampleLinear(const int16_t *src, int srcSamples, int srcRate,
+                                int dstRate, int *outSamples) {
+    if (srcRate == dstRate) {
+        /* No resampling needed - just copy */
+        int16_t *dst = (int16_t*)malloc(srcSamples * sizeof(int16_t));
+        if (!dst) return NULL;
+        memcpy(dst, src, srcSamples * sizeof(int16_t));
+        *outSamples = srcSamples;
+        return dst;
+    }
+
+    /* Calculate output size */
+    int dstSamples = (int)((int64_t)srcSamples * dstRate / srcRate);
+    if (dstSamples <= 0) return NULL;
+
+    int16_t *dst = (int16_t*)malloc(dstSamples * sizeof(int16_t));
+    if (!dst) return NULL;
+
+    /* Linear interpolation resampling */
+    double ratio = (double)srcRate / (double)dstRate;
+
+    for (int i = 0; i < dstSamples; i++) {
+        double srcPos = i * ratio;
+        int srcIdx = (int)srcPos;
+        double frac = srcPos - srcIdx;
+
+        if (srcIdx >= srcSamples - 1) {
+            /* At or past end - use last sample */
+            dst[i] = src[srcSamples - 1];
+        } else {
+            /* Interpolate between two samples */
+            int16_t s0 = src[srcIdx];
+            int16_t s1 = src[srcIdx + 1];
+            dst[i] = (int16_t)(s0 + frac * (s1 - s0));
+        }
+    }
+
+    *outSamples = dstSamples;
+    return dst;
+}
+
+/*
  * Helper: Decode MP3 to PCM (48kHz mono)
+ * Handles any input sample rate by resampling to 48kHz
  */
 static bool decodeMP3(const char *filepath, int16_t **outPcm, int *outSamples) {
     FILE *f = fopen(filepath, "rb");
@@ -1091,21 +1172,23 @@ static bool decodeMP3(const char *filepath, int16_t **outPcm, int *outSamples) {
     }
     fclose(f);
 
-    /* Decode */
+    /* First pass: decode to get sample rate and total samples */
     mp3dec_frame_info_t frameInfo;
     int16_t frameBuffer[MINIMP3_MAX_SAMPLES_PER_FRAME];
 
-    int maxSamples = OPUS_SAMPLE_RATE * SOUND_MAX_DURATION_SEC;
-    int16_t *pcmBuffer = (int16_t*)malloc(maxSamples * sizeof(int16_t));
-    if (!pcmBuffer) {
+    /* Allocate temp buffer for native sample rate (estimate max ~10 min at 48kHz stereo) */
+    int maxNativeSamples = 48000 * 60 * 10;  /* 10 minutes max */
+    int16_t *nativeBuffer = (int16_t*)malloc(maxNativeSamples * sizeof(int16_t));
+    if (!nativeBuffer) {
         free(mp3Data);
         return false;
     }
 
-    int totalSamples = 0;
+    int nativeSamples = 0;
     int offset = 0;
+    int detectedRate = 0;
 
-    while (offset < fileSize && totalSamples < maxSamples) {
+    while (offset < fileSize && nativeSamples < maxNativeSamples) {
         int samples = mp3dec_decode_frame(&g_soundMgr.mp3Decoder,
                                           mp3Data + offset,
                                           fileSize - offset,
@@ -1120,34 +1203,68 @@ static bool decodeMP3(const char *filepath, int16_t **outPcm, int *outSamples) {
 
         offset += frameInfo.frame_bytes;
 
+        /* Capture sample rate from first valid frame */
+        if (detectedRate == 0 && frameInfo.hz > 0) {
+            detectedRate = frameInfo.hz;
+            printf("SoundMgr: MP3 sample rate detected: %d Hz\n", detectedRate);
+        }
+
         /* Convert to mono if stereo */
         if (frameInfo.channels == 2) {
-            for (int i = 0; i < samples && totalSamples < maxSamples; i++) {
-                pcmBuffer[totalSamples++] = (frameBuffer[i * 2] + frameBuffer[i * 2 + 1]) / 2;
+            for (int i = 0; i < samples && nativeSamples < maxNativeSamples; i++) {
+                nativeBuffer[nativeSamples++] = (frameBuffer[i * 2] + frameBuffer[i * 2 + 1]) / 2;
             }
         } else {
             int copyCount = samples;
-            if (totalSamples + copyCount > maxSamples) {
-                copyCount = maxSamples - totalSamples;
+            if (nativeSamples + copyCount > maxNativeSamples) {
+                copyCount = maxNativeSamples - nativeSamples;
             }
-            memcpy(pcmBuffer + totalSamples, frameBuffer, copyCount * sizeof(int16_t));
-            totalSamples += copyCount;
+            memcpy(nativeBuffer + nativeSamples, frameBuffer, copyCount * sizeof(int16_t));
+            nativeSamples += copyCount;
         }
-
-        /* Handle sample rate conversion if needed */
-        /* For simplicity, we assume MP3 is close to 48kHz */
-        /* A proper implementation would resample here */
     }
 
     free(mp3Data);
 
-    if (totalSamples == 0) {
-        free(pcmBuffer);
+    if (nativeSamples == 0 || detectedRate == 0) {
+        free(nativeBuffer);
         return false;
     }
 
-    *outPcm = pcmBuffer;
-    *outSamples = totalSamples;
+    /* Resample to 48kHz if needed */
+    int16_t *finalBuffer;
+    int finalSamples;
+
+    if (detectedRate != OPUS_SAMPLE_RATE) {
+        printf("SoundMgr: Resampling from %d Hz to %d Hz (%d samples)\n",
+               detectedRate, OPUS_SAMPLE_RATE, nativeSamples);
+
+        finalBuffer = resampleLinear(nativeBuffer, nativeSamples, detectedRate,
+                                     OPUS_SAMPLE_RATE, &finalSamples);
+        free(nativeBuffer);
+
+        if (!finalBuffer) {
+            return false;
+        }
+
+        printf("SoundMgr: Resampled to %d samples (%.2f sec)\n",
+               finalSamples, (float)finalSamples / OPUS_SAMPLE_RATE);
+    } else {
+        /* Already at target rate */
+        finalBuffer = nativeBuffer;
+        finalSamples = nativeSamples;
+    }
+
+    /* Enforce max duration */
+    int maxSamples = OPUS_SAMPLE_RATE * SOUND_MAX_DURATION_SEC;
+    if (finalSamples > maxSamples) {
+        printf("SoundMgr: Truncating from %d to %d samples (max %d sec)\n",
+               finalSamples, maxSamples, SOUND_MAX_DURATION_SEC);
+        finalSamples = maxSamples;
+    }
+
+    *outPcm = finalBuffer;
+    *outSamples = finalSamples;
 
     return true;
 }

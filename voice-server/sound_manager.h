@@ -51,8 +51,8 @@
  * Sound Limits
  */
 #define SOUND_MAX_PER_USER      100         /* Max sounds per player */
-#define SOUND_MAX_FILESIZE      (2 * 1024 * 1024)  /* 2MB max per file */
-#define SOUND_MAX_DURATION_SEC  10          /* 10 second max duration */
+#define SOUND_MAX_FILESIZE      (5 * 1024 * 1024)  /* 5MB max per file */
+#define SOUND_MAX_DURATION_SEC  30          /* 30 second max duration */
 #define SOUND_MAX_NAME_LEN      32          /* Max sound name length */
 #define SOUND_GUID_LEN          32          /* Player GUID length (without null) */
 #define SOUND_ADD_COOLDOWN_SEC  10          /* Cooldown between add requests */
