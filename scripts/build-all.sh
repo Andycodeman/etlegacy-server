@@ -295,6 +295,9 @@ create_mod_pk3() {
         mkdir -p ui
         cp "$SRC_DIR/etmain/ui/options_controls.menu" ui/ 2>/dev/null || true
         cp "$SRC_DIR/etmain/ui/ingame_serverinfo.menu" ui/ 2>/dev/null || true
+        cp "$SRC_DIR/etmain/ui/options.menu" ui/ 2>/dev/null || true
+        cp "$SRC_DIR/etmain/ui/options_voice.menu" ui/ 2>/dev/null || true
+        cp "$SRC_DIR/etmain/ui/menus.txt" ui/ 2>/dev/null || true
     fi
 
     # Create pk3 with modules at root level

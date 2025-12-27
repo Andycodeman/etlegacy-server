@@ -46,10 +46,11 @@ typedef enum
  */
 typedef struct
 {
-	qboolean talking;           // Currently transmitting
-	int      talkingTime;       // When they started talking (cg.time)
-	int      lastPacketTime;    // Last packet received
-	qboolean muted;             // Locally muted by user
+	qboolean       talking;           // Currently transmitting
+	int            talkingTime;       // When they started talking (cg.time)
+	int            lastPacketTime;    // Last packet received
+	qboolean       muted;             // Locally muted by user
+	voiceChannel_t channel;           // Channel they're speaking on (team/all)
 } voiceClientInfo_t;
 
 /*

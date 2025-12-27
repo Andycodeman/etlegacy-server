@@ -641,7 +641,7 @@ static cvarTable_t cvarTable[] =
 	// Voice chat cvars - NOT archived so defaults always apply (users can still override in autoexec.cfg)
 	{ &voice_enable,                          "voice_enable",                          "1",           0,                            0 },
 	{ &voice_volume,                          "voice_volume",                          "50.0",        0,                            0 },  // 50x output - must overpower game sounds
-	{ &voice_inputGain,                       "voice_inputGain",                       "5.0",         0,                            0 },  // 5x input gain
+	{ &voice_inputGain,                       "voice_inputGain",                       "10.0",        0,                            0 },  // 10 = halfway (default)
 	{ &voice_showTalking,                     "voice_showTalking",                     "1",           0,                            0 },
 	{ &voice_showMeter,                       "voice_showMeter",                       "1",           0,                            0 },
 	{ &voice_serverPort,                      "voice_serverPort",                      "1",           0,                            0 },

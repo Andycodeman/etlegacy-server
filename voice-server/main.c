@@ -92,6 +92,7 @@ typedef struct {
 typedef struct {
     uint8_t  type;
     uint8_t  fromClient;    // Who is speaking (ET client slot)
+    uint8_t  channel;       // Voice channel (VOICE_CHAN_TEAM or VOICE_CHAN_ALL)
     uint32_t sequence;
     uint16_t opusLen;
     // opus data follows
@@ -118,6 +119,14 @@ typedef struct {
 #pragma pack(pop)
 
 /*
+ * Transmission rate limiting
+ * Each client can transmit max 30 seconds per minute.
+ * Tracking resets at the start of each minute.
+ */
+#define VOICE_MAX_TX_MS_PER_MINUTE  30000   /* 30 seconds max per minute */
+#define VOICE_FRAME_MS              20      /* Each packet = 20ms of audio */
+
+/*
  * Connected Client Info
  */
 typedef struct {
@@ -128,6 +137,10 @@ typedef struct {
     uint32_t packetsReceived;
     uint32_t packetsSent;
     bool     authenticated;
+    /* Rate limiting */
+    time_t   txLimitMinute;     // Which minute we're tracking (time / 60)
+    uint32_t txMsThisMinute;    // Milliseconds transmitted this minute
+    bool     txLimitWarned;     // Have we warned them this minute?
 } ClientInfo;
 
 /*
@@ -242,6 +255,7 @@ static void routeVoicePacket(ClientInfo *sender, uint8_t *packet, int packetLen,
     /* Build relay packet */
     relay->type = VOICE_PKT_AUDIO;
     relay->fromClient = (uint8_t)sender->clientId;
+    relay->channel = channel;  /* Include channel so clients know team vs all */
     relay->sequence = htonl(sequence);
     relay->opusLen = htons(opusLen);
 
@@ -378,6 +392,38 @@ static void handleTeamUpdate(struct sockaddr_in *addr, uint8_t *buffer, int rece
 }
 
 /*
+ * Check and update transmission rate limit for a client.
+ * Returns true if client is allowed to transmit, false if rate limited.
+ */
+static bool checkTransmitLimit(ClientInfo *client) {
+    time_t now = time(NULL);
+    time_t currentMinute = now / 60;
+
+    /* Reset tracking if we're in a new minute */
+    if (client->txLimitMinute != currentMinute) {
+        client->txLimitMinute = currentMinute;
+        client->txMsThisMinute = 0;
+        client->txLimitWarned = false;
+    }
+
+    /* Check if they've exceeded the limit */
+    if (client->txMsThisMinute >= VOICE_MAX_TX_MS_PER_MINUTE) {
+        /* Log warning once per minute */
+        if (!client->txLimitWarned) {
+            printf("Client %u rate limited (used %u ms of %d ms this minute)\n",
+                   client->clientId, client->txMsThisMinute, VOICE_MAX_TX_MS_PER_MINUTE);
+            client->txLimitWarned = true;
+        }
+        return false;
+    }
+
+    /* Add this packet's audio duration */
+    client->txMsThisMinute += VOICE_FRAME_MS;
+
+    return true;
+}
+
+/*
  * Handle voice audio packet
  */
 static void handleAudioPacket(struct sockaddr_in *addr, uint8_t *buffer, int received) {
@@ -406,9 +452,10 @@ static void handleAudioPacket(struct sockaddr_in *addr, uint8_t *buffer, int rec
 
     client->packetsReceived++;
 
-    /* Update team from packet if we don't have auth info yet */
-    /* The channel byte encodes team info in high bits for convenience */
-    /* For now, trust the channel and extract team from existing state */
+    /* Check rate limit - drop packet if exceeded */
+    if (!checkTransmitLimit(client)) {
+        return;  /* Rate limited, don't route this packet */
+    }
 
     /* Debug routing decisions periodically */
     debugRouting(clientId, client->team, header->channel);
@@ -418,8 +465,9 @@ static void handleAudioPacket(struct sockaddr_in *addr, uint8_t *buffer, int rec
 
     /* Log periodically */
     if (client->packetsReceived % 100 == 1) {
-        printf("Client %u: seq=%u, opus=%u bytes, team=%d, channel=%d\n",
-               clientId, sequence, opusLen, client->team, header->channel);
+        printf("Client %u: seq=%u, opus=%u bytes, team=%d, channel=%d, txMs=%u/%d\n",
+               clientId, sequence, opusLen, client->team, header->channel,
+               client->txMsThisMinute, VOICE_MAX_TX_MS_PER_MINUTE);
     }
 }
 

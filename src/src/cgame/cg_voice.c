@@ -106,6 +106,7 @@ typedef struct
 {
 	uint8_t  type;        // VOICE_PKT_AUDIO
 	uint8_t  fromClient;  // Who is speaking (ET client slot)
+	uint8_t  channel;     // Voice channel (VOICE_CHAN_TEAM or VOICE_CHAN_ALL)
 	uint32_t sequence;
 	uint16_t opusLen;
 	// opus data follows
@@ -130,6 +131,13 @@ typedef struct
 /*
  * CVars (defined in cg_cvars.c, declared extern in cg_voice.h)
  */
+
+/*
+ * Transmission rate limiting (must match voice server)
+ * 30 seconds max per minute, resets each minute
+ */
+#define VOICE_MAX_TX_MS_PER_MINUTE  30000
+#define VOICE_TX_FRAME_MS           20
 
 /*
  * Module state
@@ -170,6 +178,13 @@ static struct
 
 	// Keepalive
 	int                lastKeepaliveTime;  // cg.time of last keepalive sent
+
+	// Rate limiting (client-side tracking to show feedback)
+	// Note: These are accessed from audio callback thread, so use volatile
+	volatile int       txLimitMinute;      // Which minute we're tracking (time(NULL) / 60)
+	volatile int       txMsThisMinute;     // Milliseconds transmitted this minute
+	volatile qboolean  txLimitHit;         // Flag for main thread to show message
+	volatile qboolean  txLimitActive;      // Currently rate limited?
 
 } voice;
 
@@ -588,6 +603,7 @@ static int Voice_InputCallback(const void *input, void *output,
                                void *userData)
 {
 	const int16_t *samples = (const int16_t *)input;
+	int16_t gainedSamples[VOICE_FRAME_SIZE];
 	uint8_t opusData[VOICE_MAX_PACKET];
 	uint8_t packet[VOICE_MAX_PACKET];
 	int opusLen, packetLen;
@@ -605,11 +621,63 @@ static int Voice_InputCallback(const void *input, void *output,
 		return paContinue;
 	}
 
-	// Calculate input level for meter
+	// Check rate limit (30 seconds per minute max)
+	{
+		time_t now = time(NULL);
+		int currentMinute = (int)(now / 60);
+
+		// Reset tracking if we're in a new minute
+		if (voice.txLimitMinute != currentMinute)
+		{
+			voice.txLimitMinute = currentMinute;
+			voice.txMsThisMinute = 0;
+			voice.txLimitActive = qfalse;
+		}
+
+		// Check if we've hit the limit
+		if (voice.txMsThisMinute >= VOICE_MAX_TX_MS_PER_MINUTE)
+		{
+			// Set flag for main thread to show message
+			// Only set once per second to avoid spam when holding key
+			{
+				static int lastWarningTime = 0;
+				int now = (int)time(NULL);
+				if (now != lastWarningTime)
+				{
+					voice.txLimitHit = qtrue;
+					lastWarningTime = now;
+				}
+			}
+			voice.txLimitActive = qtrue;  // Always keep this set while over limit
+			voice.inputLevel = 0;  // Show no input while limited
+			return paContinue;     // Don't send packet
+		}
+
+		// Track this packet's transmission time
+		voice.txMsThisMinute += VOICE_TX_FRAME_MS;
+	}
+
+	// Apply input gain from cvar (voice_inputGain, 0-20 range)
+	// Scale: 0 = silent, 5 = normal (1x), 10 = 2x, 20 = 4x
+	{
+		float gain = voice_inputGain.value;
+		if (gain < 0.0f) gain = 0.0f;
+		if (gain > 20.0f) gain = 20.0f;
+
+		for (i = 0; i < (int)frameCount; i++)
+		{
+			int32_t amplified = (int32_t)(samples[i] * gain);
+			if (amplified > 32767) amplified = 32767;
+			if (amplified < -32768) amplified = -32768;
+			gainedSamples[i] = (int16_t)amplified;
+		}
+	}
+
+	// Calculate input level for meter (from gained samples)
 	// Find peak amplitude in this frame (more responsive than average)
 	for (i = 0; i < (int)frameCount; i++)
 	{
-		int s = samples[i];
+		int s = gainedSamples[i];
 		int absVal = (s < 0) ? -s : s;
 		if (absVal > sum)
 		{
@@ -623,11 +691,8 @@ static int Voice_InputCallback(const void *input, void *output,
 		voice.inputLevel = 100;
 	}
 
-	// Apply input gain
-	// Note: We could modify samples here, but Opus handles gain internally
-
-	// Encode to Opus
-	opusLen = opus_encode(voice.encoder, samples, (int)frameCount,
+	// Encode to Opus (using gained samples)
+	opusLen = opus_encode(voice.encoder, gainedSamples, (int)frameCount,
 	                      opusData, sizeof(opusData));
 	if (opusLen < 0)
 	{
@@ -713,8 +778,11 @@ static int Voice_OutputCallback(const void *input, void *output,
 	// Apply volume and clamp
 	if (numSources > 0)
 	{
-		// 10x amplification - loud enough to hear over game but not distorted
-		float vol = 10.0f;
+		// Apply user-configurable volume (voice_volume cvar, 0-100 range)
+		// Scale: 0 = silent, 50 = normal (2x), 100 = max (4x)
+		float vol = (voice_volume.value / 50.0f) * 2.0f;
+		if (vol < 0.0f) vol = 0.0f;
+		if (vol > 4.0f) vol = 4.0f;
 
 		for (j = 0; j < (int)(frameCount * VOICE_CHANNELS_OUT); j++)
 		{
@@ -748,7 +816,7 @@ static void Voice_ProcessIncoming(void)
 	uint16_t opusLen;
 	int decodedSamples;
 
-	if (voice.socket == VOICE_INVALID_SOCKET)
+	if (voice.socket == VOICE_INVALID_SOCKET || !voice_enable.integer)
 	{
 		return;
 	}
@@ -829,6 +897,7 @@ static void Voice_ProcessIncoming(void)
 			// Update client info for HUD
 			voice.clientInfo[clientNum].talking = qtrue;
 			voice.clientInfo[clientNum].lastPacketTime = cg.time;
+			voice.clientInfo[clientNum].channel = (voiceChannel_t)relay->channel;
 			if (!voice.clientInfo[clientNum].talkingTime)
 			{
 				voice.clientInfo[clientNum].talkingTime = cg.time;
@@ -1006,6 +1075,14 @@ void Voice_Frame(void)
 		}
 	}
 
+	// Check if rate limit was hit (flag set by audio callback thread)
+	if (voice.txLimitHit)
+	{
+		voice.txLimitHit = qfalse;  // Clear flag
+		CG_Printf("^3Voice: Limit reached (30 sec/min). Wait for next minute to talk again.\n");
+		CG_CenterPrint("^3Voice limit reached!\n^7Wait for next minute.");
+	}
+
 	// Process incoming voice packets
 	Voice_ProcessIncoming();
 
@@ -1015,7 +1092,7 @@ void Voice_Frame(void)
 
 void Voice_StartTransmit(voiceChannel_t channel)
 {
-	if (!voice.initialized || !voice.connected)
+	if (!voice.initialized || !voice.connected || !voice_enable.integer)
 	{
 		return;
 	}
@@ -1356,19 +1433,29 @@ void Voice_Cmd_VoiceStatus_f(void)
 #define VOICE_TX_Y           (SCREEN_HEIGHT - 100)
 
 /*
- * Get team color for a client
+ * Get color for voice HUD based on channel type
+ * - Team chat: Gold (it's always your team, so team color is redundant)
+ * - All chat: Red/Blue based on speaker's team (useful to know who's talking globally)
  */
-static vec4_t *Voice_GetTeamColor(int clientNum)
+static vec4_t *Voice_GetChannelColor(int clientNum, voiceChannel_t channel)
 {
-	static vec4_t axisColor   = { 1.0f, 0.2f, 0.2f, 1.0f };   /* Red */
-	static vec4_t alliesColor = { 0.2f, 0.4f, 1.0f, 1.0f };   /* Blue */
-	static vec4_t specColor   = { 0.7f, 0.7f, 0.7f, 1.0f };   /* Gray */
+	static vec4_t axisColor   = { 1.0f, 0.2f, 0.2f, 1.0f };   /* Red - Axis on ALL chat */
+	static vec4_t alliesColor = { 0.2f, 0.4f, 1.0f, 1.0f };   /* Blue - Allies on ALL chat */
+	static vec4_t teamColor   = { 1.0f, 0.8f, 0.2f, 1.0f };   /* Gold - Team chat */
+	static vec4_t specColor   = { 0.7f, 0.7f, 0.7f, 1.0f };   /* Gray - Spectator */
 
 	if (clientNum < 0 || clientNum >= MAX_CLIENTS)
 	{
 		return &specColor;
 	}
 
+	/* Team chat is always gold (you only hear your own team) */
+	if (channel == VOICE_CHAN_TEAM)
+	{
+		return &teamColor;
+	}
+
+	/* All chat shows team color so you know who's speaking globally */
 	switch (cgs.clientinfo[clientNum].team)
 	{
 	case TEAM_AXIS:
@@ -1389,7 +1476,7 @@ void Voice_DrawTalkingHUD(void)
 	float iconSize = 14.0f;
 	vec4_t white = {1.0f, 1.0f, 1.0f, 1.0f};
 
-	if (!voice.initialized)
+	if (!voice.initialized || !voice_showTalking.integer)
 	{
 		return;
 	}
@@ -1401,39 +1488,43 @@ void Voice_DrawTalkingHUD(void)
 	{
 		if (voice.clientInfo[i].talking)
 		{
-			vec4_t *teamColor;
+			vec4_t *channelColor;
 			char    nameStr[64];
 			qhandle_t teamIcon = 0;
 			int team = TEAM_FREE;
+			voiceChannel_t channel = voice.clientInfo[i].channel;
 
 			/* Use player name if valid, otherwise show client slot */
 			if (cgs.clientinfo[i].infoValid)
 			{
-				teamColor = Voice_GetTeamColor(i);
+				channelColor = Voice_GetChannelColor(i, channel);
 				team = cgs.clientinfo[i].team;
 				Q_strncpyz(nameStr, cgs.clientinfo[i].name, sizeof(nameStr));
 
-				/* Get team flag icon */
-				if (team == TEAM_AXIS)
+				/* Get team flag icon - only show for ALL chat since team is obvious for team chat */
+				if (channel == VOICE_CHAN_ALL)
 				{
-					teamIcon = cgs.media.axisFlag;
-				}
-				else if (team == TEAM_ALLIES)
-				{
-					teamIcon = cgs.media.alliedFlag;
+					if (team == TEAM_AXIS)
+					{
+						teamIcon = cgs.media.axisFlag;
+					}
+					else if (team == TEAM_ALLIES)
+					{
+						teamIcon = cgs.media.alliedFlag;
+					}
 				}
 			}
 			else
 			{
 				static vec4_t defaultColor = {1.0f, 1.0f, 1.0f, 1.0f};
-				teamColor = &defaultColor;
+				channelColor = &defaultColor;
 				Com_sprintf(nameStr, sizeof(nameStr), "[Client %d]", i);
 			}
 
 			/* Draw semi-transparent background bar */
 			{
 				vec4_t bgColor;
-				Vector4Copy(*teamColor, bgColor);
+				Vector4Copy(*channelColor, bgColor);
 				bgColor[3] = 0.4f;
 				CG_FillRect(x - 2, y - 1, 130, VOICE_HUD_LINE_H, bgColor);
 			}
@@ -1442,7 +1533,7 @@ void Voice_DrawTalkingHUD(void)
 			trap_R_SetColor(white);
 			CG_DrawPic(x, y, iconSize, iconSize, cgs.media.voiceChatShader);
 
-			/* Draw team flag icon if available */
+			/* Draw team flag icon if available (only for ALL chat) */
 			if (teamIcon)
 			{
 				CG_DrawPic(x + iconSize + 2, y, iconSize, iconSize, teamIcon);
@@ -1452,7 +1543,7 @@ void Voice_DrawTalkingHUD(void)
 			{
 				float textX = x + iconSize + (teamIcon ? iconSize + 6 : 4);
 				CG_Text_Paint_Ext(textX, y + 11, textScale, textScale,
-				                  *teamColor, nameStr, 0, 14, ITEM_TEXTSTYLE_SHADOWED, &cgs.media.limboFont2);
+				                  *channelColor, nameStr, 0, 14, ITEM_TEXTSTYLE_SHADOWED, &cgs.media.limboFont2);
 			}
 
 			trap_R_SetColor(NULL);
@@ -1477,7 +1568,7 @@ void Voice_DrawTransmitIndicator(void)
 	int   strWidth;
 	float textScale = 0.2f;
 
-	if (!voice.initialized)
+	if (!voice.initialized || !voice_showMeter.integer)
 	{
 		return;
 	}
@@ -1490,10 +1581,24 @@ void Voice_DrawTransmitIndicator(void)
 	/* Create pulsing effect */
 	pulseAlpha = 0.7f + 0.3f * (float)sin(cg.time * 0.01f);
 
-	/* Set color based on channel */
-	if (voice.transmitChannel == VOICE_CHAN_TEAM)
+	/* Check if rate limited */
+	if (voice.txLimitActive)
 	{
-		/* Team channel: use your team color */
+		/* Rate limited: show in bright red, flashing faster */
+		float flashAlpha = 0.5f + 0.5f * (float)sin(cg.time * 0.02f);
+		Vector4Set(txColor, 1.0f, 0.1f, 0.1f, flashAlpha);
+		displayStr = "[MIC: BLOCKED - LIMIT]";
+	}
+	else if (voice.transmitChannel == VOICE_CHAN_TEAM)
+	{
+		/* Team channel: Gold (consistent with incoming team voice) */
+		Vector4Set(txColor, 1.0f, 0.8f, 0.2f, pulseAlpha);
+		chanStr = "TEAM";
+		displayStr = va("[MIC: %s]", chanStr);
+	}
+	else
+	{
+		/* All channel: Your team color (red/blue) */
 		if (cgs.clientinfo[cg.clientNum].team == TEAM_AXIS)
 		{
 			Vector4Set(txColor, 1.0f, 0.3f, 0.3f, pulseAlpha);
@@ -1502,16 +1607,9 @@ void Voice_DrawTransmitIndicator(void)
 		{
 			Vector4Set(txColor, 0.3f, 0.5f, 1.0f, pulseAlpha);
 		}
-		chanStr = "TEAM";
-	}
-	else
-	{
-		/* All channel: yellow/gold */
-		Vector4Set(txColor, 1.0f, 0.8f, 0.2f, pulseAlpha);
 		chanStr = "ALL";
+		displayStr = va("[MIC: %s]", chanStr);
 	}
-
-	displayStr = va("[MIC: %s]", chanStr);
 	strWidth = CG_Text_Width_Ext(displayStr, textScale, 0, &cgs.media.limboFont2);
 
 	/* Draw background */
