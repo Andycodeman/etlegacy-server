@@ -114,7 +114,7 @@ etpanel/frontend/node_modules/
 etpanel/frontend/dist/
 
 # -----------------------------------------------------------------------------
-# Claude Flow / Hive Mind
+# Claude Flow / Hive Mind (databases & runtime, not config)
 # -----------------------------------------------------------------------------
 .hive-mind/
 .swarm/
