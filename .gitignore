@@ -102,3 +102,13 @@ temp/
 *.tgz
 *.rar
 *.7z
+
+# -----------------------------------------------------------------------------
+# ETPanel Web Application
+# -----------------------------------------------------------------------------
+etpanel/backend/node_modules/
+etpanel/backend/dist/
+etpanel/backend/.env
+etpanel/backend/.env.production
+etpanel/frontend/node_modules/
+etpanel/frontend/dist/
