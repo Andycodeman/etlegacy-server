@@ -112,3 +112,10 @@ etpanel/backend/.env
 etpanel/backend/.env.production
 etpanel/frontend/node_modules/
 etpanel/frontend/dist/
+
+# -----------------------------------------------------------------------------
+# Claude Flow / Hive Mind
+# -----------------------------------------------------------------------------
+.hive-mind/
+.swarm/
+.claude-flow/
