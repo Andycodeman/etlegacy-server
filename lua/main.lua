@@ -42,13 +42,11 @@ end
 
 --[[
     PANZERFEST & SURVIVAL MODE
-    Kill streak = faster fire rate
-    Survival = faster movement
-    Panzerfest = everyone vs you at 30 kills!
-    Uses CVARs: g_killstreakEnabled, g_survivalEnabled, g_panzerfestEnabled
+    NOW HANDLED IN PURE C (g_active.c) - JayMod pattern
+    Kill streak = faster fire rate (C: G_BonusPlayerKill, G_BonusGetFireRateMultiplier)
+    Panzerfest = everyone vs you at 30 kills (C: G_PanzerfestStart, G_PanzerfestThink)
+    Survival speed bonus is NOT yet implemented in C (was Lua-only)
 ]]--
-local panzerfestEnabled = true
-local panzerfest = nil
 
 --[[
     DYNAMIC MAP ROTATION
@@ -70,16 +68,8 @@ if mapRotationEnabled then
     end
 end
 
--- Load Panzerfest/Survival Mode (wrapped in pcall for safety)
-if panzerfestEnabled then
-    local success, err = pcall(function()
-        panzerfest = dofile("legacy/lua/panzerfest_survival.lua")
-    end)
-    if not success then
-        et.G_Print("^1[ERROR] ^7Failed to load Panzerfest/Survival: " .. tostring(err) .. "\n")
-        panzerfestEnabled = false
-    end
-end
+-- Panzerfest/Survival Mode is now in pure C (g_active.c)
+-- No Lua module needed - all state is tracked in level.panzerfest and gclient_s
 
 --[[
     MODULE LOADING
@@ -341,10 +331,7 @@ function et_InitGame(levelTime, randomSeed, restart)
         rocketMode.init()
     end
 
-    -- Initialize Panzerfest/Survival Mode
-    if panzerfestEnabled and panzerfest then
-        panzerfest.onInit(levelTime)
-    end
+    -- Panzerfest/Survival Mode is now initialized in C (G_PanzerfestInit in g_main.c)
 
     -- Initialize Map Rotation System
     if mapRotationEnabled and mapRotation then
@@ -372,10 +359,7 @@ function et_ShutdownGame(restart)
         rocketMode.shutdown()
     end
 
-    -- Shutdown Panzerfest/Survival Mode
-    if panzerfestEnabled and panzerfest then
-        panzerfest.onShutdown()
-    end
+    -- Panzerfest/Survival Mode shutdown is handled in C
 
     -- Shutdown Map Rotation
     if mapRotationEnabled and mapRotation then
@@ -396,10 +380,7 @@ function et_ClientConnect(clientNum, firstTime, isBot)
         rocketMode.initPlayer(clientNum)
     end
 
-    -- Initialize panzerfest/survival for this player
-    if panzerfestEnabled and panzerfest then
-        panzerfest.onPlayerConnect(clientNum, isBot)
-    end
+    -- Panzerfest/survival player init is handled in C (G_BonusPlayerSpawn)
 
     -- Welcome message for new human players
     -- Note: firstTime in Lua can be 0 or 1, not boolean
@@ -481,10 +462,7 @@ function et_ClientDisconnect(clientNum)
         rocketMode.cleanupPlayer(clientNum)
     end
 
-    -- Clean up panzerfest/survival state
-    if panzerfestEnabled and panzerfest then
-        panzerfest.onPlayerDisconnect(clientNum)
-    end
+    -- Panzerfest/survival cleanup is handled in C (player disconnect resets state)
 
     -- Skip bots
     if name:find("%[BOT%]") then
@@ -529,10 +507,7 @@ function et_ClientSpawn(clientNum, revived, teamChange, restoreHealth)
         rocketMode.onSpawn(clientNum)
     end
 
-    -- Handle panzerfest/survival spawn
-    if panzerfestEnabled and panzerfest then
-        panzerfest.onPlayerSpawn(clientNum, revived)
-    end
+    -- Panzerfest/survival spawn is handled in C (G_BonusPlayerSpawn in g_client.c)
 end
 
 --[[
@@ -540,17 +515,8 @@ end
 ]]--
 
 function et_Obituary(victim, killer, meansOfDeath)
-    -- Stats are now tracked in C (g_etpanel.c)
-
-    -- Track kills and deaths for panzerfest/survival
-    if panzerfestEnabled and panzerfest then
-        -- Track the kill for the killer
-        if killer >= 0 and killer ~= victim and killer ~= 1022 then
-            panzerfest.onPlayerKill(killer, victim)
-        end
-        -- Track death for the victim
-        panzerfest.onPlayerDeath(victim)
-    end
+    -- Stats and panzerfest are now tracked in C (g_etpanel.c, g_combat.c)
+    -- G_BonusPlayerKill and G_BonusPlayerDeath are called from player_die in g_combat.c
 
     -- Additional logging for debugging
     if config.debug and killer >= 0 and killer ~= victim and killer ~= 1022 then
@@ -635,10 +601,7 @@ function et_RunFrame(levelTime)
         rocketMode.runFrame(levelTime)
     end
 
-    -- Update Panzerfest/Survival Mode
-    if panzerfestEnabled and panzerfest then
-        panzerfest.onRunFrame(levelTime)
-    end
+    -- Panzerfest/Survival is now updated in C (G_PanzerfestThink in g_main.c)
 
     -- Check for map rotation (handles intermission countdown)
     if mapRotationEnabled and mapRotation then

@@ -3036,16 +3036,29 @@ void ClientSpawn(gentity_t *ent, qboolean revived, qboolean teamChange, qboolean
 		Com_Memcpy(oldWeapons, client->ps.weapons, sizeof(int) * (MAX_WEAPONS / (sizeof(int) * 8)));
 	}
 
-	for (i = 0 ; i < MAX_PERSISTANT ; i++)
+	// ETMan: Save kill streak values before memset (preserve across revive)
 	{
-		persistant[i] = client->ps.persistant[i];
-	}
+		int savedKillStreakCount      = client->killStreakCount;
+		int savedKillStreakBonusLevel = client->killStreakBonusLevel;
 
-	{
-		// FIXME: this seems beyond silly
-		qboolean set = client->maxlivescalced;
-		Com_Memset(client, 0, sizeof(*client));
-		client->maxlivescalced = set;
+		for (i = 0 ; i < MAX_PERSISTANT ; i++)
+		{
+			persistant[i] = client->ps.persistant[i];
+		}
+
+		{
+			// FIXME: this seems beyond silly
+			qboolean set = client->maxlivescalced;
+			Com_Memset(client, 0, sizeof(*client));
+			client->maxlivescalced = set;
+		}
+
+		// ETMan: Restore kill streak values after memset (only if revived)
+		if (revived)
+		{
+			client->killStreakCount      = savedKillStreakCount;
+			client->killStreakBonusLevel = savedKillStreakBonusLevel;
+		}
 	}
 
 	client->pers              = savedPers;
@@ -3368,6 +3381,9 @@ void ClientSpawn(gentity_t *ent, qboolean revived, qboolean teamChange, qboolean
 	// *LUA* API callbacks
 	G_LuaHook_ClientSpawn(ent - g_entities, revived, teamChange, restoreHealth);
 #endif
+
+	// ETMan: Handle kill streak reset on spawn (pure C, BEFORE next Pmove)
+	G_BonusPlayerSpawn(ent, revived);
 
 	// run a client frame to drop exactly to the floor,
 	// initialize animations and other things

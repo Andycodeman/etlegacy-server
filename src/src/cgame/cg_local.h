@@ -2512,6 +2512,12 @@ typedef struct cgs_s
 	int antilag;
 	int gameMiscFlags;                              ///< ETMan: g_misc flags for panzer war, double jump, etc.
 
+	// ETMan: weapon fire rates (synced from server via CS_ETMAN_WEAPONS)
+	int panzerFireRate;                             ///< Panzer fire rate in ms (0 = default 2000)
+	int smgFireRate;                                ///< SMG fire rate in ms (0 = default 150)
+	int grenadeFireRate;                            ///< Grenade fire rate in ms (0 = default 1600)
+	int grenadeInstant;                             ///< Instant throw grenades (1=yes, 0=no)
+
 	float timelimit;
 	int maxclients;
 	char mapname[MAX_QPATH];
@@ -3347,6 +3353,7 @@ void CG_SetConfigValues(void);
 void CG_ShaderStateChanged(void);
 void CG_ChargeTimesChanged(void);
 void CG_TeamRestrictionsChanged(void);
+void CG_ParseWeaponRates(void);  // ETMan: parse weapon fire rates from server
 void CG_SkillLevelsChanged(void);
 void CG_LoadVoiceChats(void);
 void CG_PlayBufferedVoiceChats(void);

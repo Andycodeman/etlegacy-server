@@ -1385,6 +1385,28 @@ static ID_INLINE void G_SetupExtensions(void)
 }
 
 /**
+ * @brief ETMan: Update weapon fire rates configstring
+ * Syncs g_panzerFireRate, g_smgFireRate, g_grenadeFireRate to clients
+ */
+void G_UpdateWeaponConfigstring(void)
+{
+	char cs[MAX_INFO_STRING];
+
+	cs[0] = '\0';
+	Info_SetValueForKey(cs, "pf", va("%d", g_panzerFireRate.integer));   // panzer fire rate
+	Info_SetValueForKey(cs, "sf", va("%d", g_smgFireRate.integer));      // smg fire rate
+	Info_SetValueForKey(cs, "gf", va("%d", g_grenadeFireRate.integer));  // grenade fire rate
+	Info_SetValueForKey(cs, "gi", va("%d", g_grenadeInstant.integer));   // grenade instant
+
+	G_Printf("^6G_UpdateWeaponConfigstring: ^7pf=%d sf=%d gf=%d gi=%d\n",
+		g_panzerFireRate.integer, g_smgFireRate.integer,
+		g_grenadeFireRate.integer, g_grenadeInstant.integer);
+	G_Printf("^6G_UpdateWeaponConfigstring: ^7cs='%s'\n", cs);
+
+	trap_SetConfigstring(CS_ETMAN_WEAPONS, cs);
+}
+
+/**
  * @brief G_InitGame
  * @param[in] levelTime
  * @param[in] randomSeed
@@ -1511,6 +1533,9 @@ void G_InitGame(int levelTime, int randomSeed, int restart, int etLegacyServer, 
 	Info_SetValueForKey(cs, "w5", team_maxLandmines.string);
 	Info_SetValueForKey(cs, "m", team_maxplayers.string);
 	trap_SetConfigstring(CS_TEAMRESTRICTIONS, cs);
+
+	// ETMan: Set weapon fire rates configstring
+	G_UpdateWeaponConfigstring();
 
 	G_UpdateSkillsToClients();
 
@@ -1701,6 +1726,9 @@ void G_InitGame(int levelTime, int randomSeed, int restart, int etLegacyServer, 
 
 	// reserve some spots for dead player bodies
 	InitBodyQue();
+
+	// ETMan: Initialize panzerfest state (pure C)
+	G_PanzerfestInit();
 
 	// load level script
 	G_Script_ScriptLoad();
@@ -4625,6 +4653,9 @@ void G_RunFrame(int levelTime)
 #ifdef FEATURE_LUA
 	G_LuaHook_RunFrame(levelTime);
 #endif
+
+	// ETMan: Update panzerfest phases (pure C)
+	G_PanzerfestThink();
 
 	// Process ETMan admin command responses
 	G_ETMan_Frame();

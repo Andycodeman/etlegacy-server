@@ -2386,6 +2386,8 @@ void CG_Init(int serverMessageNum, int serverCommandSequence, int clientNum, qbo
 
 	CG_TeamRestrictionsChanged();
 
+	CG_ParseWeaponRates();  // ETMan: parse weapon fire rates from server
+
 	CG_SkillLevelsChanged();
 
 	trap_S_ClearLoopingSounds();

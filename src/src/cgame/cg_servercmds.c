@@ -966,6 +966,24 @@ void CG_TeamRestrictionsChanged(void)
 	cg.maxPlayers = Q_atoi(Info_ValueForKey(info, "m"));
 }
 
+/**
+ * @brief ETMan: CG_ParseWeaponRates - parse weapon fire rates from server
+ */
+void CG_ParseWeaponRates(void)
+{
+	const char *info = CG_ConfigString(CS_ETMAN_WEAPONS);
+
+	CG_Printf("^6CG_ParseWeaponRates: ^7raw info='%s'\n", info);
+
+	cgs.panzerFireRate  = Q_atoi(Info_ValueForKey(info, "pf"));
+	cgs.smgFireRate     = Q_atoi(Info_ValueForKey(info, "sf"));
+	cgs.grenadeFireRate = Q_atoi(Info_ValueForKey(info, "gf"));
+	cgs.grenadeInstant  = Q_atoi(Info_ValueForKey(info, "gi"));
+
+	CG_Printf("^3ETMan: ^7Weapon rates synced - panzer=%dms smg=%dms grenade=%dms instant=%d\n",
+		cgs.panzerFireRate, cgs.smgFireRate, cgs.grenadeFireRate, cgs.grenadeInstant);
+}
+
 #define SETSKILL(skill, string) sscanf(string, "%i,%i,%i,%i", &GetSkillTableData(skill)->skillLevels[1], &GetSkillTableData(skill)->skillLevels[2], &GetSkillTableData(skill)->skillLevels[3], &GetSkillTableData(skill)->skillLevels[4])
 
 /**
@@ -1076,6 +1094,9 @@ static void CG_ConfigStringModified(void)
 		break;
 	case CS_TEAMRESTRICTIONS:
 		CG_TeamRestrictionsChanged();
+		break;
+	case CS_ETMAN_WEAPONS:
+		CG_ParseWeaponRates();
 		break;
 	case CS_UPGRADERANGE:
 		CG_SkillLevelsChanged();

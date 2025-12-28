@@ -286,6 +286,7 @@ vmCvar_t g_adrenalineMax;      // Maximum adrenaline time in ms (default 999000 
 vmCvar_t g_smgFireRate;        // SMG fire rate in ms (default 50, stock is 150)
 vmCvar_t g_grenadeFireRate;    // Grenade throw rate in ms (default 100, stock is 1600)
 vmCvar_t g_grenadeInstant;     // Instant throw grenades - no cooking (1=yes, 0=no)
+vmCvar_t g_panzerFireRate;     // Panzer fire rate in ms (default 0 = stock 2000, set to 143 for 7x faster)
 vmCvar_t g_panzerDamage;       // Panzerfaust/Bazooka direct damage (0 = use stock 400)
 vmCvar_t g_panzerSplash;       // Panzerfaust/Bazooka splash damage (0 = use stock 400)
 vmCvar_t g_panzerRadius;       // Panzerfaust/Bazooka splash radius (0 = use stock 300)
@@ -388,11 +389,11 @@ cvarTable_t gameCvarTable[] =
 	// multiplayer stuffs
 	{ &g_redlimbotime,                    "g_redlimbotime",                    "30000",                      CVAR_SERVERINFO | CVAR_LATCH,                    0, qfalse, qfalse },
 	{ &g_bluelimbotime,                   "g_bluelimbotime",                   "30000",                      CVAR_SERVERINFO | CVAR_LATCH,                    0, qfalse, qfalse },
-	{ &g_medicChargeTime,                 "g_medicChargeTime",                 "45000",                      CVAR_SERVERINFO | CVAR_LATCH,                    0, qfalse, qtrue  },
-	{ &g_engineerChargeTime,              "g_engineerChargeTime",              "30000",                      CVAR_SERVERINFO | CVAR_LATCH,                    0, qfalse, qtrue  },
-	{ &g_fieldopsChargeTime,              "g_fieldopsChargeTime",              "40000",                      CVAR_SERVERINFO | CVAR_LATCH,                    0, qfalse, qtrue  },
-	{ &g_soldierChargeTime,               "g_soldierChargeTime",               "20000",                      CVAR_SERVERINFO | CVAR_LATCH,                    0, qfalse, qtrue  },
-	{ &g_covertopsChargeTime,             "g_covertopsChargeTime",             "30000",                      CVAR_SERVERINFO | CVAR_LATCH,                    0, qfalse, qtrue  },
+	{ &g_medicChargeTime,                 "g_medicChargeTime",                 "0",                          CVAR_SERVERINFO | CVAR_LATCH,                    0, qfalse, qtrue  },  // ETMan: 0 = no charge bar requirement
+	{ &g_engineerChargeTime,              "g_engineerChargeTime",              "0",                          CVAR_SERVERINFO | CVAR_LATCH,                    0, qfalse, qtrue  },  // ETMan: 0 = no charge bar requirement
+	{ &g_fieldopsChargeTime,              "g_fieldopsChargeTime",              "0",                          CVAR_SERVERINFO | CVAR_LATCH,                    0, qfalse, qtrue  },  // ETMan: 0 = no charge bar requirement
+	{ &g_soldierChargeTime,               "g_soldierChargeTime",               "0",                          CVAR_SERVERINFO | CVAR_LATCH,                    0, qfalse, qtrue  },  // ETMan: 0 = no charge bar requirement
+	{ &g_covertopsChargeTime,             "g_covertopsChargeTime",             "0",                          CVAR_SERVERINFO | CVAR_LATCH,                    0, qfalse, qtrue  },  // ETMan: 0 = no charge bar requirement
 	{ &g_landminetimeout,                 "g_landminetimeout",                 "1",                          CVAR_ARCHIVE,                                    0, qfalse, qtrue  },
 
 	{ &g_oss,                             "g_oss",                             "0",                          CVAR_SERVERINFO | CVAR_ROM,                      0, qfalse, qfalse },
@@ -643,6 +644,7 @@ cvarTable_t gameCvarTable[] =
 	{ &g_smgFireRate,                     "g_smgFireRate",                     "50",                         0,                                               0, qfalse, qfalse },  // ms between shots (stock 150)
 	{ &g_grenadeFireRate,                 "g_grenadeFireRate",                 "100",                        0,                                               0, qfalse, qfalse },  // ms between throws (stock 1600)
 	{ &g_grenadeInstant,                  "g_grenadeInstant",                  "1",                          0,                                               0, qfalse, qfalse },  // 1=instant throw, 0=cooking
+	{ &g_panzerFireRate,                  "g_panzerFireRate",                  "1000",                       0,                                               0, qfalse, qfalse },  // ms between shots (0=stock 2000, 1000=2x faster)
 	{ &g_panzerDamage,                    "g_panzerDamage",                    "0",                          0,                                               0, qfalse, qfalse },  // 0=stock 400, otherwise custom damage
 	{ &g_panzerSplash,                    "g_panzerSplash",                    "0",                          0,                                               0, qfalse, qfalse },  // 0=stock 400, otherwise custom splash
 	{ &g_panzerRadius,                    "g_panzerRadius",                    "0",                          0,                                               0, qfalse, qfalse },  // 0=stock 300, otherwise custom radius

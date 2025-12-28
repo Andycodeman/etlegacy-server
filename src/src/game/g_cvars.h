@@ -277,6 +277,7 @@ extern vmCvar_t g_adrenalineMax;
 extern vmCvar_t g_smgFireRate;
 extern vmCvar_t g_grenadeFireRate;
 extern vmCvar_t g_grenadeInstant;
+extern vmCvar_t g_panzerFireRate;
 extern vmCvar_t g_panzerDamage;
 extern vmCvar_t g_panzerSplash;
 extern vmCvar_t g_panzerRadius;

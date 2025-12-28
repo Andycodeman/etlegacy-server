@@ -783,11 +783,17 @@ int CG_PredictionOk(playerState_t *ps1, playerState_t *ps2)
 
 	if (ps2->weaponTime != ps1->weaponTime)
 	{
-		if (cg_showmiss.integer & 8)
+		// ETMan: Skip weaponTime mismatch check if fire rate bonus is active
+		// The server applies fire rate bonuses which causes timing differences
+		// that would otherwise trigger constant prediction resets
+		if (ps1->stats[STAT_FIRERATE_MUL] <= 100)
 		{
-			CG_Printf("CG_PredictionOk info: return 5 - backup time: '%d' server time: '%d'\n", ps2->weaponTime, ps1->weaponTime);
+			if (cg_showmiss.integer & 8)
+			{
+				CG_Printf("CG_PredictionOk info: return 5 - backup time: '%d' server time: '%d'\n", ps2->weaponTime, ps1->weaponTime);
+			}
+			return 5;
 		}
-		return 5;
 	}
 
 	if (ps2->groundEntityNum != ps1->groundEntityNum)
@@ -1120,18 +1126,15 @@ void CG_PredictPlayerState(void)
 	cg_pmove.noWeapClips   = qfalse;
 	cg_pmove.gameMiscFlags = cgs.gameMiscFlags;  // ETMan: panzer war, double jump, etc.
 
-	// ETMan: Calculate fire rate multiplier for client-side prediction
-	// cg.fireRateMultiplier comes from panzerfest_bonus server command (100 = normal, 200 = 2x, etc.)
-	// Convert to float multiplier: 1.0 = normal, 0.5 = 2x faster, 0.14 = 7x faster
-	if (cg.fireRateMultiplier > 0 && cg.fireRateMultiplier != 100)
-	{
-		cg.pmext.fireRateMultiplier = 100.0f / (float)cg.fireRateMultiplier;
-	}
-	else
-	{
-		cg.pmext.fireRateMultiplier = 1.0f;
-	}
-	cg.pmext.fireRateDelay = 0;  // TODO: Add delay support if needed
+	// ETMan: Weapon fire rates synced from server via CS_ETMAN_WEAPONS configstring
+	cg_pmove.smgFireRate     = cgs.smgFireRate;
+	cg_pmove.grenadeFireRate = cgs.grenadeFireRate;
+	cg_pmove.grenadeInstant  = cgs.grenadeInstant;
+	cg_pmove.panzerFireRate  = cgs.panzerFireRate;
+
+	// ETMan: Fire rate multiplier not used by client prediction
+	cg.pmext.fireRateMultiplier = 1.0f;
+	cg.pmext.fireRateDelay = 0;
 
 	// save the state before the pmove so we can detect transitions
 	oldPlayerState = cg.predictedPlayerState;
@@ -1438,18 +1441,9 @@ void CG_PredictPlayerState(void)
 		// current predicted data if this is the current cmd)  (#166)
 		Com_Memcpy(&pmext, &oldpmext[cmdNum & cg.cmdMask], sizeof(pmoveExt_t));
 
-		// ETMan: ALWAYS override fire rate with current value from server
-		// This ensures client prediction uses the latest fire rate, not old stored values
-		if (cg.fireRateMultiplier > 0 && cg.fireRateMultiplier != 100)
-		{
-			pmext.fireRateMultiplier = 100.0f / (float)cg.fireRateMultiplier;
-		}
-		else
-		{
-			pmext.fireRateMultiplier = 1.0f;
-		}
-
-		fflush(stdout);
+		// ETMan: Fire rate is SERVER ONLY - client uses default timing
+		pmext.fireRateMultiplier = 1.0f;
+		pmext.fireRateDelay = 0;
 
 		// unlagged - optimized prediction
 		// we check for cg_latentCmds because it'll mess up the optimization

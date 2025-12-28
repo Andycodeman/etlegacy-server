@@ -3470,6 +3470,7 @@ static void PM_Weapon(void)
 	int      weapattackanim;
 	qboolean akimboFire;
 	int      weaponChargeTime = pm->ps->classWeaponTime;
+	int      isPanzer = (GetWeaponTableData(pm->ps->weapon)->type & WEAPON_TYPE_PANZER) ? 1 : 0;
 #ifdef DO_WEAPON_DBG
 	static int weaponstate_last = -1;
 #endif
@@ -3483,6 +3484,23 @@ static void PM_Weapon(void)
 	if (pm->grenadeFireRate > 0 && (pm->ps->weapon == WP_GRENADE_LAUNCHER || pm->ps->weapon == WP_GRENADE_PINEAPPLE))
 	{
 		addTime = pm->grenadeFireRate;
+	}
+	// ETMan: Override fire rate for panzers based on server CVAR
+	if (isPanzer && pm->panzerFireRate > 0)
+	{
+		addTime = pm->panzerFireRate;
+
+		// Apply kill streak fire rate multiplier (STAT_FIRERATE_MUL: 100=normal, 200=2x faster, etc.)
+		if (pm->ps->stats[STAT_FIRERATE_MUL] > 100)
+		{
+			// Higher multiplier = faster fire rate = lower addTime
+			// e.g., 200 means 2x faster, so addTime = addTime * 100 / 200 = addTime / 2
+			addTime = addTime * 100 / pm->ps->stats[STAT_FIRERATE_MUL];
+			if (addTime < 50)
+			{
+				addTime = 50;  // Minimum 50ms between shots
+			}
+		}
 	}
 
 	// don't allow attack until all buttons are up
@@ -4181,33 +4199,6 @@ static void PM_Weapon(void)
 
 	// handle the charge time
 	pm->ps->classWeaponTime = weaponChargeTime;
-
-	// ETMan: In panzer war mode, set 1 second cooldown between panzer shots
-	// This prevents spam but the animation hiding handles the visual
-	if ((pm->gameMiscFlags & G_MISC_PANZER_WAR) &&
-	    (GetWeaponTableData(pm->ps->weapon)->type & WEAPON_TYPE_PANZER))
-	{
-		addTime = 1000;  // 1 second between shots
-	}
-
-	// ETMan: Apply per-player fire rate multiplier (for kill streak / panzerfest)
-	// Uses pmext which is synced between server and client
-	// 1.0 = normal, 0.5 = 2x faster, 0.14 = 7x faster (like JayMod)
-	if (pm->pmext && pm->pmext->fireRateMultiplier > 0.0f && pm->pmext->fireRateMultiplier != 1.0f)
-	{
-		addTime = (int)(addTime * pm->pmext->fireRateMultiplier);
-		if (addTime < 50)  // Minimum 50ms between shots to prevent overflow
-		{
-			addTime = 50;
-		}
-	}
-
-	// ETMan: Apply per-player fire rate delay (for panzerfest slowdown phases)
-	// Adds extra milliseconds between shots
-	if (pm->pmext && pm->pmext->fireRateDelay > 0)
-	{
-		addTime += pm->pmext->fireRateDelay;
-	}
 
 	pm->ps->weaponTime += addTime;
 

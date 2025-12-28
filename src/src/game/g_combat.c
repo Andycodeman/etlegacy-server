@@ -402,10 +402,16 @@ void player_die(gentity_t *self, gentity_t *inflictor, gentity_t *attacker, int 
 			{
 				attacker->client->combatState |= (1 << COMBATSTATE_KILLEDPLAYER);
 			}
+
+			// ETMan: Track kill for fire rate bonus (pure C, BEFORE next Pmove)
+			G_BonusPlayerKill(attacker);
 		}
 
 		self->isProp = qfalse; // no teamkill
 	}
+
+	// ETMan: Reset victim's kill streak on death
+	G_BonusPlayerDeath(self);
 
 	// if we got killed by a landmine, update our map
 	if (meansOfDeath == MOD_LANDMINE)

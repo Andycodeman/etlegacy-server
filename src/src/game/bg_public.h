@@ -420,6 +420,7 @@ extern const int aReinfSeeds[MAX_REINFSEEDS];
 
 #define CS_TEAMRESTRICTIONS             43     ///< Class restrictions have been changed
 #define CS_UPGRADERANGE                 44     ///< Upgrade range levels have been changed
+#define CS_ETMAN_WEAPONS                45     ///< ETMan: weapon fire rates (panzer, smg, grenade)
 
 #define CS_MODELS                       64
 #define CS_SOUNDS                       (CS_MODELS +               MAX_MODELS)              ///< 320 (256)
@@ -672,6 +673,7 @@ typedef struct
 	int smgFireRate;               ///< SMG fire rate in ms (0 = use default 150)
 	int grenadeFireRate;           ///< Grenade throw rate in ms (0 = use default 1600)
 	int grenadeInstant;            ///< Instant throw grenades - no cooking (1=yes, 0=no)
+	int panzerFireRate;            ///< Panzer fire rate in ms (0 = use default 2000)
 
 	// ETMan: Per-player fire rate modifiers (for kill streak / panzerfest)
 	int fireRateMultiplier;        ///< Fire rate multiplier (100 = normal, 200 = 2x faster)
@@ -712,7 +714,8 @@ typedef enum
 	STAT_PS_FLAGS,
 	STAT_AIRLEFT,                  ///< airtime for CG_DrawBreathBar()
 	STAT_SPRINTTIME,               ///< sprinttime for CG_DrawStaminaBar()
-	STAT_ANTIWARP_DELAY            ///< extra lag on the lagometer to reflect warp status
+	STAT_ANTIWARP_DELAY,           ///< extra lag on the lagometer to reflect warp status
+	STAT_FIRERATE_MUL              ///< ETMan: fire rate multiplier (100 = normal, 200 = 2x faster, etc.)
 } statIndex_t;
 
 /**

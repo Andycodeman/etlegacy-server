@@ -1055,6 +1055,11 @@ struct gclient_s
 	// Set via Lua: et.gentity_set(clientNum, "client.rickrollFireRateDelay", 1000)
 	int rickrollFireRateDelay;
 
+	// ETMan: Kill streak tracking for fire rate bonus (pure C implementation - JayMod pattern)
+	// These are updated directly in C, NOT via Lua, to ensure fire rate is set BEFORE Pmove()
+	int killStreakCount;         ///< Current kill streak count (resets on death/spawn)
+	int killStreakBonusLevel;    ///< Current bonus level (0-6, determines fire rate)
+
 	unsigned int combatState;
 
 	// antilag
@@ -1438,6 +1443,23 @@ typedef struct level_locals_s
 	int demoClientBotNum;      ///< clientNum of bot that collects stats during recording, optional
 
 	uint64_t shoutcasters;     ///< clients bits of shoutcasters
+
+	// ETMan: Panzerfest mode state (2 minute hunt with 4 phases) - pure C like JayMod
+	struct
+	{
+		qboolean active;                      ///< Is Panzerfest currently active?
+		int      targetClientNum;             ///< The player being hunted (-1 if none)
+		int      startTime;                   ///< When Panzerfest started (level.time)
+		int      phaseStartTime;              ///< When current phase started
+		int      lastTick;                    ///< Last time we updated multiplier/delay
+		int      cooldownEndTime;             ///< When cooldown ends (level.time)
+		int      originalTeams[MAX_CLIENTS];  ///< Store original teams for restore
+		float    currentMultiplier;           ///< Current fire rate multiplier (phases 1-2)
+		float    currentSpeedMultiplier;      ///< Current speed multiplier (phases 1-2)
+		int      currentDelay;                ///< Current additional delay in ms (phases 3-4)
+		int      phase;                       ///< 0=inactive, 1-4=phases, 5=victory pause
+		int      messageIndex;                ///< Index for funny messages
+	} panzerfest;
 } level_locals_t;
 
 /**
@@ -1784,6 +1806,22 @@ void AddMedicTeamBonus(gclient_t *client);
 void SetWolfSpawnWeapons(gclient_t *client);
 void limbo(gentity_t *ent, qboolean makeCorpse);
 void reinforce(gentity_t *ent);
+
+// ETMan: Kill streak fire rate bonus functions (pure C - JayMod pattern)
+float G_BonusGetFireRateMultiplier(int clientNum);
+void G_BonusPlayerKill(gentity_t *attacker);
+void G_BonusPlayerSpawn(gentity_t *ent, qboolean revived);
+void G_BonusPlayerDeath(gentity_t *ent);
+
+// ETMan: Panzerfest functions (pure C - JayMod pattern)
+void G_PanzerfestInit(void);
+void G_PanzerfestStart(gentity_t *target);
+void G_PanzerfestEnd(qboolean targetDied);
+void G_PanzerfestThink(void);
+void G_PanzerfestCheckDeath(gentity_t *self);
+float G_PanzerfestGetFireRateMultiplier(int clientNum);
+int G_PanzerfestGetFireRateDelay(int clientNum);
+float G_PanzerfestGetSpeedMultiplier(int clientNum);
 
 // *LUA* & map configs g_sha1.c
 char *G_SHA1(const char *string);
@@ -2275,6 +2313,7 @@ void G_UpdateCvars(void);
 void G_wipeCvars(void);
 void G_UpdateSkillsToClients();
 void G_SetSkillLevelsByCvar(vmCvar_t *cvar);
+void G_UpdateWeaponConfigstring(void);  // ETMan: sync weapon fire rates to clients
 
 // g_cmds_ext.c
 qboolean G_commandCheck(gentity_t *ent, const char *cmd);

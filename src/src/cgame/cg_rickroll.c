@@ -1273,12 +1273,10 @@ void CG_PanzerfestBonus_Update(void) {
 		cg.fireRateMultiplier = 100;
 	}
 
-	// ETMan: If fire rate changed, invalidate prediction optimization cache
-	// This forces re-prediction with the new fire rate instead of using stale backup states
-	if (cg.fireRateMultiplier != oldFireRate) {
-		cg.backupStateTop = 0;
-		cg.backupStateTail = 0;
-	}
+	// ETMan: Fire rate is now handled server-authoritatively.
+	// The server directly modifies ps.weaponTime after Pmove, so the client
+	// receives the correct value in the snapshot. No cache invalidation needed.
+	// cg.fireRateMultiplier is still used for HUD display purposes.
 }
 
 /**
