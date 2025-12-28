@@ -127,11 +127,24 @@ if [ -f "$DIST_DIR/etman_rickroll.pk3" ]; then
     echo "  - etman_rickroll.pk3 deployed"
 fi
 
-# Deploy maps
-echo -e "${YELLOW}Deploying maps...${NC}"
+# Deploy maps to maps_repo/ (NOT legacy/ - Dynamic Map Loader)
+# This enables on-demand map downloads - clients only download current map
+echo -e "${YELLOW}Deploying maps to maps_repo/...${NC}"
+MAPS_REPO="$SERVER_DIR/maps_repo"
+mkdir -p "$MAPS_REPO"
 if [ -d "$PROJECT_DIR/maps" ] && [ "$(ls -A "$PROJECT_DIR/maps" 2>/dev/null)" ]; then
-    cp "$PROJECT_DIR/maps/"*.pk3 "$LEGACY_DIR/" 2>/dev/null || true
-    echo "  - Map pk3s synced"
+    cp "$PROJECT_DIR/maps/"*.pk3 "$MAPS_REPO/" 2>/dev/null || true
+    echo "  - Map pk3s synced to maps_repo/"
+    echo "  - Maps available: $(ls -1 "$MAPS_REPO"/*.pk3 2>/dev/null | wc -l)"
+fi
+
+# Deploy map_switch.sh script
+echo -e "${YELLOW}Deploying map switcher script...${NC}"
+mkdir -p "$SERVER_DIR/scripts"
+if [ -f "$PROJECT_DIR/scripts/map_switch.sh" ]; then
+    cp "$PROJECT_DIR/scripts/map_switch.sh" "$SERVER_DIR/scripts/"
+    chmod +x "$SERVER_DIR/scripts/map_switch.sh"
+    echo "  - map_switch.sh deployed"
 fi
 
 # Deploy waypoints

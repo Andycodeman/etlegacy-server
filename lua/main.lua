@@ -50,6 +50,26 @@ end
 local panzerfestEnabled = true
 local panzerfest = nil
 
+--[[
+    DYNAMIC MAP ROTATION
+    Lua-based map rotation with on-demand map downloads.
+    Maps are stored in maps_repo/, symlinked to legacy/ on demand.
+    Controlled by map_rotation.lua module.
+]]--
+local mapRotationEnabled = true
+local mapRotation = nil
+
+-- Load Map Rotation (wrapped in pcall for safety)
+if mapRotationEnabled then
+    local success, err = pcall(function()
+        mapRotation = dofile("legacy/lua/map_rotation.lua")
+    end)
+    if not success then
+        et.G_Print("^1[ERROR] ^7Failed to load Map Rotation: " .. tostring(err) .. "\n")
+        mapRotationEnabled = false
+    end
+end
+
 -- Load Panzerfest/Survival Mode (wrapped in pcall for safety)
 if panzerfestEnabled then
     local success, err = pcall(function()
@@ -326,6 +346,13 @@ function et_InitGame(levelTime, randomSeed, restart)
         panzerfest.onInit(levelTime)
     end
 
+    -- Initialize Map Rotation System
+    if mapRotationEnabled and mapRotation then
+        mapRotation.init()
+        mapRotation.onMapInit()
+        log("^2Map Rotation ^3ENABLED")
+    end
+
     log("^2Initialization complete!")
 end
 
@@ -348,6 +375,11 @@ function et_ShutdownGame(restart)
     -- Shutdown Panzerfest/Survival Mode
     if panzerfestEnabled and panzerfest then
         panzerfest.onShutdown()
+    end
+
+    -- Shutdown Map Rotation
+    if mapRotationEnabled and mapRotation then
+        mapRotation.shutdown()
     end
 end
 
@@ -572,6 +604,12 @@ end
 function et_IntermissionReady()
     -- Called when intermission starts
     debug("Intermission ready")
+
+    -- Notify map rotation system
+    if mapRotationEnabled and mapRotation then
+        local levelTime = tonumber(et.trap_Cvar_Get("etpanel_leveltime")) or 0
+        mapRotation.onIntermissionStart(levelTime)
+    end
 end
 
 -- Track level time for ETPanel (updated every second, not every frame)
@@ -600,6 +638,11 @@ function et_RunFrame(levelTime)
     -- Update Panzerfest/Survival Mode
     if panzerfestEnabled and panzerfest then
         panzerfest.onRunFrame(levelTime)
+    end
+
+    -- Check for map rotation (handles intermission countdown)
+    if mapRotationEnabled and mapRotation then
+        mapRotation.checkMapChange(levelTime)
     end
 end
 
@@ -652,6 +695,13 @@ function et_ClientCommand(clientNum, command)
         et.G_Print("[DEBUG] rocketMode enabled, checking command...\n")
         if rocketMode.handleCommand(clientNum, cmd) then
             et.G_Print("[DEBUG] rocketMode.handleCommand returned true\n")
+            return 1  -- Command handled
+        end
+    end
+
+    -- Handle map rotation commands: /nextmap, /maplist
+    if mapRotationEnabled and mapRotation then
+        if mapRotation.handleCommand(clientNum, cmd) then
             return 1  -- Command handled
         end
     end
@@ -770,6 +820,28 @@ function et_ConsoleCommand()
     if rickrollEnabled and rickroll then
         et.G_Print(string.format("[DEBUG] Calling rickroll.consoleCommand with '%s'\n", cmd))
         if rickroll.consoleCommand(cmd) then
+            return 1
+        end
+    end
+
+    -- Map rotation console commands (for rcon)
+    -- NOTE: "nextmap" conflicts with engine cvar, use "rotatemap" instead
+    if mapRotationEnabled and mapRotation then
+        if cmd == "rotatemap" or cmd == "rotate" or cmd == "maprotate" then
+            log("^3Console: scheduling next map in rotation")
+            mapRotation.scheduleNextMap()
+            return 1
+        end
+        if cmd == "maplist" or cmd == "rotation" then
+            local currentMap = et.trap_Cvar_Get("mapname")
+            log("^3Map Rotation:")
+            for i, mapName in ipairs(mapRotation.maps) do
+                if mapName == currentMap then
+                    log("  ^2> " .. i .. ". " .. mapName .. " ^7(current)")
+                else
+                    log("    " .. i .. ". " .. mapName)
+                end
+            end
             return 1
         end
     end

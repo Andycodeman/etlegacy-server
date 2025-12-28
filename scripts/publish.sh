@@ -72,20 +72,33 @@ rsync -avz --progress \
     "$LOCAL_SERVER/legacy/lua/" \
     "$REMOTE_HOST:$REMOTE_DIR/legacy/lua/"
 
-# Step 4: Sync omni-bot waypoints
-echo -e "${YELLOW}Step 4: Syncing omni-bot waypoints...${NC}"
+# Step 4: Sync maps_repo/ for Dynamic Map Loader
+echo -e "${YELLOW}Step 4: Syncing maps_repo/ to VPS...${NC}"
+rsync -avz --progress \
+    "$LOCAL_SERVER/maps_repo/" \
+    "$REMOTE_HOST:$REMOTE_DIR/maps_repo/"
+
+# Step 4a: Sync map_switch.sh script
+echo -e "${YELLOW}Step 4a: Syncing map_switch.sh...${NC}"
+rsync -avz --progress \
+    "$LOCAL_SERVER/scripts/map_switch.sh" \
+    "$REMOTE_HOST:$REMOTE_DIR/scripts/"
+ssh $SSH_OPTS "$REMOTE_HOST" "chmod +x $REMOTE_DIR/scripts/map_switch.sh"
+
+# Step 4b: Sync omni-bot waypoints
+echo -e "${YELLOW}Step 4b: Syncing omni-bot waypoints...${NC}"
 rsync -avz --progress \
     "$LOCAL_SERVER/omni-bot/et/nav/" \
     "$REMOTE_HOST:$REMOTE_DIR/omni-bot/et/nav/" 2>/dev/null || echo "  (No waypoints to sync)"
 
-# Step 4b: Sync server-monitor.sh
-echo -e "${YELLOW}Step 4b: Syncing server-monitor.sh...${NC}"
+# Step 4c: Sync server-monitor.sh
+echo -e "${YELLOW}Step 4c: Syncing server-monitor.sh...${NC}"
 rsync -avz --progress \
     "$PROJECT_DIR/scripts/server-monitor.sh" \
     "$REMOTE_HOST:$REMOTE_DIR/server-monitor.sh"
 ssh $SSH_OPTS "$REMOTE_HOST" "chmod +x $REMOTE_DIR/server-monitor.sh"
 
-# Step 5: Update systemd service file on VPS
+# Step 5: Update systemd service file on VPS (with Dynamic Map Loader support)
 echo -e "${YELLOW}Step 5: Updating etserver.service on VPS...${NC}"
 ssh $SSH_OPTS "$REMOTE_HOST" "cat > /tmp/etserver.service << 'EOF'
 [Unit]
@@ -96,7 +109,14 @@ After=network.target
 Type=simple
 User=andy
 WorkingDirectory=/home/andy/etlegacy
-ExecStart=/home/andy/etlegacy/etlded.x86_64 +set fs_game legacy +exec server.cfg +set net_port 27960
+
+# Dynamic Map Loader: Set up initial map symlink before starting server
+# This creates symlink in legacy/ pointing to maps_repo/baserace.pk3
+ExecStartPre=/home/andy/etlegacy/scripts/map_switch.sh baserace
+
+# Start server with initial map (symlink already in place from ExecStartPre)
+ExecStart=/home/andy/etlegacy/etlded.x86_64 +set fs_game legacy +exec server.cfg +set net_port 27960 +map baserace
+
 Restart=on-failure
 RestartSec=5
 
@@ -105,7 +125,7 @@ WantedBy=multi-user.target
 EOF
 sudo mv /tmp/etserver.service /etc/systemd/system/etserver.service && sudo systemctl daemon-reload"
 
-echo "  - etserver.service updated for ET:Legacy (64-bit)"
+echo "  - etserver.service updated with Dynamic Map Loader support"
 
 # Step 5b: Sync voice server binary
 echo -e "${YELLOW}Step 5b: Syncing voice server to VPS...${NC}"

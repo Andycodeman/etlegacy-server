@@ -38,6 +38,47 @@
 #include "sv_tracker.h"
 #endif
 
+#ifndef _WIN32
+#include <unistd.h>  // for access()
+#endif
+
+// Dynamic Map Loader - ETMan
+// Runs map_switch.sh before FS_Restart to set up map symlinks
+// This enables on-demand map downloads by only symlinking the current map into legacy/
+#ifndef _WIN32
+void SV_DynamicMapSwitch(const char *mapname)
+{
+	char cmd[MAX_OSPATH];
+	const char *scriptPath = "/home/andy/etlegacy/scripts/map_switch.sh";
+
+	// Check if the script exists
+	if (access(scriptPath, X_OK) == 0)
+	{
+		Com_sprintf(cmd, sizeof(cmd), "%s %s", scriptPath, mapname);
+		Com_Printf("[DynamicMap] Executing: %s\n", cmd);
+		int result = system(cmd);
+		if (result != 0)
+		{
+			Com_Printf("[DynamicMap] WARNING: map_switch.sh returned %d\n", result);
+		}
+		else
+		{
+			Com_Printf("[DynamicMap] Symlink created for map: %s\n", mapname);
+		}
+	}
+	else
+	{
+		Com_DPrintf("[DynamicMap] Script not found: %s (this is OK for dev builds)\n", scriptPath);
+	}
+}
+#else
+void SV_DynamicMapSwitch(const char *mapname)
+{
+	// Windows: no-op, dynamic map loading is Linux-only
+	(void)mapname;
+}
+#endif
+
 // Attack log file is started when server is init (!= sv_running 1!)
 // we even log attacks when the server is waiting for rcon and doesn't run a map
 int attHandle = 0; // server attack log file handle
@@ -785,6 +826,10 @@ void SV_SpawnServer(const char *server)
 
 	// only comment out when you need a new pure checksum string and it's associated random feed
 	// Com_DPrintf("SV_SpawnServer checksum feed: %p\n", sv.checksumFeed);
+
+	// Dynamic Map Loader - ETMan
+	// Set up map symlink BEFORE FS_Restart so sv_pure checksums only include current map
+	SV_DynamicMapSwitch(server);
 
 	FS_Restart(sv.checksumFeed);
 

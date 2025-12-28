@@ -8,12 +8,12 @@
 ║   BEFORE doing ANYTHING, run:                                                ║
 ║   cd ~/projects/et/etlegacy && export FORCE_TRANSFORMERS=1 && \              ║
 ║   npx claude-flow memory query "<relevant search terms>" \                   ║
-║   --namespace <namespace> --reasoningbank                                    ║
+║   --namespace <namespace>                                                    ║
 ║                                                                              ║
 ║   AFTER completing ANY task, run:                                            ║
 ║   cd ~/projects/et/etlegacy && export FORCE_TRANSFORMERS=1 && \              ║
 ║   npx claude-flow memory store "<key>" "<what was done>" \                   ║
-║   --namespace <namespace> --reasoningbank                                    ║
+║   --namespace <namespace>                                                    ║
 ║                                                                              ║
 ║   Namespaces: build, server, etpanel, bugs, decisions, lessons               ║
 ║                                                                              ║
