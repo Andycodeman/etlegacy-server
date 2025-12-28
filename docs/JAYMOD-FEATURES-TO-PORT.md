@@ -404,7 +404,7 @@ These features exist natively - no porting needed:
 
 ### Testing
 - Local server: `~/etlegacy/`
-- Production VPS: `et.coolip.me:27960`
+- Production VPS: `et.etman.dev:27960`
 - Always test locally first!
 
 ---

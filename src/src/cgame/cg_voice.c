@@ -83,10 +83,11 @@ typedef struct
  */
 typedef struct
 {
-	uint8_t  type;      // VOICE_PKT_AUTH
-	uint32_t clientId;  // ET client slot
-	uint8_t  team;      // Current team (TEAM_AXIS, TEAM_ALLIES, etc)
-	char     guid[33];  // ET GUID (optional, for verification)
+	uint8_t  type;          // VOICE_PKT_AUTH
+	uint32_t clientId;      // ET client slot
+	uint8_t  team;          // Current team (TEAM_AXIS, TEAM_ALLIES, etc)
+	char     guid[33];      // ET GUID (optional, for verification)
+	char     playerName[64]; // Player name for sharing (Phase 2.1)
 } voiceAuthPacket_t;
 
 /*
@@ -258,11 +259,14 @@ static void Voice_SendAuth(void)
 	/* Get GUID if available */
 	trap_Cvar_VariableStringBuffer("cl_guid", packet.guid, sizeof(packet.guid));
 
+	/* Include player name for sharing feature (Phase 2.1) */
+	Q_strncpyz(packet.playerName, cgs.clientinfo[cg.clientNum].name, sizeof(packet.playerName));
+
 	sendto(voice.socket, (char *)&packet, sizeof(packet), 0,
 	       (struct sockaddr *)&voice.serverAddr, sizeof(voice.serverAddr));
 
 	voice.lastTeamSent = team;
-	CG_Printf("^2Voice: Sent auth (team=%d)\n", team);
+	CG_Printf("^2Voice: Sent auth (team=%d, name='%s')\n", team, packet.playerName);
 }
 
 /*
@@ -844,8 +848,8 @@ static void Voice_ProcessIncoming(void)
 
 		relay = (voiceRelayHeader_t *)buffer;
 
-		/* Check for ETMan response packets (0x20-0x24) */
-		if (buffer[0] >= 0x20 && buffer[0] <= 0x24)
+		/* Check for ETMan response packets (0x20-0x24, 0x31) */
+		if ((buffer[0] >= 0x20 && buffer[0] <= 0x24) || buffer[0] == 0x31)
 		{
 			ETMan_HandleResponse(buffer, received);
 			continue;

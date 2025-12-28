@@ -15,6 +15,7 @@
  *        Default: port 27961, game_server 27960
  */
 
+#define _GNU_SOURCE  /* For strcasestr */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -109,6 +110,7 @@ typedef struct {
     uint32_t clientId;      // ET client slot
     uint8_t  team;          // Current team
     char     guid[33];      // ET GUID (optional for verification)
+    char     playerName[64]; // Player name for sharing (Phase 2.1)
 } AuthPacket;
 
 /*
@@ -144,6 +146,9 @@ typedef struct {
     time_t   txLimitMinute;     // Which minute we're tracking (time / 60)
     uint32_t txMsThisMinute;    // Milliseconds transmitted this minute
     bool     txLimitWarned;     // Have we warned them this minute?
+    /* Identity for sharing (Phase 2.1) */
+    char     guid[33];          // ET GUID for sound sharing
+    char     playerName[64];    // Player name for fuzzy matching
 } ClientInfo;
 
 /*
@@ -181,6 +186,63 @@ static void signalHandler(int sig) {
 }
 
 /*
+ * Query game server for player GUIDs via getstatus
+ * This is needed because clients on the same machine share cl_guid
+ * Returns the GUID for a specific client slot, or empty string if not found
+ */
+static bool queryGameServerGuid(uint32_t clientSlot, char *outGuid, int outLen) {
+    if (outGuid && outLen > 0) outGuid[0] = '\0';
+
+    /* Create UDP socket for query */
+    SOCKET querySocket = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+    if (querySocket == INVALID_SOCKET) {
+        return false;
+    }
+
+    /* Set timeout */
+    struct timeval tv = { .tv_sec = 1, .tv_usec = 0 };
+    setsockopt(querySocket, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+
+    /* Query game server at localhost:gameport */
+    struct sockaddr_in serverAddr = {0};
+    serverAddr.sin_family = AF_INET;
+    serverAddr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    serverAddr.sin_port = htons(g_gameServerPort);
+
+    /* Send getstatus query */
+    const char *query = "\xff\xff\xff\xffgetstatus";
+    if (sendto(querySocket, query, strlen(query), 0,
+               (struct sockaddr*)&serverAddr, sizeof(serverAddr)) < 0) {
+        close(querySocket);
+        return false;
+    }
+
+    /* Receive response */
+    char response[4096];
+    int received = recv(querySocket, response, sizeof(response) - 1, 0);
+    close(querySocket);
+
+    if (received <= 0) {
+        return false;
+    }
+    response[received] = '\0';
+
+    /* Parse response - format is:
+     * \xff\xff\xff\xffstatusResponse\n
+     * key\value\key\value...\n
+     * score ping "name"\n
+     * score ping "name"\n
+     * ...
+     *
+     * But GUIDs are in server cvars, not easily accessible.
+     * Actually we need to use rcon or a different approach.
+     */
+
+    /* For now, return false - this needs rcon or Lua integration */
+    return false;
+}
+
+/*
  * Find client by address
  */
 static ClientInfo* findClientByAddr(struct sockaddr_in *addr) {
@@ -203,6 +265,105 @@ static ClientInfo* findClientById(uint32_t clientId) {
         }
     }
     return NULL;
+}
+
+/*
+ * Find client by player name (fuzzy matching for sharing)
+ * Returns the client if exactly one match found, NULL otherwise.
+ * Searches for substring match (case-insensitive).
+ */
+static ClientInfo* findClientByNameFuzzy(const char *name, char *outError, int outLen) {
+    if (!name || !name[0]) {
+        if (outError) snprintf(outError, outLen, "No player name specified");
+        return NULL;
+    }
+
+    ClientInfo *match = NULL;
+    int matchCount = 0;
+
+    for (int i = 0; i < g_numClients; i++) {
+        ClientInfo *c = &g_clients[i];
+        if (!c->authenticated || !c->playerName[0]) continue;
+
+        /* Case-insensitive substring match */
+        if (strcasestr(c->playerName, name) != NULL) {
+            match = c;
+            matchCount++;
+        }
+    }
+
+    if (matchCount == 0) {
+        if (outError) snprintf(outError, outLen, "No online player matches '%s'", name);
+        return NULL;
+    }
+
+    if (matchCount > 1) {
+        if (outError) snprintf(outError, outLen, "Multiple players match '%s', be more specific", name);
+        return NULL;
+    }
+
+    return match;
+}
+
+/*
+ * Get GUID for a player by name (for sharing)
+ * Returns true if exactly one match found, fills outGuid with their GUID.
+ * Also fills outActualName with the player's actual full name if provided.
+ */
+bool getGuidByPlayerName(const char *name, char *outGuid, int outLen,
+                         char *outActualName, int nameLen,
+                         char *outError, int errLen) {
+    ClientInfo *client = findClientByNameFuzzy(name, outError, errLen);
+    if (!client) {
+        return false;
+    }
+
+    if (!client->guid[0]) {
+        if (outError) snprintf(outError, errLen, "Player '%s' has no GUID registered", name);
+        return false;
+    }
+
+    strncpy(outGuid, client->guid, outLen - 1);
+    outGuid[outLen - 1] = '\0';
+
+    /* Return actual player name if buffer provided */
+    if (outActualName && nameLen > 0) {
+        strncpy(outActualName, client->playerName, nameLen - 1);
+        outActualName[nameLen - 1] = '\0';
+    }
+
+    return true;
+}
+
+/*
+ * Get player name by client ID (for share requests)
+ */
+bool getPlayerNameByClientId(uint32_t clientId, char *outName, int outLen) {
+    ClientInfo *client = findClientById(clientId);
+    if (!client || !client->playerName[0]) {
+        if (outName && outLen > 0) outName[0] = '\0';
+        return false;
+    }
+
+    strncpy(outName, client->playerName, outLen - 1);
+    outName[outLen - 1] = '\0';
+    return true;
+}
+
+/*
+ * Get GUID by client ID (use server-stored GUID, not what client sends)
+ * This is needed because clients on the same machine share cl_guid
+ */
+bool getGuidByClientId(uint32_t clientId, char *outGuid, int outLen) {
+    ClientInfo *client = findClientById(clientId);
+    if (!client || !client->guid[0]) {
+        if (outGuid && outLen > 0) outGuid[0] = '\0';
+        return false;
+    }
+
+    strncpy(outGuid, client->guid, outLen - 1);
+    outGuid[outLen - 1] = '\0';
+    return true;
 }
 
 /*
@@ -377,8 +538,19 @@ static void handleAuthPacket(struct sockaddr_in *addr, uint8_t *buffer, int rece
     if (client) {
         client->team = auth->team;
         client->authenticated = true;
-        printf("Client %u authenticated (team %d) from %s:%d\n",
-               clientId, auth->team,
+
+        /* Store GUID and player name for sharing (Phase 2.1) */
+        strncpy(client->guid, auth->guid, sizeof(client->guid) - 1);
+        client->guid[sizeof(client->guid) - 1] = '\0';
+
+        /* Player name might not be sent by older clients */
+        if (received >= (int)(sizeof(AuthPacket) - sizeof(auth->playerName) + 1)) {
+            strncpy(client->playerName, auth->playerName, sizeof(client->playerName) - 1);
+            client->playerName[sizeof(client->playerName) - 1] = '\0';
+        }
+
+        printf("Client %u authenticated (team %d, name='%s') from %s:%d\n",
+               clientId, auth->team, client->playerName,
                inet_ntoa(addr->sin_addr),
                ntohs(addr->sin_port));
     }
@@ -714,10 +886,12 @@ static void processSoundPlayback(void) {
 }
 
 /*
- * Check if packet is a sound command (0x10-0x18 range)
+ * Check if packet is a sound command (0x10-0x26 range)
  */
 static bool isSoundCommand(uint8_t type) {
-    return type >= VOICE_CMD_SOUND_ADD && type <= VOICE_CMD_SOUND_STOP;
+    /* Sound commands: 0x10-0x27, plus account registration 0x30 */
+    return (type >= VOICE_CMD_SOUND_ADD && type <= VOICE_CMD_PLAYLIST_PUBLIC_SHOW) ||
+           type == VOICE_CMD_ACCOUNT_REGISTER;
 }
 
 /*

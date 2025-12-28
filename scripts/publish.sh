@@ -127,17 +127,19 @@ else
 fi
 
 # Step 5c: Create/update voice-server.service on VPS
+# Note: DATABASE_URL uses etpanel123 password (set Dec 2025)
 echo -e "${YELLOW}Step 5c: Updating voice-server.service on VPS...${NC}"
 ssh $SSH_OPTS "$REMOTE_HOST" "cat > /tmp/voice-server.service << 'EOF'
 [Unit]
 Description=ET:Legacy Voice Chat Server
-After=network.target etserver.service
+After=network.target etserver.service postgresql.service
 Wants=etserver.service
 
 [Service]
 Type=simple
 User=andy
 WorkingDirectory=/home/andy/etlegacy
+Environment="DATABASE_URL=postgresql://etpanel:etpanel123@localhost:5432/etpanel"
 ExecStart=/home/andy/etlegacy/voice_server 27961 27960
 Restart=always
 RestartSec=5
@@ -228,7 +230,7 @@ echo -e "${GREEN}║                    Publish Complete!                       
 echo -e "${GREEN}╚══════════════════════════════════════════════════════════════╝${NC}"
 echo ""
 echo "Remote server: $REMOTE_HOST"
-echo "Connect: /connect et.coolip.me:27960"
+echo "Connect: /connect et.etman.dev:27960"
 echo ""
 echo "Commands:"
 echo "  ssh $REMOTE_HOST 'sudo systemctl status etserver'   # Check status"

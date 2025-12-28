@@ -4,6 +4,7 @@
  */
 
 #include "sound_manager.h"
+#include "db_manager.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -13,6 +14,7 @@
 #include <sys/stat.h>
 #include <errno.h>
 #include <time.h>
+#include <uuid/uuid.h>
 
 #ifdef _WIN32
     #include <winsock2.h>
@@ -50,6 +52,23 @@
 #define MAX_PENDING_SHARES      64
 
 /*
+ * Cached pending shares for index-based accept/reject
+ */
+#define MAX_CACHED_CLIENTS      64
+#define MAX_CACHED_SHARES       32
+
+typedef struct {
+    uint32_t        clientId;
+    time_t          cacheTime;
+    int             count;
+    struct {
+        int         soundFileId;
+        char        fromGuid[SOUND_GUID_LEN + 1];
+        char        suggestedAlias[SOUND_MAX_NAME_LEN + 1];
+    } shares[MAX_CACHED_SHARES];
+} CachedPendingShares;
+
+/*
  * Module state
  */
 static struct {
@@ -67,15 +86,31 @@ static struct {
     PendingShare    shares[MAX_PENDING_SHARES];
     int             numShares;
 
+    /* Cached pending shares for index-based lookup */
+    CachedPendingShares cachedShares[MAX_CACHED_CLIENTS];
+    int             numCachedClients;
+
     /* MP3 decoder */
     mp3dec_t        mp3Decoder;
 
-    /* Cooldown tracking per GUID */
+    /* Cooldown tracking per GUID (for add requests) */
     struct {
         char    guid[SOUND_GUID_LEN + 1];
         time_t  lastAddTime;
     } cooldowns[MAX_PENDING_DOWNLOADS * 4];
     int             numCooldowns;
+
+    /* Play rate limiting per GUID (burst limit with cooldown) */
+    struct {
+        char    guid[SOUND_GUID_LEN + 1];
+        int     burstCount;         /* Number of sounds played in current burst */
+        time_t  firstPlayTime;      /* Time of first play in current burst window */
+        time_t  cooldownUntil;      /* If set, player is in cooldown until this time */
+    } playRateLimits[64];           /* Track up to 64 players */
+    int             numPlayRateLimits;
+
+    /* Database mode (Phase 2) */
+    bool            dbMode;         /* If true, use PostgreSQL for metadata */
 
 } g_soundMgr;
 
@@ -88,11 +123,93 @@ static bool getPlayerDir(const char *guid, char *outPath, int outLen);
 static bool getSoundPath(const char *guid, const char *name, char *outPath, int outLen);
 static bool checkCooldown(const char *guid);
 static void updateCooldown(const char *guid);
+static bool checkPlayRateLimit(const char *guid, int *outCooldownRemaining);
+static bool updatePlayRateLimit(const char *guid);
 static bool decodeMP3(const char *filepath, int16_t **outPcm, int *outSamples);
+static bool SoundMgr_PlaySoundByPath(uint32_t clientId, const char *guid,
+                                     const char *name, const char *filepath);
 extern void sendResponseToClient(uint32_t clientId, uint8_t respType,
                                  const char *message);
 extern void broadcastOpusPacket(uint8_t fromClient, uint8_t channel,
                                 uint32_t sequence, const uint8_t *opus, int opusLen);
+
+/*
+ * Store pending shares for a client (for index-based accept/reject)
+ */
+static void storePendingSharesForClient(uint32_t clientId, DBShareListResult *result, int count) {
+    /* Find existing or get new slot */
+    int slot = -1;
+    for (int i = 0; i < g_soundMgr.numCachedClients; i++) {
+        if (g_soundMgr.cachedShares[i].clientId == clientId) {
+            slot = i;
+            break;
+        }
+    }
+
+    if (slot < 0) {
+        if (g_soundMgr.numCachedClients < MAX_CACHED_CLIENTS) {
+            slot = g_soundMgr.numCachedClients++;
+        } else {
+            /* Evict oldest entry */
+            time_t oldest = time(NULL);
+            slot = 0;
+            for (int i = 1; i < MAX_CACHED_CLIENTS; i++) {
+                if (g_soundMgr.cachedShares[i].cacheTime < oldest) {
+                    oldest = g_soundMgr.cachedShares[i].cacheTime;
+                    slot = i;
+                }
+            }
+        }
+    }
+
+    CachedPendingShares *cache = &g_soundMgr.cachedShares[slot];
+    cache->clientId = clientId;
+    cache->cacheTime = time(NULL);
+    cache->count = (count > MAX_CACHED_SHARES) ? MAX_CACHED_SHARES : count;
+
+    for (int i = 0; i < cache->count; i++) {
+        cache->shares[i].soundFileId = result->shares[i].soundFileId;
+        strncpy(cache->shares[i].fromGuid, result->shares[i].fromGuid, SOUND_GUID_LEN);
+        cache->shares[i].fromGuid[SOUND_GUID_LEN] = '\0';
+        strncpy(cache->shares[i].suggestedAlias, result->shares[i].suggestedAlias, SOUND_MAX_NAME_LEN);
+        cache->shares[i].suggestedAlias[SOUND_MAX_NAME_LEN] = '\0';
+    }
+
+    printf("SoundMgr: Cached %d pending shares for client %u\n", cache->count, clientId);
+}
+
+/*
+ * Get pending share by index (1-based) for a client
+ * Returns true if found, fills outSoundFileId and outFromGuid
+ */
+static bool getPendingShareByIndex(uint32_t clientId, int index,
+                                   int *outSoundFileId, char *outFromGuid,
+                                   char *outSuggestedAlias) {
+    for (int i = 0; i < g_soundMgr.numCachedClients; i++) {
+        if (g_soundMgr.cachedShares[i].clientId == clientId) {
+            CachedPendingShares *cache = &g_soundMgr.cachedShares[i];
+
+            /* Check cache age (5 minute expiry) */
+            if (time(NULL) - cache->cacheTime > 300) {
+                return false;  /* Cache expired */
+            }
+
+            /* Convert 1-based index to 0-based */
+            int idx = index - 1;
+            if (idx < 0 || idx >= cache->count) {
+                return false;  /* Out of range */
+            }
+
+            *outSoundFileId = cache->shares[idx].soundFileId;
+            strncpy(outFromGuid, cache->shares[idx].fromGuid, SOUND_GUID_LEN + 1);
+            if (outSuggestedAlias) {
+                strncpy(outSuggestedAlias, cache->shares[idx].suggestedAlias, SOUND_MAX_NAME_LEN + 1);
+            }
+            return true;
+        }
+    }
+    return false;
+}
 
 
 /*
@@ -149,6 +266,22 @@ bool SoundMgr_Init(const char *baseDir) {
     g_soundMgr.initialized = true;
     printf("SoundMgr: Initialized, storage at %s\n", g_soundMgr.baseDir);
 
+    /* Try to initialize database connection (Phase 2) */
+    const char *dbUrl = getenv("DATABASE_URL");
+    if (dbUrl && dbUrl[0]) {
+        if (DB_Init(NULL)) {
+            g_soundMgr.dbMode = true;
+            printf("SoundMgr: Database mode ENABLED\n");
+        } else {
+            printf("SoundMgr: Database connection failed, using filesystem mode\n");
+            printf("SoundMgr: Error: %s\n", DB_GetLastError());
+            g_soundMgr.dbMode = false;
+        }
+    } else {
+        printf("SoundMgr: DATABASE_URL not set, using filesystem mode\n");
+        g_soundMgr.dbMode = false;
+    }
+
     return true;
 }
 
@@ -165,6 +298,11 @@ void SoundMgr_Shutdown(void) {
     if (g_soundMgr.playback.opusEncoder) {
         opus_encoder_destroy((OpusEncoder*)g_soundMgr.playback.opusEncoder);
         g_soundMgr.playback.opusEncoder = NULL;
+    }
+
+    /* Shutdown database connection */
+    if (g_soundMgr.dbMode) {
+        DB_Shutdown();
     }
 
     memset(&g_soundMgr, 0, sizeof(g_soundMgr));
@@ -254,29 +392,33 @@ void SoundMgr_Frame(void) {
  */
 void SoundMgr_HandlePacket(uint32_t clientId, struct sockaddr_in *clientAddr,
                            const uint8_t *data, int dataLen) {
-    if (!g_soundMgr.initialized || dataLen < 6) {  /* type + clientId + at least 1 byte */
+    if (!g_soundMgr.initialized || dataLen < 5) {  /* type + clientId (some commands have no payload) */
+        printf("[DEBUG] SoundMgr_HandlePacket: rejected (init=%d, len=%d)\n",
+               g_soundMgr.initialized, dataLen);
         return;
     }
 
     uint8_t cmdType = data[0];
+    printf("[DEBUG] SoundMgr_HandlePacket: cmdType=0x%02X, dataLen=%d, clientId=%u\n",
+           cmdType, dataLen, clientId);
     /* Skip type (1) and clientId (4) - clientId already extracted by caller */
     const uint8_t *payload = data + 5;
     int payloadLen = dataLen - 5;
 
     switch (cmdType) {
         case VOICE_CMD_SOUND_LIST: {
-            /* Payload: <guid[32]> */
-            if (payloadLen < SOUND_GUID_LEN) {
-                sendResponseToClient(clientId, VOICE_RESP_ERROR, "Invalid list request");
+            /* Use server-stored GUID, not what client sends */
+            char guid[SOUND_GUID_LEN + 1];
+            if (!getGuidByClientId(clientId, guid, sizeof(guid))) {
+                sendResponseToClient(clientId, VOICE_RESP_ERROR, "Not authenticated - reconnect to server");
                 return;
             }
 
-            char guid[SOUND_GUID_LEN + 1];
-            memcpy(guid, payload, SOUND_GUID_LEN);
-            guid[SOUND_GUID_LEN] = '\0';
+            printf("[DEBUG] SOUND_LIST: clientId=%u, using GUID=%s\n", clientId, guid);
 
             SoundInfo sounds[SOUND_MAX_PER_USER];
             int count = SoundMgr_ListSounds(guid, sounds, SOUND_MAX_PER_USER);
+            printf("[DEBUG] SOUND_LIST: got %d sounds for GUID %s\n", count, guid);
 
             if (count < 0) {
                 sendResponseToClient(clientId, VOICE_RESP_ERROR, "Failed to list sounds");
@@ -385,27 +527,33 @@ void SoundMgr_HandlePacket(uint32_t clientId, struct sockaddr_in *clientAddr,
                 return;
             }
 
+            /* Use server-stored GUID (handles shared sounds correctly) */
             char guid[SOUND_GUID_LEN + 1];
-            memcpy(guid, payload, SOUND_GUID_LEN);
-            guid[SOUND_GUID_LEN] = '\0';
+            if (!getGuidByClientId(clientId, guid, sizeof(guid))) {
+                /* Fallback to packet GUID if not found */
+                memcpy(guid, payload, SOUND_GUID_LEN);
+                guid[SOUND_GUID_LEN] = '\0';
+            }
 
             char name[SOUND_MAX_NAME_LEN + 1] = {0};
             int nameLen = payloadLen - SOUND_GUID_LEN;
             if (nameLen > SOUND_MAX_NAME_LEN) nameLen = SOUND_MAX_NAME_LEN;
             memcpy(name, payload + SOUND_GUID_LEN, nameLen);
 
-            /* Check state directly - don't rely on IsPlaying() which has extra conditions */
+            /* Check rate limit (5 sounds burst, then 5 second cooldown) */
+            int cooldownRemaining = 0;
+            if (!checkPlayRateLimit(guid, &cooldownRemaining)) {
+                char msg[64];
+                snprintf(msg, sizeof(msg), "Rate limited. Wait %d seconds.", cooldownRemaining);
+                sendResponseToClient(clientId, VOICE_RESP_ERROR, msg);
+                return;
+            }
+
+            /* Interrupt mode: if a sound is playing, stop it and play the new one */
             if (g_soundMgr.playback.state == PLAYBACK_PLAYING ||
                 g_soundMgr.playback.state == PLAYBACK_LOADING) {
-                /* Force reset if stuck (position >= samples means it should be done) */
-                if (g_soundMgr.playback.pcmPosition >= g_soundMgr.playback.pcmSamples) {
-                    printf("SoundMgr: Forcing reset of stuck playback state\n");
-                    SoundMgr_StopSound();
-                } else {
-                    sendResponseToClient(clientId, VOICE_RESP_ERROR,
-                        "A sound is already playing. Wait or use /etman stopsnd");
-                    return;
-                }
+                printf("SoundMgr: Interrupting current sound to play '%s'\n", name);
+                SoundMgr_StopSound();
             }
 
             if (!SoundMgr_PlaySound(clientId, guid, name)) {
@@ -413,20 +561,26 @@ void SoundMgr_HandlePacket(uint32_t clientId, struct sockaddr_in *clientAddr,
                     "Failed to play sound. Does it exist?");
                 return;
             }
+
+            /* Update rate limit tracking (after successful play) */
+            updatePlayRateLimit(guid);
             break;
         }
 
         case VOICE_CMD_SOUND_DELETE: {
-            /* Payload: <guid[32]><name> */
+            /* Payload: <guid[32]><name> - use server-stored GUID */
             if (payloadLen < SOUND_GUID_LEN + 1) {
                 sendResponseToClient(clientId, VOICE_RESP_ERROR, "Invalid delete request");
                 return;
             }
 
             char guid[SOUND_GUID_LEN + 1];
-            memcpy(guid, payload, SOUND_GUID_LEN);
-            guid[SOUND_GUID_LEN] = '\0';
+            if (!getGuidByClientId(clientId, guid, sizeof(guid))) {
+                sendResponseToClient(clientId, VOICE_RESP_ERROR, "Not authenticated - reconnect to server");
+                return;
+            }
 
+            /* Name starts after the guid in the packet */
             char name[SOUND_MAX_NAME_LEN + 1] = {0};
             int nameLen = payloadLen - SOUND_GUID_LEN;
             if (nameLen > SOUND_MAX_NAME_LEN) nameLen = SOUND_MAX_NAME_LEN;
@@ -444,15 +598,17 @@ void SoundMgr_HandlePacket(uint32_t clientId, struct sockaddr_in *clientAddr,
         }
 
         case VOICE_CMD_SOUND_RENAME: {
-            /* Payload: <guid[32]><oldNameLen[1]><oldName><newName> */
+            /* Payload: <guid[32]><oldNameLen[1]><oldName><newName> - use server-stored GUID */
             if (payloadLen < SOUND_GUID_LEN + 2) {
                 sendResponseToClient(clientId, VOICE_RESP_ERROR, "Invalid rename request");
                 return;
             }
 
             char guid[SOUND_GUID_LEN + 1];
-            memcpy(guid, payload, SOUND_GUID_LEN);
-            guid[SOUND_GUID_LEN] = '\0';
+            if (!getGuidByClientId(clientId, guid, sizeof(guid))) {
+                sendResponseToClient(clientId, VOICE_RESP_ERROR, "Not authenticated - reconnect to server");
+                return;
+            }
 
             uint8_t oldLen = payload[SOUND_GUID_LEN];
             if (payloadLen < SOUND_GUID_LEN + 1 + oldLen + 1) {
@@ -500,12 +656,892 @@ void SoundMgr_HandlePacket(uint32_t clientId, struct sockaddr_in *clientAddr,
             break;
         }
 
-        case VOICE_CMD_SOUND_SHARE:
-        case VOICE_CMD_SOUND_ACCEPT:
-        case VOICE_CMD_SOUND_REJECT:
-            /* TODO: Implement in Phase 6 */
-            sendResponseToClient(clientId, VOICE_RESP_ERROR, "Sharing not yet implemented");
+        case VOICE_CMD_SOUND_SHARE: {
+            /* Payload: <guid[32]><soundNameLen[1]><soundName><targetPlayerName> */
+            if (!g_soundMgr.dbMode) {
+                sendResponseToClient(clientId, VOICE_RESP_ERROR, "Sharing requires database mode");
+                return;
+            }
+            if (payloadLen < SOUND_GUID_LEN + 2) {
+                sendResponseToClient(clientId, VOICE_RESP_ERROR, "Invalid share request");
+                return;
+            }
+
+            char fromGuid[SOUND_GUID_LEN + 1];
+            memcpy(fromGuid, payload, SOUND_GUID_LEN);
+            fromGuid[SOUND_GUID_LEN] = '\0';
+
+            uint8_t soundNameLen = payload[SOUND_GUID_LEN];
+            if (payloadLen < SOUND_GUID_LEN + 1 + soundNameLen + 1) {
+                sendResponseToClient(clientId, VOICE_RESP_ERROR, "Invalid share request");
+                return;
+            }
+
+            char soundName[SOUND_MAX_NAME_LEN + 1] = {0};
+            if (soundNameLen > SOUND_MAX_NAME_LEN) soundNameLen = SOUND_MAX_NAME_LEN;
+            memcpy(soundName, payload + SOUND_GUID_LEN + 1, soundNameLen);
+
+            /* Get target player name */
+            char targetPlayerName[64] = {0};
+            int targetNameLen = payloadLen - SOUND_GUID_LEN - 1 - soundNameLen;
+            if (targetNameLen > 63) targetNameLen = 63;
+            if (targetNameLen > 0) {
+                memcpy(targetPlayerName, payload + SOUND_GUID_LEN + 1 + soundNameLen, targetNameLen);
+            }
+
+            /* Look up target player's GUID by name */
+            char toGuid[SOUND_GUID_LEN + 1] = {0};
+            char actualPlayerName[64] = {0};
+            char lookupError[128] = {0};
+            if (!getGuidByPlayerName(targetPlayerName, toGuid, sizeof(toGuid),
+                                      actualPlayerName, sizeof(actualPlayerName),
+                                      lookupError, sizeof(lookupError))) {
+                sendResponseToClient(clientId, VOICE_RESP_ERROR, lookupError);
+                return;
+            }
+
+            /* Don't allow sharing with yourself */
+            if (strcmp(fromGuid, toGuid) == 0) {
+                sendResponseToClient(clientId, VOICE_RESP_ERROR, "Cannot share with yourself");
+                return;
+            }
+
+            /* Get sender's player name for the share record */
+            char senderPlayerName[64] = {0};
+            getPlayerNameByClientId(clientId, senderPlayerName, sizeof(senderPlayerName));
+
+            if (DB_CreateShare(fromGuid, toGuid, soundName, soundName, senderPlayerName)) {
+                char msg[128];
+                snprintf(msg, sizeof(msg), "Shared '%s' with %s", soundName, actualPlayerName);
+                sendResponseToClient(clientId, VOICE_RESP_SUCCESS, msg);
+            } else {
+                sendResponseToClient(clientId, VOICE_RESP_ERROR, DB_GetLastError());
+            }
             break;
+        }
+
+        case VOICE_CMD_SOUND_ACCEPT: {
+            /* Payload: <guid[32]><fromGuid[32]><index[4]><alias>
+             * The index is a 1-based number from /etman pending list
+             * We look up the actual soundFileId and fromGuid from our cache
+             * Use server-stored GUID, not what client sends */
+            if (!g_soundMgr.dbMode) {
+                sendResponseToClient(clientId, VOICE_RESP_ERROR, "Sharing requires database mode");
+                return;
+            }
+
+            char toGuid[SOUND_GUID_LEN + 1];
+            if (!getGuidByClientId(clientId, toGuid, sizeof(toGuid))) {
+                sendResponseToClient(clientId, VOICE_RESP_ERROR, "Not authenticated - reconnect to server");
+                return;
+            }
+
+            /* Skip the guid and dummy fromGuid in packet, get index */
+            /* The client sends an index (1-based) not the actual soundFileId */
+            uint32_t index;
+            memcpy(&index, payload + SOUND_GUID_LEN + SOUND_GUID_LEN, 4);
+            index = ntohl(index);
+
+            /* Get alias from packet (after guid + dummy fromGuid + index) */
+            char alias[SOUND_MAX_NAME_LEN + 1] = {0};
+            int aliasLen = payloadLen - SOUND_GUID_LEN - SOUND_GUID_LEN - 4;
+            if (aliasLen > SOUND_MAX_NAME_LEN) aliasLen = SOUND_MAX_NAME_LEN;
+            if (aliasLen > 0) {
+                memcpy(alias, payload + SOUND_GUID_LEN + SOUND_GUID_LEN + 4, aliasLen);
+            }
+
+            /* Look up the actual soundFileId and fromGuid from cache */
+            int soundFileId;
+            char fromGuid[SOUND_GUID_LEN + 1];
+            char suggestedAlias[SOUND_MAX_NAME_LEN + 1];
+            if (!getPendingShareByIndex(clientId, (int)index, &soundFileId, fromGuid, suggestedAlias)) {
+                sendResponseToClient(clientId, VOICE_RESP_ERROR,
+                    "Invalid share #. Run /etman pending first to see current list");
+                return;
+            }
+
+            /* If no alias provided, use the suggested alias */
+            if (alias[0] == '\0') {
+                strncpy(alias, suggestedAlias, SOUND_MAX_NAME_LEN);
+                alias[SOUND_MAX_NAME_LEN] = '\0';
+            }
+
+            if (DB_AcceptShare(toGuid, fromGuid, soundFileId, alias)) {
+                char msg[128];
+                snprintf(msg, sizeof(msg), "Accepted share #%d as '%s'", (int)index, alias);
+                sendResponseToClient(clientId, VOICE_RESP_SUCCESS, msg);
+            } else {
+                sendResponseToClient(clientId, VOICE_RESP_ERROR, DB_GetLastError());
+            }
+            break;
+        }
+
+        case VOICE_CMD_SOUND_REJECT: {
+            /* Payload: <guid[32]><fromGuid[32]><index[4]>
+             * The index is a 1-based number from /etman pending list
+             * We look up the actual soundFileId and fromGuid from our cache
+             * Use server-stored GUID, not what client sends */
+            if (!g_soundMgr.dbMode) {
+                sendResponseToClient(clientId, VOICE_RESP_ERROR, "Sharing requires database mode");
+                return;
+            }
+
+            char toGuid[SOUND_GUID_LEN + 1];
+            if (!getGuidByClientId(clientId, toGuid, sizeof(toGuid))) {
+                sendResponseToClient(clientId, VOICE_RESP_ERROR, "Not authenticated - reconnect to server");
+                return;
+            }
+
+            /* The client sends an index (1-based) not the actual soundFileId */
+            uint32_t index;
+            memcpy(&index, payload + SOUND_GUID_LEN + SOUND_GUID_LEN, 4);
+            index = ntohl(index);
+
+            /* Look up the actual soundFileId and fromGuid from cache */
+            int soundFileId;
+            char fromGuid[SOUND_GUID_LEN + 1];
+            if (!getPendingShareByIndex(clientId, (int)index, &soundFileId, fromGuid, NULL)) {
+                sendResponseToClient(clientId, VOICE_RESP_ERROR,
+                    "Invalid share #. Run /etman pending first to see current list");
+                return;
+            }
+
+            if (DB_RejectShare(toGuid, fromGuid, soundFileId)) {
+                char msg[64];
+                snprintf(msg, sizeof(msg), "Rejected share #%d", (int)index);
+                sendResponseToClient(clientId, VOICE_RESP_SUCCESS, msg);
+            } else {
+                sendResponseToClient(clientId, VOICE_RESP_ERROR, DB_GetLastError());
+            }
+            break;
+        }
+
+        case VOICE_CMD_SOUND_PLAYLIST_CREATE: {
+            /* Payload: <guid[32]><name> */
+            if (!g_soundMgr.dbMode) {
+                sendResponseToClient(clientId, VOICE_RESP_ERROR, "Playlists require database mode");
+                return;
+            }
+            if (payloadLen < SOUND_GUID_LEN + 1) {
+                sendResponseToClient(clientId, VOICE_RESP_ERROR, "Invalid playlist create request");
+                return;
+            }
+
+            char guid[SOUND_GUID_LEN + 1];
+            memcpy(guid, payload, SOUND_GUID_LEN);
+            guid[SOUND_GUID_LEN] = '\0';
+
+            char name[SOUND_MAX_NAME_LEN + 1] = {0};
+            int nameLen = payloadLen - SOUND_GUID_LEN;
+            if (nameLen > SOUND_MAX_NAME_LEN) nameLen = SOUND_MAX_NAME_LEN;
+            memcpy(name, payload + SOUND_GUID_LEN, nameLen);
+
+            char safeName[SOUND_MAX_NAME_LEN + 1];
+            if (!SoundMgr_ValidateName(name, safeName, sizeof(safeName))) {
+                sendResponseToClient(clientId, VOICE_RESP_ERROR,
+                    "Invalid name. Use only letters, numbers, underscore.");
+                return;
+            }
+
+            int playlistId;
+            if (DB_CreatePlaylist(guid, safeName, NULL, &playlistId)) {
+                char msg[128];
+                snprintf(msg, sizeof(msg), "Created playlist: %s", safeName);
+                sendResponseToClient(clientId, VOICE_RESP_SUCCESS, msg);
+            } else {
+                sendResponseToClient(clientId, VOICE_RESP_ERROR, DB_GetLastError());
+            }
+            break;
+        }
+
+        case VOICE_CMD_SOUND_PLAYLIST_DELETE: {
+            /* Payload: <guid[32]><name> */
+            if (!g_soundMgr.dbMode) {
+                sendResponseToClient(clientId, VOICE_RESP_ERROR, "Playlists require database mode");
+                return;
+            }
+            if (payloadLen < SOUND_GUID_LEN + 1) {
+                sendResponseToClient(clientId, VOICE_RESP_ERROR, "Invalid playlist delete request");
+                return;
+            }
+
+            char guid[SOUND_GUID_LEN + 1];
+            memcpy(guid, payload, SOUND_GUID_LEN);
+            guid[SOUND_GUID_LEN] = '\0';
+
+            char name[SOUND_MAX_NAME_LEN + 1] = {0};
+            int nameLen = payloadLen - SOUND_GUID_LEN;
+            if (nameLen > SOUND_MAX_NAME_LEN) nameLen = SOUND_MAX_NAME_LEN;
+            memcpy(name, payload + SOUND_GUID_LEN, nameLen);
+
+            if (DB_DeletePlaylist(guid, name)) {
+                char msg[128];
+                snprintf(msg, sizeof(msg), "Deleted playlist: %s", name);
+                sendResponseToClient(clientId, VOICE_RESP_SUCCESS, msg);
+            } else {
+                sendResponseToClient(clientId, VOICE_RESP_ERROR, DB_GetLastError());
+            }
+            break;
+        }
+
+        case VOICE_CMD_SOUND_PLAYLIST_LIST:
+        case VOICE_CMD_SOUND_CATEGORIES: {
+            /* Payload: <guid[32]>[playlistName] - optional playlist name for contents */
+            if (!g_soundMgr.dbMode) {
+                sendResponseToClient(clientId, VOICE_RESP_ERROR, "Playlists require database mode");
+                return;
+            }
+            if (payloadLen < SOUND_GUID_LEN) {
+                sendResponseToClient(clientId, VOICE_RESP_ERROR, "Invalid playlists request");
+                return;
+            }
+
+            char guid[SOUND_GUID_LEN + 1];
+            memcpy(guid, payload, SOUND_GUID_LEN);
+            guid[SOUND_GUID_LEN] = '\0';
+
+            /* Check if a playlist name was provided */
+            if (payloadLen > SOUND_GUID_LEN) {
+                /* Get contents of specific playlist */
+                char playlistName[SOUND_MAX_NAME_LEN + 1] = {0};
+                int nameLen = payloadLen - SOUND_GUID_LEN;
+                if (nameLen > SOUND_MAX_NAME_LEN) nameLen = SOUND_MAX_NAME_LEN;
+                memcpy(playlistName, payload + SOUND_GUID_LEN, nameLen);
+
+                DBPlaylistItemsResult result;
+                int count = DB_GetPlaylistSounds(guid, playlistName, &result);
+
+                if (count < 0) {
+                    sendResponseToClient(clientId, VOICE_RESP_ERROR, DB_GetLastError());
+                    return;
+                }
+
+                if (count == 0) {
+                    char msg[128];
+                    snprintf(msg, sizeof(msg), "Playlist '%s' is empty. Use /etman playlist add %s <sound>",
+                             playlistName, playlistName);
+                    sendResponseToClient(clientId, VOICE_RESP_LIST, msg);
+                    break;
+                }
+
+                char response[1024];
+                int offset = snprintf(response, sizeof(response),
+                    "Playlist '%s' (%d sounds):", playlistName, count);
+
+                for (int i = 0; i < count && offset < (int)sizeof(response) - 64; i++) {
+                    offset += snprintf(response + offset, sizeof(response) - offset,
+                        "\n  #%d: %s", result.items[i].orderNumber, result.items[i].alias);
+                }
+
+                sendResponseToClient(clientId, VOICE_RESP_LIST, response);
+            } else {
+                /* List all playlists */
+                DBPlaylistListResult result;
+                int count = DB_ListPlaylists(guid, &result);
+
+                if (count < 0) {
+                    sendResponseToClient(clientId, VOICE_RESP_ERROR, DB_GetLastError());
+                    return;
+                }
+
+                if (count == 0) {
+                    sendResponseToClient(clientId, VOICE_RESP_LIST,
+                        "No playlists. Use /etman playlist create <name>");
+                    break;
+                }
+
+                char response[1024];
+                int offset = snprintf(response, sizeof(response),
+                    "You have %d playlist%s:", count, count == 1 ? "" : "s");
+
+                for (int i = 0; i < count && offset < (int)sizeof(response) - 64; i++) {
+                    offset += snprintf(response + offset, sizeof(response) - offset,
+                        "\n  %s (%d sounds)", result.playlists[i].name,
+                        result.playlists[i].soundCount);
+                }
+
+                sendResponseToClient(clientId, VOICE_RESP_LIST, response);
+            }
+            break;
+        }
+
+        case VOICE_CMD_SOUND_PLAYLIST_ADD: {
+            /* Payload: <guid[32]><playlistNameLen[1]><playlistName><soundAlias> */
+            if (!g_soundMgr.dbMode) {
+                sendResponseToClient(clientId, VOICE_RESP_ERROR, "Playlists require database mode");
+                return;
+            }
+            if (payloadLen < SOUND_GUID_LEN + 2) {
+                sendResponseToClient(clientId, VOICE_RESP_ERROR, "Invalid playlist add request");
+                return;
+            }
+
+            char guid[SOUND_GUID_LEN + 1];
+            memcpy(guid, payload, SOUND_GUID_LEN);
+            guid[SOUND_GUID_LEN] = '\0';
+
+            uint8_t playlistLen = payload[SOUND_GUID_LEN];
+            if (payloadLen < SOUND_GUID_LEN + 1 + playlistLen + 1) {
+                sendResponseToClient(clientId, VOICE_RESP_ERROR, "Invalid playlist add request");
+                return;
+            }
+
+            char playlistName[SOUND_MAX_NAME_LEN + 1] = {0};
+            char soundAlias[SOUND_MAX_NAME_LEN + 1] = {0};
+
+            if (playlistLen > SOUND_MAX_NAME_LEN) playlistLen = SOUND_MAX_NAME_LEN;
+            memcpy(playlistName, payload + SOUND_GUID_LEN + 1, playlistLen);
+
+            int soundLen = payloadLen - SOUND_GUID_LEN - 1 - playlistLen;
+            if (soundLen > SOUND_MAX_NAME_LEN) soundLen = SOUND_MAX_NAME_LEN;
+            memcpy(soundAlias, payload + SOUND_GUID_LEN + 1 + playlistLen, soundLen);
+
+            if (DB_AddToPlaylist(guid, playlistName, soundAlias)) {
+                char msg[128];
+                snprintf(msg, sizeof(msg), "Added '%s' to playlist '%s'",
+                         soundAlias, playlistName);
+                sendResponseToClient(clientId, VOICE_RESP_SUCCESS, msg);
+            } else {
+                sendResponseToClient(clientId, VOICE_RESP_ERROR, DB_GetLastError());
+            }
+            break;
+        }
+
+        case VOICE_CMD_SOUND_PLAYLIST_REMOVE: {
+            /* Payload: <guid[32]><playlistNameLen[1]><playlistName><soundAlias> */
+            if (!g_soundMgr.dbMode) {
+                sendResponseToClient(clientId, VOICE_RESP_ERROR, "Playlists require database mode");
+                return;
+            }
+            if (payloadLen < SOUND_GUID_LEN + 2) {
+                sendResponseToClient(clientId, VOICE_RESP_ERROR, "Invalid playlist remove request");
+                return;
+            }
+
+            char guid[SOUND_GUID_LEN + 1];
+            memcpy(guid, payload, SOUND_GUID_LEN);
+            guid[SOUND_GUID_LEN] = '\0';
+
+            uint8_t playlistLen = payload[SOUND_GUID_LEN];
+            if (payloadLen < SOUND_GUID_LEN + 1 + playlistLen + 1) {
+                sendResponseToClient(clientId, VOICE_RESP_ERROR, "Invalid playlist remove request");
+                return;
+            }
+
+            char playlistName[SOUND_MAX_NAME_LEN + 1] = {0};
+            char soundAlias[SOUND_MAX_NAME_LEN + 1] = {0};
+
+            if (playlistLen > SOUND_MAX_NAME_LEN) playlistLen = SOUND_MAX_NAME_LEN;
+            memcpy(playlistName, payload + SOUND_GUID_LEN + 1, playlistLen);
+
+            int soundLen = payloadLen - SOUND_GUID_LEN - 1 - playlistLen;
+            if (soundLen > SOUND_MAX_NAME_LEN) soundLen = SOUND_MAX_NAME_LEN;
+            memcpy(soundAlias, payload + SOUND_GUID_LEN + 1 + playlistLen, soundLen);
+
+            if (DB_RemoveFromPlaylist(guid, playlistName, soundAlias)) {
+                char msg[128];
+                snprintf(msg, sizeof(msg), "Removed '%s' from playlist '%s'",
+                         soundAlias, playlistName);
+                sendResponseToClient(clientId, VOICE_RESP_SUCCESS, msg);
+            } else {
+                sendResponseToClient(clientId, VOICE_RESP_ERROR, DB_GetLastError());
+            }
+            break;
+        }
+
+        case VOICE_CMD_SOUND_PLAYLIST_PLAY: {
+            /* Payload: <guid[32]><playlistNameLen[1]><playlistName><position[1]> */
+            if (!g_soundMgr.dbMode) {
+                sendResponseToClient(clientId, VOICE_RESP_ERROR, "Playlists require database mode");
+                return;
+            }
+            if (payloadLen < SOUND_GUID_LEN + 2) {
+                sendResponseToClient(clientId, VOICE_RESP_ERROR, "Invalid playlist play request");
+                return;
+            }
+
+            char guid[SOUND_GUID_LEN + 1];
+            memcpy(guid, payload, SOUND_GUID_LEN);
+            guid[SOUND_GUID_LEN] = '\0';
+
+            uint8_t playlistLen = payload[SOUND_GUID_LEN];
+            if (payloadLen < SOUND_GUID_LEN + 1 + playlistLen) {
+                sendResponseToClient(clientId, VOICE_RESP_ERROR, "Invalid playlist play request");
+                return;
+            }
+
+            char playlistName[SOUND_MAX_NAME_LEN + 1] = {0};
+            if (playlistLen > SOUND_MAX_NAME_LEN) playlistLen = SOUND_MAX_NAME_LEN;
+            memcpy(playlistName, payload + SOUND_GUID_LEN + 1, playlistLen);
+
+            /* Position is optional - 0 means use current position, 255 means random */
+            int position = 0;
+            bool isRandom = false;
+            if (payloadLen > SOUND_GUID_LEN + 1 + playlistLen) {
+                position = payload[SOUND_GUID_LEN + 1 + playlistLen];
+                if (position == 255) {
+                    isRandom = true;
+                    position = 0;  /* Will be set to random below */
+                }
+            }
+
+            /* Check playback state */
+            if (g_soundMgr.playback.state == PLAYBACK_PLAYING ||
+                g_soundMgr.playback.state == PLAYBACK_LOADING) {
+                if (g_soundMgr.playback.pcmPosition >= g_soundMgr.playback.pcmSamples) {
+                    SoundMgr_StopSound();
+                } else {
+                    sendResponseToClient(clientId, VOICE_RESP_ERROR,
+                        "A sound is already playing. Wait or use /etman stopsnd");
+                    return;
+                }
+            }
+
+            /* Get sound at position - try user's playlist first, then public */
+            DBPlaylistItem item;
+            bool isPublicPlaylist = false;
+
+            /* For random, first get total count then pick random position */
+            if (isRandom) {
+                DBPlaylistItemsResult itemsResult;
+                int totalItems = DB_GetPlaylistSounds(guid, playlistName, &itemsResult);
+                if (totalItems <= 0) {
+                    /* Try public playlist */
+                    totalItems = DB_GetPublicPlaylistSounds(playlistName, &itemsResult);
+                    if (totalItems <= 0) {
+                        sendResponseToClient(clientId, VOICE_RESP_ERROR,
+                            "Playlist not found or empty");
+                        return;
+                    }
+                    isPublicPlaylist = true;
+                }
+                position = (rand() % totalItems) + 1;  /* 1-based position */
+                printf("SoundMgr: Random position %d of %d in '%s'\n", position, totalItems, playlistName);
+            }
+
+            if (!DB_GetPlaylistSoundAtPosition(guid, playlistName, position, &item)) {
+                /* Not found in user's playlists - try public */
+                int publicPos = (position == 0) ? 1 : position;
+                if (!DB_GetPublicPlaylistSoundAtPosition(playlistName, publicPos, &item)) {
+                    sendResponseToClient(clientId, VOICE_RESP_ERROR,
+                        "Playlist not found (checked your playlists and public)");
+                    return;
+                }
+                isPublicPlaylist = true;
+                printf("SoundMgr: Playing from public playlist '%s'\n", playlistName);
+            }
+
+            /* Play the sound using the file path from DB */
+            if (!SoundMgr_PlaySoundByPath(clientId, guid, item.alias, item.filePath)) {
+                sendResponseToClient(clientId, VOICE_RESP_ERROR,
+                    "Failed to play sound from playlist");
+                return;
+            }
+
+            /* Advance position for next time (only for user's own playlists) */
+            if (!isPublicPlaylist) {
+                DBPlaylistItemsResult itemsResult;
+                int totalItems = DB_GetPlaylistSounds(guid, playlistName, &itemsResult);
+                int nextPos = (position == 0 ? DB_GetPlaylistPosition(guid, playlistName) : position) + 1;
+                if (nextPos > totalItems) nextPos = 1;  /* Wrap around */
+                DB_SetPlaylistPosition(guid, playlistName, nextPos);
+            }
+            break;
+        }
+
+        case VOICE_CMD_SOUND_PLAYLIST_REORDER: {
+            /* For now, just acknowledge - full reorder needs array parsing */
+            sendResponseToClient(clientId, VOICE_RESP_ERROR,
+                "Reorder via web panel (ETPanel) only");
+            break;
+        }
+
+        case VOICE_CMD_SOUND_SET_VISIBILITY: {
+            /* Payload: <guid[32]><aliasLen[1]><alias><visibility> */
+            if (!g_soundMgr.dbMode) {
+                sendResponseToClient(clientId, VOICE_RESP_ERROR, "Visibility requires database mode");
+                return;
+            }
+            if (payloadLen < SOUND_GUID_LEN + 2) {
+                sendResponseToClient(clientId, VOICE_RESP_ERROR, "Invalid visibility request");
+                return;
+            }
+
+            char guid[SOUND_GUID_LEN + 1];
+            memcpy(guid, payload, SOUND_GUID_LEN);
+            guid[SOUND_GUID_LEN] = '\0';
+
+            uint8_t aliasLen = payload[SOUND_GUID_LEN];
+            if (payloadLen < SOUND_GUID_LEN + 1 + aliasLen + 1) {
+                sendResponseToClient(clientId, VOICE_RESP_ERROR, "Invalid visibility request");
+                return;
+            }
+
+            char alias[SOUND_MAX_NAME_LEN + 1] = {0};
+            char visibility[16] = {0};
+
+            if (aliasLen > SOUND_MAX_NAME_LEN) aliasLen = SOUND_MAX_NAME_LEN;
+            memcpy(alias, payload + SOUND_GUID_LEN + 1, aliasLen);
+
+            int visLen = payloadLen - SOUND_GUID_LEN - 1 - aliasLen;
+            if (visLen > 15) visLen = 15;
+            memcpy(visibility, payload + SOUND_GUID_LEN + 1 + aliasLen, visLen);
+
+            if (DB_SetVisibility(guid, alias, visibility)) {
+                char msg[128];
+                snprintf(msg, sizeof(msg), "Set '%s' to %s", alias, visibility);
+                sendResponseToClient(clientId, VOICE_RESP_SUCCESS, msg);
+            } else {
+                sendResponseToClient(clientId, VOICE_RESP_ERROR, DB_GetLastError());
+            }
+            break;
+        }
+
+        case VOICE_CMD_SOUND_PUBLIC_LIST: {
+            /* Payload: <offset[2]> (optional) */
+            if (!g_soundMgr.dbMode) {
+                sendResponseToClient(clientId, VOICE_RESP_ERROR, "Public library requires database mode");
+                return;
+            }
+
+            int offset = 0;
+            if (payloadLen >= 2) {
+                uint16_t off;
+                memcpy(&off, payload, 2);
+                offset = ntohs(off);
+            }
+
+            DBSoundListResult result;
+            int count = DB_ListPublicSounds(&result, 25, offset);
+
+            if (count < 0) {
+                sendResponseToClient(clientId, VOICE_RESP_ERROR, DB_GetLastError());
+                return;
+            }
+
+            if (count == 0) {
+                sendResponseToClient(clientId, VOICE_RESP_LIST,
+                    "No public sounds available. Make yours public with /etman visibility <name> public");
+                break;
+            }
+
+            char response[1024];
+            int respOffset = snprintf(response, sizeof(response),
+                "Public sounds (%d shown):", count);
+
+            for (int i = 0; i < count && respOffset < (int)sizeof(response) - 64; i++) {
+                respOffset += snprintf(response + respOffset, sizeof(response) - respOffset,
+                    "\n  [%d] %s (%.1fKB)", result.sounds[i].soundFileId,
+                    result.sounds[i].alias,
+                    (float)result.sounds[i].fileSize / 1024.0f);
+            }
+
+            sendResponseToClient(clientId, VOICE_RESP_LIST, response);
+            break;
+        }
+
+        case VOICE_CMD_SOUND_PUBLIC_ADD: {
+            /* Payload: <guid[32]><soundFileId[4]><alias> */
+            if (!g_soundMgr.dbMode) {
+                sendResponseToClient(clientId, VOICE_RESP_ERROR, "Public library requires database mode");
+                return;
+            }
+            if (payloadLen < SOUND_GUID_LEN + 4 + 1) {
+                sendResponseToClient(clientId, VOICE_RESP_ERROR, "Invalid public add request");
+                return;
+            }
+
+            char guid[SOUND_GUID_LEN + 1];
+            memcpy(guid, payload, SOUND_GUID_LEN);
+            guid[SOUND_GUID_LEN] = '\0';
+
+            uint32_t soundFileId;
+            memcpy(&soundFileId, payload + SOUND_GUID_LEN, 4);
+            soundFileId = ntohl(soundFileId);
+
+            char alias[SOUND_MAX_NAME_LEN + 1] = {0};
+            int aliasLen = payloadLen - SOUND_GUID_LEN - 4;
+            if (aliasLen > SOUND_MAX_NAME_LEN) aliasLen = SOUND_MAX_NAME_LEN;
+            memcpy(alias, payload + SOUND_GUID_LEN + 4, aliasLen);
+
+            char safeAlias[SOUND_MAX_NAME_LEN + 1];
+            if (!SoundMgr_ValidateName(alias, safeAlias, sizeof(safeAlias))) {
+                sendResponseToClient(clientId, VOICE_RESP_ERROR,
+                    "Invalid name. Use only letters, numbers, underscore.");
+                return;
+            }
+
+            if (DB_AddFromPublic(guid, soundFileId, safeAlias)) {
+                char msg[128];
+                snprintf(msg, sizeof(msg), "Added public sound as '%s'", safeAlias);
+                sendResponseToClient(clientId, VOICE_RESP_SUCCESS, msg);
+            } else {
+                sendResponseToClient(clientId, VOICE_RESP_ERROR, DB_GetLastError());
+            }
+            break;
+        }
+
+        case VOICE_CMD_SOUND_PENDING: {
+            /* Use server-stored GUID, not what client sends */
+            if (!g_soundMgr.dbMode) {
+                sendResponseToClient(clientId, VOICE_RESP_ERROR, "Sharing requires database mode");
+                return;
+            }
+
+            char guid[SOUND_GUID_LEN + 1];
+            if (!getGuidByClientId(clientId, guid, sizeof(guid))) {
+                sendResponseToClient(clientId, VOICE_RESP_ERROR, "Not authenticated - reconnect to server");
+                return;
+            }
+
+            DBShareListResult result;
+            int count = DB_ListPendingShares(guid, &result);
+
+            if (count < 0) {
+                sendResponseToClient(clientId, VOICE_RESP_ERROR, DB_GetLastError());
+                return;
+            }
+
+            if (count == 0) {
+                sendResponseToClient(clientId, VOICE_RESP_LIST, "No pending share requests");
+                break;
+            }
+
+            /* Store pending shares for this client so we can look them up by index */
+            storePendingSharesForClient(clientId, &result, count);
+
+            char response[1024];
+            int respOffset = snprintf(response, sizeof(response),
+                "Pending shares (%d):", count);
+
+            /* Show simple index numbers (1, 2, 3...) instead of database IDs */
+            for (int i = 0; i < count && respOffset < (int)sizeof(response) - 96; i++) {
+                respOffset += snprintf(response + respOffset, sizeof(response) - respOffset,
+                    "\n  #%d: '%s' from %s",
+                    i + 1,  /* Simple 1-based index */
+                    result.shares[i].suggestedAlias,
+                    result.shares[i].fromPlayerName);
+            }
+
+            sendResponseToClient(clientId, VOICE_RESP_LIST, response);
+            break;
+        }
+
+        case VOICE_CMD_PLAYLIST_PUBLIC_LIST: {
+            /* List all public playlists */
+            printf("[DEBUG] VOICE_CMD_PLAYLIST_PUBLIC_LIST received from client %u\n", clientId);
+
+            if (!g_soundMgr.dbMode) {
+                sendResponseToClient(clientId, VOICE_RESP_ERROR, "Playlists require database mode");
+                return;
+            }
+
+            DBPlaylistListResult result;
+            int count = DB_ListPublicPlaylists(&result);
+            printf("[DEBUG] DB_ListPublicPlaylists returned %d\n", count);
+
+            if (count < 0) {
+                sendResponseToClient(clientId, VOICE_RESP_ERROR, DB_GetLastError());
+                return;
+            }
+
+            if (count == 0) {
+                sendResponseToClient(clientId, VOICE_RESP_LIST,
+                    "No public playlists available");
+                break;
+            }
+
+            char response[1024];
+            int respOffset = snprintf(response, sizeof(response),
+                "Public playlists (%d):", count);
+
+            for (int i = 0; i < count && respOffset < (int)sizeof(response) - 64; i++) {
+                respOffset += snprintf(response + respOffset, sizeof(response) - respOffset,
+                    "\n  %s (%d sounds)", result.playlists[i].name, result.playlists[i].soundCount);
+            }
+
+            sendResponseToClient(clientId, VOICE_RESP_LIST, response);
+            break;
+        }
+
+        case VOICE_CMD_PLAYLIST_SET_VISIBILITY: {
+            /* Payload: <guid[32]><nameLen[1]><name><isPublic[1]> */
+            if (!g_soundMgr.dbMode) {
+                sendResponseToClient(clientId, VOICE_RESP_ERROR, "Playlists require database mode");
+                return;
+            }
+
+            /* Use server-stored GUID */
+            char guid[SOUND_GUID_LEN + 1];
+            if (!getGuidByClientId(clientId, guid, sizeof(guid))) {
+                sendResponseToClient(clientId, VOICE_RESP_ERROR, "Not authenticated - reconnect to server");
+                return;
+            }
+
+            if (payloadLen < SOUND_GUID_LEN + 2) {
+                sendResponseToClient(clientId, VOICE_RESP_ERROR, "Invalid visibility request");
+                return;
+            }
+
+            uint8_t nameLen = payload[SOUND_GUID_LEN];
+            if (payloadLen < SOUND_GUID_LEN + 1 + nameLen + 1) {
+                sendResponseToClient(clientId, VOICE_RESP_ERROR, "Invalid visibility request");
+                return;
+            }
+
+            char playlistName[SOUND_MAX_NAME_LEN + 1] = {0};
+            if (nameLen > SOUND_MAX_NAME_LEN) nameLen = SOUND_MAX_NAME_LEN;
+            memcpy(playlistName, payload + SOUND_GUID_LEN + 1, nameLen);
+
+            bool isPublic = payload[SOUND_GUID_LEN + 1 + nameLen] != 0;
+
+            if (DB_SetPlaylistVisibility(guid, playlistName, isPublic)) {
+                char msg[128];
+                snprintf(msg, sizeof(msg), "Playlist '%s' is now %s",
+                         playlistName, isPublic ? "public" : "private");
+                sendResponseToClient(clientId, VOICE_RESP_SUCCESS, msg);
+            } else {
+                sendResponseToClient(clientId, VOICE_RESP_ERROR, DB_GetLastError());
+            }
+            break;
+        }
+
+        case VOICE_CMD_ACCOUNT_REGISTER: {
+            /* Payload: <guid[32]><playerName> */
+            if (!g_soundMgr.dbMode) {
+                sendResponseToClient(clientId, VOICE_RESP_ERROR, "Registration requires database mode");
+                return;
+            }
+            if (payloadLen < SOUND_GUID_LEN + 1) {
+                sendResponseToClient(clientId, VOICE_RESP_ERROR, "Invalid register request");
+                return;
+            }
+
+            char guid[SOUND_GUID_LEN + 1];
+            memcpy(guid, payload, SOUND_GUID_LEN);
+            guid[SOUND_GUID_LEN] = '\0';
+
+            char playerName[64] = {0};
+            int nameLen = payloadLen - SOUND_GUID_LEN;
+            if (nameLen > 63) nameLen = 63;
+            memcpy(playerName, payload + SOUND_GUID_LEN, nameLen);
+
+            char code[7];
+            if (DB_CreateVerificationCode(guid, playerName, code)) {
+                char msg[256];
+                snprintf(msg, sizeof(msg),
+                    "Your registration code: %s\n"
+                    "Visit ETPanel to link your account:\n"
+                    "https://etpanel.etman.dev\n"
+                    "Code expires in 10 minutes.", code);
+                sendResponseToClient(clientId, VOICE_RESP_REGISTER_CODE, msg);
+            } else {
+                sendResponseToClient(clientId, VOICE_RESP_ERROR, DB_GetLastError());
+            }
+            break;
+        }
+
+        case VOICE_CMD_PLAYLIST_PUBLIC_SHOW: {
+            /* Payload: <nameLen[1]><name><position[1]> */
+            if (!g_soundMgr.dbMode) {
+                sendResponseToClient(clientId, VOICE_RESP_ERROR, "Playlists require database mode");
+                return;
+            }
+
+            if (payloadLen < 2) {
+                sendResponseToClient(clientId, VOICE_RESP_ERROR, "Invalid request");
+                return;
+            }
+
+            uint8_t nameLen = payload[0];
+            if (nameLen > SOUND_MAX_NAME_LEN || payloadLen < nameLen + 2) {
+                sendResponseToClient(clientId, VOICE_RESP_ERROR, "Invalid playlist name");
+                return;
+            }
+
+            char playlistName[SOUND_MAX_NAME_LEN + 1];
+            memcpy(playlistName, payload + 1, nameLen);
+            playlistName[nameLen] = '\0';
+
+            uint8_t position = payload[1 + nameLen];
+            bool isRandom = false;
+
+            /* Handle special positions: 0=list, 254=next(play #1), 255=random */
+            if (position == 255) {
+                isRandom = true;
+            }
+
+            if (position == 0) {
+                /* List songs in the public playlist */
+                DBPlaylistItemsResult result;
+                int count = DB_GetPublicPlaylistSounds(playlistName, &result);
+
+                if (count < 0) {
+                    sendResponseToClient(clientId, VOICE_RESP_ERROR, DB_GetLastError());
+                    return;
+                }
+
+                if (count == 0) {
+                    char msg[128];
+                    snprintf(msg, sizeof(msg), "Public playlist '%s' is empty or not found", playlistName);
+                    sendResponseToClient(clientId, VOICE_RESP_LIST, msg);
+                    return;
+                }
+
+                char response[2048];
+                int respOffset = snprintf(response, sizeof(response),
+                    "Public playlist '%s' (%d sounds):", playlistName, count);
+
+                for (int i = 0; i < count && respOffset < (int)sizeof(response) - 64; i++) {
+                    respOffset += snprintf(response + respOffset, sizeof(response) - respOffset,
+                        "\n  [%d] %s", i + 1, result.items[i].alias);
+                }
+
+                sendResponseToClient(clientId, VOICE_RESP_LIST, response);
+            } else {
+                /* Play sound from public playlist */
+                int actualPosition = position;
+
+                /* For random or "next" (254), get count first */
+                if (isRandom || position == 254) {
+                    DBPlaylistItemsResult itemsResult;
+                    int count = DB_GetPublicPlaylistSounds(playlistName, &itemsResult);
+                    if (count <= 0) {
+                        sendResponseToClient(clientId, VOICE_RESP_ERROR,
+                            "Public playlist not found or empty");
+                        return;
+                    }
+                    if (isRandom) {
+                        actualPosition = (rand() % count) + 1;
+                        printf("SoundMgr: Random position %d of %d in public playlist '%s'\n",
+                               actualPosition, count, playlistName);
+                    } else {
+                        actualPosition = 1;  /* "next" for public just plays #1 */
+                    }
+                }
+
+                DBPlaylistItem item;
+                if (!DB_GetPublicPlaylistSoundAtPosition(playlistName, actualPosition, &item)) {
+                    char msg[128];
+                    snprintf(msg, sizeof(msg), "No sound at position %d in public playlist '%s'",
+                             actualPosition, playlistName);
+                    sendResponseToClient(clientId, VOICE_RESP_ERROR, msg);
+                    return;
+                }
+
+                /* Play the sound using the file path from the item */
+                if (!SoundMgr_PlaySoundByPath(clientId, NULL, item.alias, item.filePath)) {
+                    sendResponseToClient(clientId, VOICE_RESP_ERROR, "Failed to play sound");
+                    return;
+                }
+
+                char msg[128];
+                snprintf(msg, sizeof(msg), "Playing '%s' from public playlist '%s'",
+                         item.alias, playlistName);
+                sendResponseToClient(clientId, VOICE_RESP_SUCCESS, msg);
+            }
+            break;
+        }
 
         default:
             sendResponseToClient(clientId, VOICE_RESP_ERROR, "Unknown command");
@@ -556,6 +1592,12 @@ static int compareSoundInfo(const void *a, const void *b) {
  * List all sounds for a player (sorted alphabetically)
  */
 int SoundMgr_ListSounds(const char *guid, SoundInfo *outList, int maxCount) {
+    /* In database mode, query user_sounds table which includes shared sounds */
+    if (g_soundMgr.dbMode) {
+        return DB_ListUserSounds(guid, outList, maxCount);
+    }
+
+    /* Filesystem-only mode (legacy) */
     char playerDir[512];
     if (!getPlayerDir(guid, playerDir, sizeof(playerDir))) {
         return 0;
@@ -607,6 +1649,25 @@ int SoundMgr_ListSounds(const char *guid, SoundInfo *outList, int maxCount) {
  * Delete a sound
  */
 bool SoundMgr_DeleteSound(const char *guid, const char *name) {
+    /* In database mode, delete from user_sounds table */
+    if (g_soundMgr.dbMode) {
+        char filePathToDelete[1024] = {0};
+        if (DB_DeleteSound(guid, name, filePathToDelete)) {
+            /* If filePathToDelete is set, the file should be deleted from disk */
+            if (filePathToDelete[0]) {
+                char fullPath[1024];
+                snprintf(fullPath, sizeof(fullPath), "%s%c%s",
+                         g_soundMgr.baseDir, PATH_SEP, filePathToDelete);
+                remove(fullPath);  /* Best effort, ignore errors */
+                printf("SoundMgr: Deleted file %s\n", fullPath);
+            }
+            printf("SoundMgr: Deleted %s/%s from database\n", guid, name);
+            return true;
+        }
+        return false;
+    }
+
+    /* Filesystem-only mode (legacy) */
     char filepath[1024];
     if (!getSoundPath(guid, name, filepath, sizeof(filepath))) {
         return false;
@@ -624,6 +1685,16 @@ bool SoundMgr_DeleteSound(const char *guid, const char *name) {
  * Rename a sound
  */
 bool SoundMgr_RenameSound(const char *guid, const char *oldName, const char *newName) {
+    /* In database mode, just update the alias in user_sounds (file stays the same) */
+    if (g_soundMgr.dbMode) {
+        if (DB_RenameSound(guid, oldName, newName)) {
+            printf("SoundMgr: Renamed %s/%s to %s in database\n", guid, oldName, newName);
+            return true;
+        }
+        return false;
+    }
+
+    /* Filesystem-only mode (legacy) */
     char oldPath[1024], newPath[1024];
 
     if (!getSoundPath(guid, oldName, oldPath, sizeof(oldPath))) {
@@ -808,9 +1879,37 @@ bool SoundMgr_PlaySound(uint32_t clientId, const char *guid, const char *name) {
     }
 
     char filepath[1024];
-    if (!getSoundPath(guid, name, filepath, sizeof(filepath))) {
-        printf("SoundMgr: PlaySound failed - getSoundPath returned false for guid='%s' name='%s'\n", guid, name);
-        return false;
+
+    /* In database mode, lookup file_path from database (handles shared sounds) */
+    if (g_soundMgr.dbMode) {
+        char foundPath[512];
+
+        /*
+         * Search order:
+         * 1. User's local sounds (direct sounds + sounds in user's playlists)
+         * 2. All public sounds (public sound_files + public user aliases + public playlists)
+         */
+        if (DB_FindSoundByAlias(guid, name, foundPath, sizeof(foundPath))) {
+            /* Found in user's local library or playlists */
+            snprintf(filepath, sizeof(filepath), "%s%c%s",
+                     g_soundMgr.baseDir, PATH_SEP, foundPath);
+            printf("SoundMgr: PlaySound (DB) found in local library/playlist: %s\n", filepath);
+        } else if (DB_FindPublicSoundByAlias(name, foundPath, sizeof(foundPath))) {
+            /* Found in public sounds or public playlists */
+            snprintf(filepath, sizeof(filepath), "%s%c%s",
+                     g_soundMgr.baseDir, PATH_SEP, foundPath);
+            printf("SoundMgr: PlaySound (DB) found in public library/playlist: %s\n", filepath);
+        } else {
+            printf("SoundMgr: PlaySound failed - '%s' not found in local or public sounds for guid='%s'\n",
+                   name, guid);
+            return false;
+        }
+    } else {
+        /* Filesystem-only mode - use direct path lookup */
+        if (!getSoundPath(guid, name, filepath, sizeof(filepath))) {
+            printf("SoundMgr: PlaySound failed - getSoundPath returned false for guid='%s' name='%s'\n", guid, name);
+            return false;
+        }
     }
 
     printf("SoundMgr: PlaySound trying filepath: %s\n", filepath);
@@ -856,6 +1955,69 @@ bool SoundMgr_PlaySound(uint32_t clientId, const char *guid, const char *name) {
 
     printf("SoundMgr: Playing %s/%s (%d samples, %.1f sec)\n",
            guid, name, pcmSamples, (float)pcmSamples / OPUS_SAMPLE_RATE);
+
+    return true;
+}
+
+/*
+ * Play sound by direct file path (for DB mode)
+ */
+static bool SoundMgr_PlaySoundByPath(uint32_t clientId, const char *guid,
+                                     const char *name, const char *filepath) {
+    if (g_soundMgr.playback.state == PLAYBACK_PLAYING) {
+        printf("SoundMgr: PlaySoundByPath called while state=PLAYING\n");
+        return false;
+    }
+
+    /* Build full path from base directory + relative filepath */
+    char fullPath[1024];
+    snprintf(fullPath, sizeof(fullPath), "%s%c%s",
+             g_soundMgr.baseDir, PATH_SEP, filepath);
+
+    printf("SoundMgr: PlaySoundByPath trying filepath: %s\n", fullPath);
+
+    /* Check file exists */
+    struct stat st;
+    if (stat(fullPath, &st) != 0) {
+        printf("SoundMgr: PlaySoundByPath failed - file not found: %s\n", fullPath);
+        return false;
+    }
+
+    /* Decode MP3 to PCM */
+    int16_t *pcmData = NULL;
+    int pcmSamples = 0;
+    if (!decodeMP3(fullPath, &pcmData, &pcmSamples)) {
+        printf("SoundMgr: PlaySoundByPath failed - decodeMP3 failed\n");
+        return false;
+    }
+
+    /* Check duration limit */
+    int durationSec = pcmSamples / OPUS_SAMPLE_RATE;
+    if (durationSec > SOUND_MAX_DURATION_SEC) {
+        pcmSamples = SOUND_MAX_DURATION_SEC * OPUS_SAMPLE_RATE;
+        printf("SoundMgr: Truncated sound to %d seconds\n", SOUND_MAX_DURATION_SEC);
+    }
+
+    /* Setup playback */
+    if (g_soundMgr.playback.pcmBuffer) {
+        free(g_soundMgr.playback.pcmBuffer);
+    }
+
+    g_soundMgr.playback.pcmBuffer = pcmData;
+    g_soundMgr.playback.pcmSamples = pcmSamples;
+    g_soundMgr.playback.pcmPosition = 0;
+    g_soundMgr.playback.clientId = clientId;
+    g_soundMgr.playback.sequence = 0;
+    g_soundMgr.playback.state = PLAYBACK_PLAYING;
+    if (guid) {
+        strncpy(g_soundMgr.playback.guid, guid, SOUND_GUID_LEN);
+    } else {
+        g_soundMgr.playback.guid[0] = '\0';
+    }
+    strncpy(g_soundMgr.playback.name, name, SOUND_MAX_NAME_LEN);
+
+    printf("SoundMgr: Playing (by path) %s (%d samples, %.1f sec)\n",
+           name, pcmSamples, (float)pcmSamples / OPUS_SAMPLE_RATE);
 
     return true;
 }
@@ -1095,6 +2257,102 @@ static void updateCooldown(const char *guid) {
 }
 
 /*
+ * Helper: Check play rate limit for a player
+ * Returns true if player can play, false if rate limited
+ * Also returns remaining cooldown seconds via outCooldownRemaining (if not NULL)
+ */
+static bool checkPlayRateLimit(const char *guid, int *outCooldownRemaining) {
+    time_t now = time(NULL);
+
+    /* Find existing entry for this player */
+    for (int i = 0; i < g_soundMgr.numPlayRateLimits; i++) {
+        if (strcmp(g_soundMgr.playRateLimits[i].guid, guid) == 0) {
+            /* Check if in cooldown */
+            if (g_soundMgr.playRateLimits[i].cooldownUntil > now) {
+                if (outCooldownRemaining) {
+                    *outCooldownRemaining = (int)(g_soundMgr.playRateLimits[i].cooldownUntil - now);
+                }
+                return false;
+            }
+
+            /* Cooldown expired - reset if needed */
+            if (g_soundMgr.playRateLimits[i].cooldownUntil > 0) {
+                g_soundMgr.playRateLimits[i].cooldownUntil = 0;
+                g_soundMgr.playRateLimits[i].burstCount = 0;
+                g_soundMgr.playRateLimits[i].firstPlayTime = 0;
+            }
+
+            return true;
+        }
+    }
+
+    /* No entry = no rate limit */
+    return true;
+}
+
+/*
+ * Helper: Update play rate limit after a play
+ * Returns true if play is allowed, false if this play triggers cooldown
+ */
+static bool updatePlayRateLimit(const char *guid) {
+    time_t now = time(NULL);
+    int slot = -1;
+
+    /* Find existing entry */
+    for (int i = 0; i < g_soundMgr.numPlayRateLimits; i++) {
+        if (strcmp(g_soundMgr.playRateLimits[i].guid, guid) == 0) {
+            slot = i;
+            break;
+        }
+    }
+
+    /* Create new entry if needed */
+    if (slot < 0) {
+        if (g_soundMgr.numPlayRateLimits < 64) {
+            slot = g_soundMgr.numPlayRateLimits++;
+            memset(&g_soundMgr.playRateLimits[slot], 0, sizeof(g_soundMgr.playRateLimits[0]));
+            strncpy(g_soundMgr.playRateLimits[slot].guid, guid, SOUND_GUID_LEN);
+            g_soundMgr.playRateLimits[slot].guid[SOUND_GUID_LEN] = '\0';
+        } else {
+            /* Table full - evict oldest (slot 0) and shift */
+            memmove(&g_soundMgr.playRateLimits[0], &g_soundMgr.playRateLimits[1],
+                    sizeof(g_soundMgr.playRateLimits[0]) * 63);
+            slot = 63;
+            memset(&g_soundMgr.playRateLimits[slot], 0, sizeof(g_soundMgr.playRateLimits[0]));
+            strncpy(g_soundMgr.playRateLimits[slot].guid, guid, SOUND_GUID_LEN);
+            g_soundMgr.playRateLimits[slot].guid[SOUND_GUID_LEN] = '\0';
+        }
+    }
+
+    /* If cooldown just expired, reset burst */
+    if (g_soundMgr.playRateLimits[slot].cooldownUntil > 0 &&
+        g_soundMgr.playRateLimits[slot].cooldownUntil <= now) {
+        g_soundMgr.playRateLimits[slot].cooldownUntil = 0;
+        g_soundMgr.playRateLimits[slot].burstCount = 0;
+        g_soundMgr.playRateLimits[slot].firstPlayTime = 0;
+    }
+
+    /* Start new burst window if needed */
+    if (g_soundMgr.playRateLimits[slot].burstCount == 0) {
+        g_soundMgr.playRateLimits[slot].firstPlayTime = now;
+    }
+
+    /* Increment burst count */
+    g_soundMgr.playRateLimits[slot].burstCount++;
+
+    /* Check if burst limit reached */
+    if (g_soundMgr.playRateLimits[slot].burstCount >= SOUND_PLAY_BURST_LIMIT) {
+        /* Trigger cooldown */
+        g_soundMgr.playRateLimits[slot].cooldownUntil = now + SOUND_PLAY_COOLDOWN_SEC;
+        printf("SoundMgr: Player %s hit burst limit (%d sounds), cooldown for %d seconds\n",
+               guid, SOUND_PLAY_BURST_LIMIT, SOUND_PLAY_COOLDOWN_SEC);
+        return true;  /* This play is still allowed, but next will be blocked */
+    }
+
+    return true;
+}
+
+/*
  * Helper: Resample PCM from srcRate to dstRate using linear interpolation
  * Returns newly allocated buffer (caller must free) and output sample count
  */
@@ -1143,6 +2401,15 @@ static int16_t* resampleLinear(const int16_t *src, int srcSamples, int srcRate,
  * Helper: Decode MP3 to PCM (48kHz mono)
  * Handles any input sample rate by resampling to 48kHz
  */
+/*
+ * Helper: Generate UUID for sound file storage
+ */
+static void generateUUID(char *out, size_t outLen) {
+    uuid_t uuid;
+    uuid_generate(uuid);
+    uuid_unparse_lower(uuid, out);
+}
+
 static bool decodeMP3(const char *filepath, int16_t **outPcm, int *outSamples) {
     FILE *f = fopen(filepath, "rb");
     if (!f) {
@@ -1267,4 +2534,22 @@ static bool decodeMP3(const char *filepath, int16_t **outPcm, int *outSamples) {
     *outSamples = finalSamples;
 
     return true;
+}
+
+
+/*
+ * Database mode functions (Phase 2)
+ */
+
+bool SoundMgr_IsDBMode(void) {
+    return g_soundMgr.dbMode;
+}
+
+void SoundMgr_SetDBMode(bool enabled) {
+    if (enabled && !DB_IsConnected()) {
+        printf("SoundMgr: Cannot enable DB mode - database not connected\n");
+        return;
+    }
+    g_soundMgr.dbMode = enabled;
+    printf("SoundMgr: Database mode %s\n", enabled ? "ENABLED" : "DISABLED");
 }

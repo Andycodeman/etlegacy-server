@@ -393,6 +393,7 @@ main() {
             build_mod_windows 64
             create_mod_pk3
             build_rickroll_pk3
+            build_voice_server
             ;;
         linux32)
             build_mod_linux 32

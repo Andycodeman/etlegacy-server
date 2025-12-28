@@ -16,7 +16,7 @@ set -e
 # Configuration
 # NOTE: ET:Legacy writes to fs_homepath (~/.etlegacy), NOT the server basepath!
 EVENT_FILE="/home/andy/.etlegacy/legacy/legacy/etpanel_events.json"
-API_URL="https://etpanel.coolip.me/api"
+API_URL="https://etpanel.etman.dev/api"
 API_KEY="214f3ddbb1098e5709661f5ace51dc21"
 POLL_INTERVAL=2  # seconds
 LOG_FILE="/home/andy/etlegacy/etpanel-relay.log"

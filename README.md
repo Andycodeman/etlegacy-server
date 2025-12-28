@@ -44,7 +44,7 @@ See [CLAUDE.md](CLAUDE.md) for detailed documentation.
 ## Connect
 
 ```
-/connect et.coolip.me:27960
+/connect et.etman.dev:27960
 ```
 
 ## License

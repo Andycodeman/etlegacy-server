@@ -61,7 +61,7 @@ echo "✅ Build complete!"
 echo "=========================================="
 echo ""
 echo "Output files:"
-ls -lh "$DIST_DIR"/rickroll*.pk3
+ls -lh "$DIST_DIR"/etman_rickroll.pk3
 echo ""
 echo "Contents:"
 unzip -l "$PK3_PATH"

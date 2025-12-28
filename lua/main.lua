@@ -183,9 +183,11 @@ local function debug(msg)
 end
 
 -- Strip ET color codes from player names (^0 through ^9, ^a-^z)
+-- NOTE: Parentheses around gsub() are critical! gsub returns (string, count)
+-- and without parens, the count leaks to callers causing table.insert errors
 local function stripColors(str)
     if not str then return "" end
-    return str:gsub("%^[0-9a-zA-Z]", "")
+    return (str:gsub("%^[0-9a-zA-Z]", ""))
 end
 
 -- Get count of human players currently on server

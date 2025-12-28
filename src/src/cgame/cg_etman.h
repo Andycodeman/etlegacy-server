@@ -33,6 +33,27 @@
 #define VOICE_CMD_SOUND_REJECT  0x17
 #define VOICE_CMD_SOUND_STOP    0x18
 
+/* Phase 2: Playlist and visibility commands */
+#define VOICE_CMD_SOUND_PLAYLIST_CREATE   0x19
+#define VOICE_CMD_SOUND_PLAYLIST_DELETE   0x1A
+#define VOICE_CMD_SOUND_PLAYLIST_LIST     0x1B
+#define VOICE_CMD_SOUND_PLAYLIST_ADD      0x1C
+#define VOICE_CMD_SOUND_PLAYLIST_REMOVE   0x1D
+#define VOICE_CMD_SOUND_PLAYLIST_REORDER  0x1E
+#define VOICE_CMD_SOUND_PLAYLIST_PLAY     0x1F
+#define VOICE_CMD_SOUND_CATEGORIES        0x20
+#define VOICE_CMD_SOUND_SET_VISIBILITY    0x21
+#define VOICE_CMD_SOUND_PUBLIC_LIST       0x22
+#define VOICE_CMD_SOUND_PUBLIC_ADD        0x23
+#define VOICE_CMD_SOUND_PENDING           0x24
+#define VOICE_CMD_PLAYLIST_PUBLIC_LIST    0x25
+#define VOICE_CMD_PLAYLIST_SET_VISIBILITY 0x26
+#define VOICE_CMD_PLAYLIST_PUBLIC_SHOW    0x27  /* Show/play from public playlist: <nameLen><name>[position] */
+
+/* Registration commands */
+#define VOICE_CMD_ACCOUNT_REGISTER        0x30
+#define VOICE_RESP_REGISTER_CODE          0x31
+
 /*
  * Sound Response Packet Types (server -> client)
  */

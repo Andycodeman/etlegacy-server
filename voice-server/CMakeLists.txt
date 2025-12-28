@@ -7,6 +7,8 @@ set(CMAKE_C_STANDARD_REQUIRED ON)
 # Find required packages
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(OPUS REQUIRED opus)
+pkg_check_modules(LIBPQ REQUIRED libpq)
+pkg_check_modules(UUID REQUIRED uuid)
 
 # minimp3 is header-only - just add include path
 set(MINIMP3_INCLUDE "${CMAKE_CURRENT_SOURCE_DIR}/../src/libs/minimp3")
@@ -22,15 +24,20 @@ endif()
 add_executable(voice_server
     main.c
     sound_manager.c
+    db_manager.c
 )
 
 target_include_directories(voice_server PRIVATE
     ${OPUS_INCLUDE_DIRS}
+    ${LIBPQ_INCLUDE_DIRS}
+    ${UUID_INCLUDE_DIRS}
     ${MINIMP3_INCLUDE}
 )
 
 target_link_libraries(voice_server
     ${OPUS_LIBRARIES}
+    ${LIBPQ_LIBRARIES}
+    ${UUID_LIBRARIES}
     ${PLATFORM_LIBS}
 )
 

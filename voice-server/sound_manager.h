@@ -33,10 +33,31 @@
 #define VOICE_CMD_SOUND_LIST    0x12  /* List sounds: <guid> */
 #define VOICE_CMD_SOUND_DELETE  0x13  /* Delete sound: <guid><name> */
 #define VOICE_CMD_SOUND_RENAME  0x14  /* Rename: <guid><oldname><newname> */
-#define VOICE_CMD_SOUND_SHARE   0x15  /* Share: <guid><name><target_guid> */
+#define VOICE_CMD_SOUND_SHARE   0x15  /* Share: <guid><soundNameLen><soundName><targetPlayerName> */
 #define VOICE_CMD_SOUND_ACCEPT  0x16  /* Accept share: <guid><from_guid><name> */
 #define VOICE_CMD_SOUND_REJECT  0x17  /* Reject share: <guid><from_guid><name> */
 #define VOICE_CMD_SOUND_STOP    0x18  /* Stop currently playing sound */
+
+/* Phase 2: Playlist and visibility commands */
+#define VOICE_CMD_SOUND_PLAYLIST_CREATE   0x19  /* Create playlist: <guid><name> */
+#define VOICE_CMD_SOUND_PLAYLIST_DELETE   0x1A  /* Delete playlist: <guid><name> */
+#define VOICE_CMD_SOUND_PLAYLIST_LIST     0x1B  /* List playlists: <guid> */
+#define VOICE_CMD_SOUND_PLAYLIST_ADD      0x1C  /* Add to playlist: <guid><playlist><sound> */
+#define VOICE_CMD_SOUND_PLAYLIST_REMOVE   0x1D  /* Remove from playlist: <guid><playlist><sound> */
+#define VOICE_CMD_SOUND_PLAYLIST_REORDER  0x1E  /* Reorder: <guid><playlist><order> */
+#define VOICE_CMD_SOUND_PLAYLIST_PLAY     0x1F  /* Play by position: <guid><playlist><#> */
+#define VOICE_CMD_SOUND_CATEGORIES        0x20  /* Alias for playlist list */
+#define VOICE_CMD_SOUND_SET_VISIBILITY    0x21  /* Set visibility: <guid><name><visibility> */
+#define VOICE_CMD_SOUND_PUBLIC_LIST       0x22  /* List public sounds */
+#define VOICE_CMD_SOUND_PUBLIC_ADD        0x23  /* Add from public: <guid><soundFileId><alias> */
+#define VOICE_CMD_SOUND_PENDING           0x24  /* List pending shares: <guid> */
+#define VOICE_CMD_PLAYLIST_PUBLIC_LIST    0x25  /* List public playlists */
+#define VOICE_CMD_PLAYLIST_SET_VISIBILITY 0x26  /* Set playlist visibility: <guid><name><public:1> */
+#define VOICE_CMD_PLAYLIST_PUBLIC_SHOW    0x27  /* Show/play from public playlist: <nameLen><name>[position] */
+
+/* Phase 7: Registration commands */
+#define VOICE_CMD_ACCOUNT_REGISTER        0x30  /* Request registration code: <guid><playerName> */
+#define VOICE_RESP_REGISTER_CODE          0x31  /* Registration code response */
 
 /*
  * Sound Response Packet Types (server -> client)
@@ -57,6 +78,8 @@
 #define SOUND_GUID_LEN          32          /* Player GUID length (without null) */
 #define SOUND_ADD_COOLDOWN_SEC  10          /* Cooldown between add requests */
 #define SOUND_DOWNLOAD_TIMEOUT  120         /* 2 minute download timeout */
+#define SOUND_PLAY_BURST_LIMIT  5           /* Max sounds in burst before cooldown */
+#define SOUND_PLAY_COOLDOWN_SEC 5           /* Cooldown after burst limit reached */
 
 /*
  * Sound playback state
@@ -97,7 +120,7 @@ typedef struct {
 /*
  * Sound info entry (for listing)
  */
-typedef struct {
+typedef struct SoundInfo_s {
     char    name[SOUND_MAX_NAME_LEN + 1];
     size_t  fileSize;
     time_t  addedTime;
@@ -297,5 +320,58 @@ bool SoundMgr_ValidateName(const char *name, char *outName, int outLen);
  * @return true if valid
  */
 bool SoundMgr_ValidateUrl(const char *url, char *errorMsg, int errorLen);
+
+/**
+ * Check if database mode is enabled.
+ * When true, sounds are stored in PostgreSQL instead of filesystem only.
+ * @return true if database mode is enabled
+ */
+bool SoundMgr_IsDBMode(void);
+
+/**
+ * Enable or disable database mode.
+ * When enabled, the sound manager will use the PostgreSQL database
+ * for metadata storage (file storage remains on disk).
+ * Database must be initialized before enabling.
+ * @param enabled true to enable, false to disable
+ */
+void SoundMgr_SetDBMode(bool enabled);
+
+/**
+ * Get a player's GUID by their name (fuzzy matching).
+ * Defined in main.c, used by sound_manager.c for sharing.
+ * @param name Player name or partial match
+ * @param outGuid Buffer for GUID (min 33 bytes)
+ * @param outLen GUID buffer length
+ * @param outActualName Buffer for actual matched player name (can be NULL)
+ * @param nameLen Actual name buffer length
+ * @param outError Buffer for error message
+ * @param errLen Error buffer length
+ * @return true if exactly one player matched
+ */
+extern bool getGuidByPlayerName(const char *name, char *outGuid, int outLen,
+                                char *outActualName, int nameLen,
+                                char *outError, int errLen);
+
+/**
+ * Get a player's name by their client ID.
+ * Defined in main.c, used by sound_manager.c for share requests.
+ * @param clientId Client slot number
+ * @param outName Buffer for player name
+ * @param outLen Buffer length
+ * @return true if found
+ */
+extern bool getPlayerNameByClientId(uint32_t clientId, char *outName, int outLen);
+
+/**
+ * Get the GUID stored for a client by their client ID.
+ * Uses server-stored GUID, not what client sends (needed because
+ * clients on same machine share cl_guid).
+ * @param clientId Client slot number
+ * @param outGuid Buffer for GUID (should be at least 33 bytes)
+ * @param outLen Buffer length
+ * @return true if found
+ */
+extern bool getGuidByClientId(uint32_t clientId, char *outGuid, int outLen);
 
 #endif /* SOUND_MANAGER_H */
