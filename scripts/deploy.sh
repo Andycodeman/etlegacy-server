@@ -55,17 +55,20 @@ elif [ -f "$BUILD_DIR/legacy/qagame.mp.x86_64.so" ]; then
     echo "  - qagame.mp.x86_64.so"
 fi
 
-# Deploy voice server
-echo -e "${YELLOW}Deploying voice server...${NC}"
-VOICE_SERVER_SRC="$PROJECT_DIR/voice-server/voice_server"
-if [ -f "$VOICE_SERVER_SRC" ]; then
-    # Kill any running local voice_server so binary isn't locked
-    pkill -f "voice_server" 2>/dev/null || true
-    cp "$VOICE_SERVER_SRC" "$SERVER_DIR/"
-    chmod +x "$SERVER_DIR/voice_server"
-    echo "  - voice_server"
+# Deploy etman server
+echo -e "${YELLOW}Deploying etman server...${NC}"
+ETMAN_SERVER_SRC="$PROJECT_DIR/etman-server/build/etman_server"
+if [ ! -f "$ETMAN_SERVER_SRC" ]; then
+    ETMAN_SERVER_SRC="$PROJECT_DIR/dist/server/etman_server"
+fi
+if [ -f "$ETMAN_SERVER_SRC" ]; then
+    # Kill any running local etman_server so binary isn't locked
+    pkill -f "etman_server" 2>/dev/null || true
+    cp "$ETMAN_SERVER_SRC" "$SERVER_DIR/"
+    chmod +x "$SERVER_DIR/etman_server"
+    echo "  - etman_server"
 else
-    echo "  - voice_server not found at $VOICE_SERVER_SRC (skipping)"
+    echo "  - etman_server not found (skipping)"
 fi
 
 # Deploy legacy mod pk3 (from dist or from build)

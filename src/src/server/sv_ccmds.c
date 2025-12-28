@@ -46,88 +46,8 @@
 
 static time_t uptimeSince;
 
-// ETMan - Dynamic Map Rotation
-// Map rotation list - edit this to change the rotation
-static const char *mapRotation[] = {
-	"baserace",
-	"snatch3",
-	"ctf_face_b1",
-	"fragmaze_fixed",
-	"et_mor2_night_final",
-	"fa_bremen_final",
-	"mml_minastirith_fp3",
-	"capuzzo_final"
-};
-static const int mapRotationCount = sizeof(mapRotation) / sizeof(mapRotation[0]);
-static int currentMapIndex = 0;
-
-/**
- * @brief Find current map index in rotation
- */
-static void SV_UpdateMapIndex(void)
-{
-	const char *currentMap = Cvar_VariableString("mapname");
-	int i;
-
-	for (i = 0; i < mapRotationCount; i++)
-	{
-		if (!Q_stricmp(currentMap, mapRotation[i]))
-		{
-			currentMapIndex = i;
-			return;
-		}
-	}
-	// Map not in rotation, start from beginning
-	currentMapIndex = 0;
-}
-
 // Forward declaration from sv_init.c
 void SV_DynamicMapSwitch(const char *mapname);
-void SV_SpawnServer(const char *server);
-
-/**
- * @brief SV_Rotate_f - Advance to next map in rotation
- */
-static void SV_Rotate_f(void)
-{
-	const char *nextMap;
-
-	// Find where we are in rotation
-	SV_UpdateMapIndex();
-
-	// Advance to next map
-	currentMapIndex = (currentMapIndex + 1) % mapRotationCount;
-	nextMap = mapRotation[currentMapIndex];
-
-	Com_Printf("Map rotation: advancing to %s (index %d/%d)\n",
-		nextMap, currentMapIndex + 1, mapRotationCount);
-
-	// SV_SpawnServer will call SV_DynamicMapSwitch internally before FS_Restart
-	// This ensures the symlink exists and filesystem is rescanned
-	SV_SpawnServer(nextMap);
-}
-
-/**
- * @brief SV_MapList_f - Show map rotation list
- */
-static void SV_MapList_f(void)
-{
-	const char *currentMap = Cvar_VariableString("mapname");
-	int i;
-
-	Com_Printf("Map Rotation (%d maps):\n", mapRotationCount);
-	for (i = 0; i < mapRotationCount; i++)
-	{
-		if (!Q_stricmp(currentMap, mapRotation[i]))
-		{
-			Com_Printf("  %d. %s ^2<-- current\n", i + 1, mapRotation[i]);
-		}
-		else
-		{
-			Com_Printf("  %d. %s\n", i + 1, mapRotation[i]);
-		}
-	}
-}
 
 /**
  * @brief Returns the player with name from Cmd_Argv(1)
@@ -200,6 +120,13 @@ static void SV_Map_f(void)
 		Com_Printf("Usage: %s <map name>\n", cmd);
 		return;
 	}
+
+	// Dynamic map loader: set up symlink BEFORE checking if map exists
+	// This allows on-demand map downloads by symlinking from maps_repo
+	SV_DynamicMapSwitch(map);
+
+	// Rescan filesystem to pick up the new symlink
+	FS_Restart(0);
 
 	// make sure the level exists before trying to change, so that
 	// a typo at the server console won't end the game
@@ -850,8 +777,7 @@ void SV_AddOperatorCommands(void)
 	Cmd_AddCommand("uptime", SV_Uptime_f, "Prints uptime info.");
 
 	// ETMan - Map rotation commands
-	Cmd_AddCommand("rotate", SV_Rotate_f, "Advances to next map in rotation.");
-	Cmd_AddCommand("maplist", SV_MapList_f, "Shows the map rotation list.");
+	// rotate and maplist commands are handled by Lua (lua/map_rotation.lua)
 
 #if defined(FEATURE_IRC_SERVER) && defined(DEDICATED)
 	Cmd_AddCommand("irc_connect", IRC_Connect, "Connects to an IRC server.");

@@ -202,6 +202,13 @@ const char* DB_GetLastError(void);
  */
 bool DB_Reconnect(void);
 
+/**
+ * Get the raw PostgreSQL connection handle.
+ * For use by modules that need direct database access.
+ * @return PGconn pointer, or NULL if not connected
+ */
+struct pg_conn* DB_GetConnection(void);
+
 
 /*
  * Sound file operations

@@ -34,6 +34,7 @@
 
 #include "g_local.h"
 #include "g_etpanel.h"
+#include "g_etman.h"
 
 #ifdef FEATURE_OMNIBOT
 #include "g_etbot_interface.h"
@@ -1792,6 +1793,9 @@ void G_InitGame(int levelTime, int randomSeed, int restart, int etLegacyServer, 
 	// Initialize ETPanel stats reporting
 	G_ETPanel_Init();
 
+	// Initialize ETMan admin commands
+	G_ETMan_Init();
+
 	// parse the key/value pairs and spawn gentities
 	G_SpawnEntitiesFromString();
 
@@ -1874,6 +1878,10 @@ void G_ShutdownGame(int restart)
 	G_LuaHook_ShutdownGame(restart);
 	G_LuaShutdown();
 #endif
+
+	// Shutdown ETMan admin system
+	G_ETMan_Shutdown();
+
 	// gametype latching
 	if (((g_gametype.integer == GT_WOLF || g_gametype.integer == GT_WOLF_CAMPAIGN  || g_gametype.integer == GT_WOLF_MAPVOTE) && (g_entities[ENTITYNUM_WORLD].r.worldflags & NO_GT_WOLF)) ||
 	    (g_gametype.integer == GT_WOLF_STOPWATCH && (g_entities[ENTITYNUM_WORLD].r.worldflags & NO_STOPWATCH)) ||
@@ -4617,6 +4625,9 @@ void G_RunFrame(int levelTime)
 #ifdef FEATURE_LUA
 	G_LuaHook_RunFrame(levelTime);
 #endif
+
+	// Process ETMan admin command responses
+	G_ETMan_Frame();
 
 	level.frameStartTime = trap_Milliseconds();
 }

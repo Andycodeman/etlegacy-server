@@ -18,6 +18,8 @@ import MySounds from './pages/MySounds';
 import Playlists from './pages/Playlists';
 import PublicSounds from './pages/PublicSounds';
 import GameRegister from './pages/GameRegister';
+import Admin from './pages/Admin';
+import Commands from './pages/Commands';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -70,6 +72,8 @@ function App() {
             <Route path="sounds" element={<MySounds />} />
             <Route path="sounds/playlists" element={<Playlists />} />
             <Route path="sounds/public" element={<PublicSounds />} />
+            <Route path="admin" element={<Admin />} />
+            <Route path="commands" element={<Commands />} />
           </Route>
         </Routes>
       </BrowserRouter>

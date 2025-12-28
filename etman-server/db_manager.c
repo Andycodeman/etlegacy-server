@@ -200,6 +200,11 @@ bool DB_Reconnect(void) {
     return DB_Init(g_db.connString);
 }
 
+PGconn* DB_GetConnection(void) {
+    if (!DB_IsConnected()) return NULL;
+    return g_db.conn;
+}
+
 
 /*
  * Sound file operations

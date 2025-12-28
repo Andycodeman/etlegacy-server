@@ -338,6 +338,7 @@ export interface UpdateUserRequest {
   displayName?: string;
   role?: 'admin' | 'moderator' | 'user';
   password?: string;
+  adminLevel?: number;
 }
 
 // Game info types
@@ -702,4 +703,254 @@ export interface BrowserResponse {
   total: number;
   onlineCount: number;
   totalHumans: number;
+}
+
+// ============================================================================
+// Admin System API
+// ============================================================================
+
+export const admin = {
+  // Levels
+  levels: () => apiRequest<AdminLevelsResponse>('/admin/levels'),
+
+  // Players
+  players: (limit = 50, offset = 0, search = '') => {
+    const params = new URLSearchParams();
+    params.set('limit', limit.toString());
+    params.set('offset', offset.toString());
+    if (search) params.set('search', search);
+    return apiRequest<AdminPlayersResponse>(`/admin/players?${params.toString()}`);
+  },
+  player: (guid: string) => apiRequest<AdminPlayerDetailResponse>(`/admin/players/${guid}`),
+  setLevel: (guid: string, level: number) =>
+    apiRequest<{ success: boolean; message: string }>(`/admin/players/${guid}/level`, {
+      method: 'PUT',
+      body: { level },
+    }),
+
+  // Bans
+  bans: (limit = 50, offset = 0) =>
+    apiRequest<AdminBansResponse>(`/admin/bans?limit=${limit}&offset=${offset}`),
+  banHistory: (limit = 100, offset = 0) =>
+    apiRequest<AdminBanHistoryResponse>(`/admin/bans/history?limit=${limit}&offset=${offset}`),
+  ban: (guid: string, reason?: string, duration?: number) =>
+    apiRequest<{ success: boolean; message: string; ban: AdminBan }>(`/admin/bans/${guid}`, {
+      method: 'POST',
+      body: { reason, duration },
+    }),
+  unban: (banId: number) =>
+    apiRequest<{ success: boolean; message: string }>(`/admin/bans/${banId}`, {
+      method: 'DELETE',
+    }),
+
+  // Logs
+  logs: (limit = 100, offset = 0, command?: string, source?: string) => {
+    const params = new URLSearchParams();
+    params.set('limit', limit.toString());
+    params.set('offset', offset.toString());
+    if (command) params.set('command', command);
+    if (source) params.set('source', source);
+    return apiRequest<AdminLogsResponse>(`/admin/logs?${params.toString()}`);
+  },
+  logStats: () => apiRequest<AdminLogStatsResponse>('/admin/logs/stats'),
+
+  // Commands
+  commands: () => apiRequest<AdminCommandsResponse>('/admin/commands'),
+  setCommandLevel: (commandId: number, level: number) =>
+    apiRequest<{ success: boolean; message: string }>(`/admin/commands/${commandId}/level`, {
+      method: 'PUT',
+      body: { level },
+    }),
+  setCommandEnabled: (commandId: number, enabled: boolean) =>
+    apiRequest<{ success: boolean; message: string }>(`/admin/commands/${commandId}/enabled`, {
+      method: 'PUT',
+      body: { enabled },
+    }),
+  availableCommands: () =>
+    apiRequest<AvailableCommandsResponse>('/admin/commands/available'),
+  executeCommand: (command: string, args?: string) =>
+    apiRequest<ExecuteCommandResponse>('/admin/commands/execute', {
+      method: 'POST',
+      body: { command, args },
+    }),
+
+  // Stats
+  stats: () => apiRequest<AdminStatsResponse>('/admin/stats'),
+
+  // Current user's admin status
+  me: () => apiRequest<AdminMeResponse>('/admin/me'),
+};
+
+// Admin types
+export interface AdminLevel {
+  id: number;
+  level: number;
+  name: string;
+  createdAt: string;
+}
+
+export interface AdminLevelsResponse {
+  levels: AdminLevel[];
+}
+
+export interface AdminPlayerListItem {
+  id: number;
+  guid: string;
+  levelId: number | null;
+  levelName: string | null;
+  levelNum: number | null;
+  createdAt: string;
+  lastSeen: string;
+  timesSeen: number;
+  name: string;
+  cleanName: string;
+}
+
+export interface AdminPlayersResponse {
+  players: AdminPlayerListItem[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+export interface AdminAlias {
+  id: number;
+  playerId: number;
+  alias: string;
+  cleanAlias: string;
+  lastUsed: string;
+  timesUsed: number;
+}
+
+export interface AdminWarning {
+  id: number;
+  reason: string;
+  issuedAt: string;
+  warnedBy: number | null;
+}
+
+export interface AdminBan {
+  id: number;
+  playerId: number;
+  bannedBy: number | null;
+  reason: string | null;
+  issuedAt: string;
+  expiresAt: string | null;
+  active: boolean;
+}
+
+export interface AdminMute {
+  id: number;
+  playerId: number;
+  mutedBy: number | null;
+  reason: string | null;
+  issuedAt: string;
+  expiresAt: string | null;
+  active: boolean;
+  voiceMute: boolean;
+}
+
+export interface AdminCommandLogEntry {
+  id: number;
+  playerId: number | null;
+  command: string;
+  args: string | null;
+  targetPlayerId: number | null;
+  success: boolean | null;
+  executedAt: string;
+  source: string;
+}
+
+export interface AdminPlayerDetailResponse {
+  player: {
+    id: number;
+    guid: string;
+    levelId: number | null;
+    levelName: string | null;
+    levelNum: number | null;
+    createdAt: string;
+    lastSeen: string;
+    timesSeen: number;
+  };
+  aliases: AdminAlias[];
+  warnings: AdminWarning[];
+  bans: AdminBan[];
+  mutes: AdminMute[];
+  commandLogs: AdminCommandLogEntry[];
+}
+
+export interface AdminBanListItem extends AdminBan {
+  playerGuid: string;
+  playerName: string;
+  playerCleanName: string;
+  isPermanent: boolean;
+}
+
+export interface AdminBansResponse {
+  bans: AdminBanListItem[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+export interface AdminBanHistoryResponse {
+  bans: AdminBanListItem[];
+}
+
+export interface AdminLogListItem extends AdminCommandLogEntry {
+  playerName: string | null;
+  targetPlayerName: string | null;
+}
+
+export interface AdminLogsResponse {
+  logs: AdminLogListItem[];
+}
+
+export interface AdminLogStatsResponse {
+  commandCounts: { command: string; count: number }[];
+  sourceCounts: { source: string; count: number }[];
+}
+
+export interface AdminCommand {
+  id: number;
+  name: string;
+  description: string | null;
+  usage: string | null;
+  defaultLevel: number;
+  enabled: boolean;
+  createdAt: string;
+}
+
+export interface AdminCommandsResponse {
+  commands: AdminCommand[];
+}
+
+export interface AdminStatsResponse {
+  totalPlayers: number;
+  activeBans: number;
+  adminCount: number;
+  recentCommands: number;
+}
+
+export interface AdminMeResponse {
+  linked: boolean;
+  guid?: string;
+  adminLevel?: number | null;
+  adminLevelName?: string | null;
+  lastSeen?: string;
+  message?: string;
+}
+
+export interface AvailableCommandsResponse {
+  commands: AdminCommand[];
+  userLevel: number;
+  userGuid: string | null;
+}
+
+export interface ExecuteCommandResponse {
+  success: boolean;
+  message: string;
+  response?: string;
+  needsInGame?: boolean;
+  note?: string;
 }

@@ -375,6 +375,212 @@ export const soundSharesRelations = relations(soundShares, ({ one }) => ({
 }));
 
 // ============================================================================
+// Admin System Tables (ETMan !commands integration)
+// ============================================================================
+
+// Admin levels (hierarchical permission tiers: 0=Guest to 5=Owner)
+export const adminLevels = pgTable('admin_levels', {
+  id: serial('id').primaryKey(),
+  level: integer('level').notNull().unique(),
+  name: varchar('name', { length: 50 }).notNull(),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+});
+
+// Admin commands registry (all available !commands)
+export const adminCommands = pgTable('admin_commands', {
+  id: serial('id').primaryKey(),
+  name: varchar('name', { length: 50 }).notNull().unique(),
+  description: text('description'),
+  usage: varchar('usage', { length: 255 }),
+  defaultLevel: integer('default_level').notNull().default(5),
+  enabled: boolean('enabled').default(true).notNull(),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+});
+
+// Players (identified by GUID)
+export const adminPlayers = pgTable(
+  'admin_players',
+  {
+    id: serial('id').primaryKey(),
+    guid: varchar('guid', { length: 32 }).notNull().unique(),
+    levelId: integer('level_id').references(() => adminLevels.id).default(1),
+    createdAt: timestamp('created_at').defaultNow().notNull(),
+    lastSeen: timestamp('last_seen').defaultNow().notNull(),
+    timesSeen: integer('times_seen').default(1).notNull(),
+  },
+  (table) => ({
+    guidIdx: index('idx_admin_players_guid').on(table.guid),
+  })
+);
+
+// Player aliases (name history)
+export const adminAliases = pgTable(
+  'admin_aliases',
+  {
+    id: serial('id').primaryKey(),
+    playerId: integer('player_id')
+      .references(() => adminPlayers.id, { onDelete: 'cascade' })
+      .notNull(),
+    alias: varchar('alias', { length: 64 }).notNull(),
+    cleanAlias: varchar('clean_alias', { length: 64 }).notNull(),
+    lastUsed: timestamp('last_used').defaultNow().notNull(),
+    timesUsed: integer('times_used').default(1).notNull(),
+  },
+  (table) => ({
+    cleanIdx: index('idx_aliases_clean').on(table.cleanAlias),
+    playerIdx: index('idx_aliases_player').on(table.playerId),
+  })
+);
+
+// Bans
+export const adminBans = pgTable(
+  'admin_bans',
+  {
+    id: serial('id').primaryKey(),
+    playerId: integer('player_id')
+      .references(() => adminPlayers.id, { onDelete: 'cascade' })
+      .notNull(),
+    bannedBy: integer('banned_by').references(() => adminPlayers.id),
+    reason: text('reason'),
+    issuedAt: timestamp('issued_at').defaultNow().notNull(),
+    expiresAt: timestamp('expires_at'), // NULL = permanent
+    active: boolean('active').default(true).notNull(),
+  },
+  (table) => ({
+    playerIdx: index('idx_bans_player').on(table.playerId),
+  })
+);
+
+// Mutes
+export const adminMutes = pgTable(
+  'admin_mutes',
+  {
+    id: serial('id').primaryKey(),
+    playerId: integer('player_id')
+      .references(() => adminPlayers.id, { onDelete: 'cascade' })
+      .notNull(),
+    mutedBy: integer('muted_by').references(() => adminPlayers.id),
+    reason: text('reason'),
+    issuedAt: timestamp('issued_at').defaultNow().notNull(),
+    expiresAt: timestamp('expires_at'),
+    active: boolean('active').default(true).notNull(),
+    voiceMute: boolean('voice_mute').default(false).notNull(),
+  }
+);
+
+// Warnings
+export const adminWarnings = pgTable('admin_warnings', {
+  id: serial('id').primaryKey(),
+  playerId: integer('player_id')
+    .references(() => adminPlayers.id, { onDelete: 'cascade' })
+    .notNull(),
+  warnedBy: integer('warned_by').references(() => adminPlayers.id),
+  reason: text('reason').notNull(),
+  issuedAt: timestamp('issued_at').defaultNow().notNull(),
+});
+
+// Command execution log (audit trail)
+export const adminCommandLog = pgTable(
+  'admin_command_log',
+  {
+    id: serial('id').primaryKey(),
+    playerId: integer('player_id').references(() => adminPlayers.id),
+    command: varchar('command', { length: 50 }).notNull(),
+    args: text('args'),
+    targetPlayerId: integer('target_player_id').references(() => adminPlayers.id),
+    success: boolean('success'),
+    executedAt: timestamp('executed_at').defaultNow().notNull(),
+    source: varchar('source', { length: 20 }).default('game').notNull(), // 'game', 'etpanel', 'rcon'
+  },
+  (table) => ({
+    playerIdx: index('idx_command_log_player').on(table.playerId),
+    timeIdx: index('idx_command_log_time').on(table.executedAt),
+  })
+);
+
+// Level permissions (which levels can use which commands)
+export const adminLevelPermissions = pgTable(
+  'admin_level_permissions',
+  {
+    levelId: integer('level_id')
+      .references(() => adminLevels.id, { onDelete: 'cascade' })
+      .notNull(),
+    commandId: integer('command_id')
+      .references(() => adminCommands.id, { onDelete: 'cascade' })
+      .notNull(),
+  },
+  (table) => ({
+    pk: uniqueIndex('admin_level_permissions_pkey').on(table.levelId, table.commandId),
+  })
+);
+
+// Per-player permission overrides
+export const adminPlayerPermissions = pgTable(
+  'admin_player_permissions',
+  {
+    playerId: integer('player_id')
+      .references(() => adminPlayers.id, { onDelete: 'cascade' })
+      .notNull(),
+    commandId: integer('command_id')
+      .references(() => adminCommands.id, { onDelete: 'cascade' })
+      .notNull(),
+    granted: boolean('granted').notNull(),
+    grantedBy: integer('granted_by').references(() => adminPlayers.id),
+    grantedAt: timestamp('granted_at').defaultNow().notNull(),
+  },
+  (table) => ({
+    pk: uniqueIndex('admin_player_permissions_pkey').on(table.playerId, table.commandId),
+  })
+);
+
+// Admin system relations
+export const adminLevelsRelations = relations(adminLevels, ({ many }) => ({
+  players: many(adminPlayers),
+  permissions: many(adminLevelPermissions),
+}));
+
+export const adminPlayersRelations = relations(adminPlayers, ({ one, many }) => ({
+  level: one(adminLevels, {
+    fields: [adminPlayers.levelId],
+    references: [adminLevels.id],
+  }),
+  aliases: many(adminAliases),
+  bans: many(adminBans),
+  mutes: many(adminMutes),
+  warnings: many(adminWarnings),
+  commandLogs: many(adminCommandLog),
+}));
+
+export const adminAliasesRelations = relations(adminAliases, ({ one }) => ({
+  player: one(adminPlayers, {
+    fields: [adminAliases.playerId],
+    references: [adminPlayers.id],
+  }),
+}));
+
+export const adminBansRelations = relations(adminBans, ({ one }) => ({
+  player: one(adminPlayers, {
+    fields: [adminBans.playerId],
+    references: [adminPlayers.id],
+  }),
+  bannedByPlayer: one(adminPlayers, {
+    fields: [adminBans.bannedBy],
+    references: [adminPlayers.id],
+  }),
+}));
+
+export const adminCommandLogRelations = relations(adminCommandLog, ({ one }) => ({
+  player: one(adminPlayers, {
+    fields: [adminCommandLog.playerId],
+    references: [adminPlayers.id],
+  }),
+  targetPlayer: one(adminPlayers, {
+    fields: [adminCommandLog.targetPlayerId],
+    references: [adminPlayers.id],
+  }),
+}));
+
+// ============================================================================
 // Type exports
 // ============================================================================
 
@@ -410,3 +616,13 @@ export type SoundShare = typeof soundShares.$inferSelect;
 export type NewSoundShare = typeof soundShares.$inferInsert;
 export type VerificationCode = typeof verificationCodes.$inferSelect;
 export type NewVerificationCode = typeof verificationCodes.$inferInsert;
+
+// Admin system types
+export type AdminLevel = typeof adminLevels.$inferSelect;
+export type AdminCommand = typeof adminCommands.$inferSelect;
+export type AdminPlayer = typeof adminPlayers.$inferSelect;
+export type AdminAlias = typeof adminAliases.$inferSelect;
+export type AdminBan = typeof adminBans.$inferSelect;
+export type AdminMute = typeof adminMutes.$inferSelect;
+export type AdminWarning = typeof adminWarnings.$inferSelect;
+export type AdminCommandLogEntry = typeof adminCommandLog.$inferSelect;

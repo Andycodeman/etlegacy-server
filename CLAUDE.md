@@ -76,10 +76,10 @@ Custom ET:Legacy server with voice chat, custom rockets, survival mode. Uses 64-
 ## 🔧 Commands
 
 ```bash
-# Build EVERYTHING (client mods + voice server) - USE THIS!
+# Build EVERYTHING (client mods + etman server) - USE THIS!
 ./scripts/build-all.sh
 
-# Build client mods only (NO voice server)
+# Build client mods only (NO etman server)
 ./scripts/build-all.sh mod
 
 # Deploy to VPS + restart all services
@@ -150,7 +150,7 @@ The `build-all.sh` script:
 1. Build locally
 2. Deploy to `~/etlegacy/`
 3. Sync to VPS via rsync
-4. Restart etserver + voice-server + et-monitor
+4. Restart etserver + etman-server + et-monitor
 5. Remove local client pk3 (forces re-download for testing)
 
 **Never edit files directly on VPS** - they get overwritten.
@@ -193,7 +193,7 @@ Edit only in `~/projects/et/etlegacy/` - it's the single source of truth.
 | Service | Purpose |
 |---------|---------|
 | `etserver` | Game server (systemd) |
-| `voice-server` | Voice relay on port 27961 |
+| `etman-server` | ETMan sidecar on port 27961 (voice + sounds + admin) |
 | `et-monitor` | Health check + auto-restart |
 
 ---
@@ -221,14 +221,14 @@ unzip -l dist/zzz_etman_etlegacy.pk3 | grep -E '\.(dll|so)'
 
 ## Custom Sound System (ETMan)
 
-The voice server includes a custom sound management system allowing players to add, play, and share sounds.
+The etman-server includes a custom sound management system allowing players to add, play, and share sounds.
 
 ### Key Files
 | File | Purpose |
 |------|---------|
-| `voice-server/sound_manager.c` | Server-side sound CRUD, playback, sharing |
-| `voice-server/sound_manager.h` | Command definitions (0x10-0x30) |
-| `voice-server/db.c` | PostgreSQL integration for sounds |
+| `etman-server/sound_manager.c` | Server-side sound CRUD, playback, sharing |
+| `etman-server/sound_manager.h` | Command definitions (0x10-0x30) |
+| `etman-server/db_manager.c` | PostgreSQL integration for sounds |
 | `src/src/cgame/cg_etman.c` | Client-side /etman command handler |
 
 ### In-Game Commands
@@ -304,9 +304,9 @@ cd etpanel && ./deploy.sh
 
 ## CRITICAL: Build & Deploy
 
-**ALWAYS use `./scripts/build-all.sh` (no arguments) when modifying voice server code!**
+**ALWAYS use `./scripts/build-all.sh` (no arguments) when modifying etman-server code!**
 
-The `mod` argument only builds client modules (cgame/ui). Voice server changes require:
+The `mod` argument only builds client modules (cgame/ui). ETMan server changes require:
 ```bash
 ./scripts/build-all.sh && ./scripts/publish.sh
 ```

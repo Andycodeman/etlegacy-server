@@ -28,6 +28,19 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m'
 
+# =============================================================================
+# MAP NAME -> PK3 FILE MAPPING
+# =============================================================================
+# When the BSP name inside a pk3 doesn't match the pk3 filename, add a mapping.
+# Format: MAP_PK3["bsp_name"]="pk3_filename.pk3"
+# Example: capuzzo.bsp is inside capuzzo_final.pk3
+# =============================================================================
+declare -A MAP_PK3=(
+    ["capuzzo"]="capuzzo_final.pk3"
+    # Add more mappings as needed:
+    # ["et_mor2_night"]="et_mor2_night_final.pk3"
+)
+
 # Validate input
 if [ -z "$MAP_NAME" ]; then
     echo -e "${RED}ERROR: Map name required${NC}"
@@ -47,9 +60,17 @@ if [ ! -d "$MAPS_REPO" ]; then
     exit 1
 fi
 
+# Resolve pk3 filename (check mapping first, then default to mapname.pk3)
+if [ -n "${MAP_PK3[$MAP_NAME]}" ]; then
+    PK3_FILE="${MAP_PK3[$MAP_NAME]}"
+    echo -e "${YELLOW}Using mapped pk3: $MAP_NAME -> $PK3_FILE${NC}"
+else
+    PK3_FILE="${MAP_NAME}.pk3"
+fi
+
 # Check if map exists in repo
-if [ ! -f "$MAPS_REPO/${MAP_NAME}.pk3" ]; then
-    echo -e "${RED}ERROR: Map not found: $MAPS_REPO/${MAP_NAME}.pk3${NC}"
+if [ ! -f "$MAPS_REPO/$PK3_FILE" ]; then
+    echo -e "${RED}ERROR: Map not found: $MAPS_REPO/$PK3_FILE${NC}"
     echo "Available maps:"
     ls -1 "$MAPS_REPO"/*.pk3 2>/dev/null | xargs -n1 basename | sed 's/.pk3$//'
     exit 1
@@ -66,13 +87,14 @@ for link in "$LEGACY_DIR"/*.pk3; do
 done
 
 # Create symlink for new map
-echo -e "${YELLOW}Creating symlink for: ${MAP_NAME}.pk3${NC}"
-ln -sf "$MAPS_REPO/${MAP_NAME}.pk3" "$LEGACY_DIR/${MAP_NAME}.pk3"
+# Note: Symlink name = pk3 filename (not map name) so ET finds it correctly
+echo -e "${YELLOW}Creating symlink for: $PK3_FILE${NC}"
+ln -sf "$MAPS_REPO/$PK3_FILE" "$LEGACY_DIR/$PK3_FILE"
 
 # Verify symlink was created
-if [ -L "$LEGACY_DIR/${MAP_NAME}.pk3" ]; then
+if [ -L "$LEGACY_DIR/$PK3_FILE" ]; then
     echo -e "${GREEN}SUCCESS: Switched to map: $MAP_NAME${NC}"
-    echo "  Symlink: $LEGACY_DIR/${MAP_NAME}.pk3 -> $MAPS_REPO/${MAP_NAME}.pk3"
+    echo "  Symlink: $LEGACY_DIR/$PK3_FILE -> $MAPS_REPO/$PK3_FILE"
 else
     echo -e "${RED}ERROR: Failed to create symlink${NC}"
     exit 1

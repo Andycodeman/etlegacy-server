@@ -18,7 +18,7 @@
 #   ./build-all.sh mod          # Build mod for all client platforms
 #   ./build-all.sh --clean      # Clean all build directories first
 #   ./build-all.sh --no-voice   # Disable voice chat (enabled by default)
-#   ./build-all.sh voice-server # Build standalone voice server only
+#   ./build-all.sh etman-server # Build standalone etman server only
 
 set -e
 
@@ -215,11 +215,11 @@ build_mod_windows() {
     log_info "Windows ${arch}-bit client modules built successfully!"
 }
 
-# Build the voice server
-build_voice_server() {
-    local build_dir="$PROJECT_DIR/voice-server/build"
+# Build the etman server (voice + sounds + admin)
+build_etman_server() {
+    local build_dir="$PROJECT_DIR/etman-server/build"
 
-    log_step "Building voice server..."
+    log_step "Building etman server..."
 
     mkdir -p "$build_dir"
     cd "$build_dir"
@@ -229,11 +229,11 @@ build_voice_server() {
 
     # Copy output - fail if binary doesn't exist
     mkdir -p "$OUTPUT_DIR/server"
-    if [ -f "$build_dir/voice_server" ]; then
-        cp -v "$build_dir/voice_server" "$OUTPUT_DIR/server/"
-        log_info "Voice server built successfully!"
+    if [ -f "$build_dir/etman_server" ]; then
+        cp -v "$build_dir/etman_server" "$OUTPUT_DIR/server/"
+        log_info "ETMan server built successfully!"
     else
-        log_error "Voice server build failed - binary not found!"
+        log_error "ETMan server build failed - binary not found!"
         return 1
     fi
 }
@@ -370,17 +370,17 @@ main() {
             build_mod_windows 64
             create_mod_pk3
             build_rickroll_pk3
-            build_voice_server
+            build_etman_server
             ;;
         server)
             build_server_linux64
-            build_voice_server
+            build_etman_server
             ;;
         linux)
             build_server_linux64
             build_mod_linux 32
             build_mod_linux 64
-            build_voice_server
+            build_etman_server
             ;;
         windows)
             build_mod_windows 32
@@ -393,7 +393,7 @@ main() {
             build_mod_windows 64
             create_mod_pk3
             build_rickroll_pk3
-            build_voice_server
+            build_etman_server
             ;;
         linux32)
             build_mod_linux 32
@@ -410,8 +410,8 @@ main() {
         pk3)
             create_mod_pk3
             ;;
-        voice-server)
-            build_voice_server
+        etman-server)
+            build_etman_server
             ;;
         clean)
             clean_all
@@ -430,7 +430,7 @@ main() {
             echo "  win32        - Build Windows 32-bit client modules"
             echo "  win64        - Build Windows 64-bit client modules"
             echo "  pk3          - Create mod pk3 from existing builds"
-            echo "  voice-server - Build standalone voice chat server"
+            echo "  etman-server - Build standalone ETMan server (voice + sounds + admin)"
             echo "  clean        - Remove all build directories"
             echo ""
             echo "Options:"

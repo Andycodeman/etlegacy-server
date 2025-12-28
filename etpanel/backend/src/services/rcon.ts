@@ -105,6 +105,29 @@ export async function getServerStatus(): Promise<{
   });
 }
 
+// Send multiple RCON commands sequentially
+export async function sendRconMultiple(commands: string[]): Promise<RconResponse> {
+  const responses: string[] = [];
+  let allSuccess = true;
+
+  for (const cmd of commands) {
+    const result = await sendRcon(cmd);
+    if (!result.success) {
+      allSuccess = false;
+      if (result.error) responses.push(`Error: ${result.error}`);
+    } else if (result.response) {
+      responses.push(result.response);
+    }
+    // Small delay between commands to let server process
+    await new Promise(resolve => setTimeout(resolve, 100));
+  }
+
+  return {
+    success: allSuccess,
+    response: responses.join('\n'),
+  };
+}
+
 export async function getPlayers(): Promise<
   Array<{
     slot: number;

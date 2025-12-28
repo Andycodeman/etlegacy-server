@@ -25,6 +25,7 @@
 #include <time.h>
 
 #include "sound_manager.h"
+#include "admin/admin.h"
 
 #ifdef _WIN32
     #include <winsock2.h>
@@ -159,6 +160,14 @@ static SOCKET g_socket = INVALID_SOCKET;
 static ClientInfo g_clients[MAX_CLIENTS];
 static int g_numClients = 0;
 static int g_gameServerPort = DEFAULT_GAME_PORT;
+
+/**
+ * Get the server socket for admin module.
+ * Used by admin.c to send response/action packets.
+ */
+int getAdminSocket(void) {
+    return (int)g_socket;
+}
 
 /* Statistics */
 static uint64_t g_totalPacketsReceived = 0;
@@ -895,6 +904,83 @@ static bool isSoundCommand(uint8_t type) {
 }
 
 /*
+ * Check if packet is an admin command (0x40-0x44 range)
+ */
+static bool isAdminCommand(uint8_t type) {
+    return (type >= PKT_ADMIN_CMD && type <= PKT_PLAYER_UPDATE);
+}
+
+/*
+ * Handle incoming admin packet from qagame
+ */
+static void handleAdminPacket(struct sockaddr_in *addr, uint8_t *buffer, int received) {
+    uint8_t type = buffer[0];
+
+    /* Store qagame address for sending responses back */
+    Admin_SetQagameAddr(addr);
+
+    switch (type) {
+        case PKT_ADMIN_CMD: {
+            /* Admin command from player */
+            if (received < (int)sizeof(AdminCmdPacket)) {
+                printf("[ADMIN] PKT_ADMIN_CMD too short: %d bytes\n", received);
+                return;
+            }
+            AdminCmdPacket *pkt = (AdminCmdPacket *)buffer;
+
+            /* Ensure null termination */
+            char guid[ADMIN_GUID_LEN + 1];
+            char name[ADMIN_MAX_NAME_LEN + 1];
+            char command[ADMIN_MAX_CMD_LEN + 1];
+
+            strncpy(guid, pkt->guid, ADMIN_GUID_LEN);
+            guid[ADMIN_GUID_LEN] = '\0';
+            strncpy(name, pkt->name, ADMIN_MAX_NAME_LEN);
+            name[ADMIN_MAX_NAME_LEN] = '\0';
+            strncpy(command, pkt->command, ADMIN_MAX_CMD_LEN);
+            command[ADMIN_MAX_CMD_LEN] = '\0';
+
+            printf("[ADMIN] Command from slot %d (%s): %s\n",
+                   pkt->clientSlot, name, command);
+
+            Admin_HandleCommand(pkt->clientSlot, guid, name, command);
+            break;
+        }
+
+        case PKT_PLAYER_UPDATE: {
+            /* Player connect/disconnect */
+            if (received < (int)sizeof(PlayerUpdatePacket)) {
+                printf("[ADMIN] PKT_PLAYER_UPDATE too short: %d bytes\n", received);
+                return;
+            }
+            PlayerUpdatePacket *pkt = (PlayerUpdatePacket *)buffer;
+
+            char guid[ADMIN_GUID_LEN + 1];
+            char name[ADMIN_MAX_NAME_LEN + 1];
+
+            strncpy(guid, pkt->guid, ADMIN_GUID_LEN);
+            guid[ADMIN_GUID_LEN] = '\0';
+            strncpy(name, pkt->name, ADMIN_MAX_NAME_LEN);
+            name[ADMIN_MAX_NAME_LEN] = '\0';
+
+            if (pkt->connected) {
+                printf("[ADMIN] Player connected: slot=%d guid=%s name=%s team=%d\n",
+                       pkt->slot, guid, name, pkt->team);
+                Admin_PlayerConnect(pkt->slot, guid, name, pkt->team);
+            } else {
+                printf("[ADMIN] Player disconnected: slot=%d\n", pkt->slot);
+                Admin_PlayerDisconnect(pkt->slot);
+            }
+            break;
+        }
+
+        default:
+            printf("[ADMIN] Unknown admin packet type: 0x%02x\n", type);
+            break;
+    }
+}
+
+/*
  * Main server loop
  */
 static void serverLoop(void) {
@@ -975,8 +1061,12 @@ static void serverLoop(void) {
                         break;
 
                     default:
-                        /* Check for sound commands */
-                        if (isSoundCommand(type)) {
+                        /* Check for admin commands first (0x40-0x44) */
+                        if (isAdminCommand(type)) {
+                            handleAdminPacket(&clientAddr, buffer, received);
+                        }
+                        /* Check for sound commands (0x10-0x27, 0x30) */
+                        else if (isSoundCommand(type)) {
                             /* Extract client ID from packet - after type byte */
                             uint32_t clientId = 0;
                             if (received >= 5) {
@@ -1044,8 +1134,8 @@ int main(int argc, char *argv[]) {
     }
 
     printf("===========================================\n");
-    printf("  ET:Legacy Voice Routing Server v1.1\n");
-    printf("  (with ETMan Custom Sounds support)\n");
+    printf("  ETMan Server v2.0\n");
+    printf("  (Voice + Sounds + Admin Commands)\n");
     printf("===========================================\n\n");
 
     /* Setup signal handler */
@@ -1069,8 +1159,17 @@ int main(int argc, char *argv[]) {
         /* Non-fatal - voice routing still works */
     }
 
+    /* Initialize admin system */
+    if (!Admin_Init()) {
+        fprintf(stderr, "Warning: Admin system initialization failed\n");
+        /* Non-fatal - basic features still work */
+    }
+
     /* Run server */
     serverLoop();
+
+    /* Shutdown admin system */
+    Admin_Shutdown();
 
     /* Shutdown sound manager */
     SoundMgr_Shutdown();

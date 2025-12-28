@@ -6,6 +6,7 @@ import { auth } from '../api/client';
 const navItems = [
   { path: '/', label: 'Dashboard', icon: '📊' },
   { path: '/browser', label: 'Server Scout', icon: '🌐' },
+  { path: '/commands', label: 'Commands', icon: '⚡' },
   { path: '/console', label: 'Console', icon: '🖥️', adminOnly: true },
   { path: '/chat', label: 'Chat', icon: '💬' },
   { path: '/logs', label: 'Logs', icon: '📜', modOnly: true },
@@ -14,6 +15,7 @@ const navItems = [
   { path: '/config', label: 'Config', icon: '⚙️', adminOnly: true },
   { path: '/schedule', label: 'Schedule', icon: '📅' },
   { path: '/users', label: 'Users', icon: '🔑', adminOnly: true },
+  { path: '/admin', label: 'Admin', icon: '🛡️', modOnly: true },
 ];
 
 const soundNavItems = [

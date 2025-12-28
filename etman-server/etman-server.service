@@ -1,13 +1,14 @@
 [Unit]
-Description=ET:Legacy Voice Chat Server
-After=network.target etserver.service
+Description=ET:Legacy ETMan Server (Voice + Sounds + Admin)
+After=network.target etserver.service postgresql.service
 Wants=etserver.service
 
 [Service]
 Type=simple
 User=andy
 WorkingDirectory=/home/andy/etlegacy
-ExecStart=/home/andy/etlegacy/voice_server 27961 27960
+Environment="DATABASE_URL=postgresql://etpanel:etpanel123@localhost:5432/etpanel"
+ExecStart=/home/andy/etlegacy/etman_server 27961 27960
 Restart=always
 RestartSec=5
 StandardOutput=journal

@@ -3,7 +3,7 @@ import { z } from 'zod';
 import bcrypt from 'bcrypt';
 import { db, schema } from '../db/index.js';
 import { eq, desc } from 'drizzle-orm';
-import { requireAdmin, authenticate } from '../middleware/auth.js';
+import { requireAdmin } from '../middleware/auth.js';
 
 const createUserSchema = z.object({
   email: z.string().email(),
@@ -17,10 +17,11 @@ const updateUserSchema = z.object({
   displayName: z.string().min(2).max(100).optional(),
   role: z.enum(['admin', 'moderator', 'user']).optional(),
   password: z.string().min(8).optional(),
+  adminLevel: z.number().int().min(0).max(5).optional(),
 });
 
 export const userRoutes: FastifyPluginAsync = async (fastify) => {
-  // List all users (admin only)
+  // List all users (admin only) - includes ET admin level info
   fastify.get('/', { preHandler: requireAdmin }, async () => {
     const users = await db
       .select({
@@ -28,13 +29,39 @@ export const userRoutes: FastifyPluginAsync = async (fastify) => {
         email: schema.users.email,
         displayName: schema.users.displayName,
         role: schema.users.role,
+        guid: schema.users.guid,
         createdAt: schema.users.createdAt,
         updatedAt: schema.users.updatedAt,
       })
       .from(schema.users)
       .orderBy(desc(schema.users.createdAt));
 
-    return { users };
+    // Enrich with admin level for users with linked GUIDs
+    const enrichedUsers = await Promise.all(
+      users.map(async (user) => {
+        if (!user.guid) {
+          return { ...user, adminLevel: null, adminLevelName: null };
+        }
+
+        const [adminPlayer] = await db
+          .select({
+            levelNum: schema.adminLevels.level,
+            levelName: schema.adminLevels.name,
+          })
+          .from(schema.adminPlayers)
+          .leftJoin(schema.adminLevels, eq(schema.adminPlayers.levelId, schema.adminLevels.id))
+          .where(eq(schema.adminPlayers.guid, user.guid))
+          .limit(1);
+
+        return {
+          ...user,
+          adminLevel: adminPlayer?.levelNum ?? null,
+          adminLevelName: adminPlayer?.levelName ?? null,
+        };
+      })
+    );
+
+    return { users: enrichedUsers };
   });
 
   // Get single user (admin only)
@@ -169,6 +196,44 @@ export const userRoutes: FastifyPluginAsync = async (fastify) => {
 
     if (body.data.password) {
       updates.passwordHash = await bcrypt.hash(body.data.password, 12);
+    }
+
+    // Handle admin level change (requires user to have linked GUID)
+    if (body.data.adminLevel !== undefined && existing.guid) {
+      // Get the level ID for the requested level number
+      const [levelRow] = await db
+        .select()
+        .from(schema.adminLevels)
+        .where(eq(schema.adminLevels.level, body.data.adminLevel))
+        .limit(1);
+
+      if (levelRow) {
+        // Check if admin_player record exists
+        const [adminPlayer] = await db
+          .select()
+          .from(schema.adminPlayers)
+          .where(eq(schema.adminPlayers.guid, existing.guid))
+          .limit(1);
+
+        if (adminPlayer) {
+          // Update existing
+          await db
+            .update(schema.adminPlayers)
+            .set({ levelId: levelRow.id })
+            .where(eq(schema.adminPlayers.guid, existing.guid));
+        } else {
+          // Create new admin_player record
+          await db.insert(schema.adminPlayers).values({
+            guid: existing.guid,
+            levelId: levelRow.id,
+          });
+        }
+
+        fastify.log.info(
+          { adminId: request.user.userId, targetUserId: userId, newLevel: body.data.adminLevel },
+          'ET admin level changed via Users page'
+        );
+      }
     }
 
     const [user] = await db

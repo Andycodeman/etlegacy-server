@@ -42,6 +42,8 @@
 #include "g_lua.h"
 #endif
 
+#include "g_etman.h"
+
 qboolean G_IsOnFireteam(int entityNum, fireteamData_t **teamNum);
 
 /**
@@ -2976,6 +2978,8 @@ void G_Say(gentity_t *ent, gentity_t *target, int mode, const char *chatText)
  */
 void G_Say_f(gentity_t *ent, int mode /*, qboolean arg0*/)
 {
+	const char *chatText;
+
 	if (ent->client->sess.muted)
 	{
 		trap_SendServerCommand(ent - g_entities, "print \"Can't chat - you are muted\n\"");
@@ -2987,7 +2991,15 @@ void G_Say_f(gentity_t *ent, int mode /*, qboolean arg0*/)
 		return;
 	}
 
-	G_Say(ent, NULL, mode, ConcatArgs((/*(arg0) ? 0 :*/ 1)));
+	chatText = ConcatArgs((/*(arg0) ? 0 :*/ 1));
+
+	// ETMan: Check for !admin commands - suppress chat if command handled
+	if (G_ETMan_CheckCommand(ent, chatText))
+	{
+		return;
+	}
+
+	G_Say(ent, NULL, mode, chatText);
 }
 
 /**

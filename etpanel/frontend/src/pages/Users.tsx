@@ -1,7 +1,15 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { users, type AdminUser, type CreateUserRequest, type UpdateUserRequest } from '../api/client';
+import { users, admin } from '../api/client';
+import type { AdminUser, CreateUserRequest, UpdateUserRequest } from '../api/client';
 import { useAuthStore } from '../stores/auth';
+
+// Extended type with admin level info
+interface UserWithAdminLevel extends AdminUser {
+  guid?: string | null;
+  adminLevel?: number | null;
+  adminLevelName?: string | null;
+}
 
 function formatDate(isoString: string): string {
   return new Date(isoString).toLocaleDateString('en-US', {
@@ -17,13 +25,22 @@ const roleColors: Record<string, string> = {
   user: 'bg-gray-700 text-gray-300',
 };
 
+const adminLevelColors: Record<number, string> = {
+  0: 'text-gray-400',
+  1: 'text-gray-300',
+  2: 'text-blue-400',
+  3: 'text-green-400',
+  4: 'text-yellow-400',
+  5: 'text-red-400',
+};
+
 export default function Users() {
   const currentUser = useAuthStore((s) => s.user);
   const queryClient = useQueryClient();
 
   const [showCreateModal, setShowCreateModal] = useState(false);
-  const [editingUser, setEditingUser] = useState<AdminUser | null>(null);
-  const [deleteConfirm, setDeleteConfirm] = useState<AdminUser | null>(null);
+  const [editingUser, setEditingUser] = useState<UserWithAdminLevel | null>(null);
+  const [deleteConfirm, setDeleteConfirm] = useState<UserWithAdminLevel | null>(null);
 
   // Form state
   const [formData, setFormData] = useState({
@@ -31,8 +48,15 @@ export default function Users() {
     displayName: '',
     password: '',
     role: 'user' as 'admin' | 'moderator' | 'user',
+    adminLevel: null as number | null,
   });
   const [formError, setFormError] = useState('');
+
+  // Fetch admin levels for dropdown
+  const { data: levelsData } = useQuery({
+    queryKey: ['admin', 'levels'],
+    queryFn: admin.levels,
+  });
 
   const { data, isLoading, error } = useQuery({
     queryKey: ['users'],
@@ -72,7 +96,7 @@ export default function Users() {
   });
 
   const resetForm = () => {
-    setFormData({ email: '', displayName: '', password: '', role: 'user' });
+    setFormData({ email: '', displayName: '', password: '', role: 'user', adminLevel: null });
     setFormError('');
   };
 
@@ -81,12 +105,13 @@ export default function Users() {
     setShowCreateModal(true);
   };
 
-  const openEditModal = (user: AdminUser) => {
+  const openEditModal = (user: UserWithAdminLevel) => {
     setFormData({
       email: user.email,
       displayName: user.displayName,
       password: '',
       role: user.role,
+      adminLevel: user.adminLevel ?? null,
     });
     setFormError('');
     setEditingUser(user);
@@ -132,6 +157,10 @@ export default function Users() {
         return;
       }
       updates.password = formData.password;
+    }
+    // Include adminLevel if it changed (and user has GUID)
+    if (formData.adminLevel !== editingUser.adminLevel && editingUser.guid) {
+      updates.adminLevel = formData.adminLevel ?? undefined;
     }
 
     if (Object.keys(updates).length === 0) {
@@ -183,7 +212,7 @@ export default function Users() {
 
       {/* Mobile: Card Layout */}
       <div className="md:hidden space-y-3">
-        {userList.map((user) => (
+        {userList.map((user: UserWithAdminLevel) => (
           <div key={user.id} className="bg-gray-800 rounded-lg p-4">
             <div className="flex items-start justify-between mb-3">
               <div>
@@ -195,12 +224,20 @@ export default function Users() {
                 </div>
                 <div className="text-sm text-gray-400 break-all">{user.email}</div>
               </div>
-              <span className={`px-2 py-1 rounded text-xs font-medium ${roleColors[user.role]}`}>
-                {user.role}
-              </span>
+              <div className="flex flex-col items-end gap-1">
+                <span className={`px-2 py-1 rounded text-xs font-medium ${roleColors[user.role]}`}>
+                  {user.role}
+                </span>
+                {user.guid && (
+                  <span className={`text-xs ${adminLevelColors[user.adminLevel ?? 0]}`}>
+                    ET Lvl {user.adminLevel ?? 0}
+                  </span>
+                )}
+              </div>
             </div>
             <div className="text-xs text-gray-500 mb-3">
               Created: {formatDate(user.createdAt)}
+              {user.guid && <span className="ml-2">| GUID linked</span>}
             </div>
             <div className="flex gap-2">
               <button
@@ -229,13 +266,14 @@ export default function Users() {
             <tr className="text-left text-gray-400 border-b border-gray-700 bg-gray-900">
               <th className="px-6 py-3">Display Name</th>
               <th className="px-6 py-3">Email</th>
-              <th className="px-6 py-3">Role</th>
+              <th className="px-6 py-3">Panel Role</th>
+              <th className="px-6 py-3">ET Level</th>
               <th className="px-6 py-3">Created</th>
               <th className="px-6 py-3 text-right">Actions</th>
             </tr>
           </thead>
           <tbody>
-            {userList.map((user) => (
+            {userList.map((user: UserWithAdminLevel) => (
               <tr key={user.id} className="border-b border-gray-700/50 hover:bg-gray-700/30">
                 <td className="px-6 py-4">
                   <div className="font-medium">{user.displayName}</div>
@@ -248,6 +286,15 @@ export default function Users() {
                   <span className={`px-2 py-1 rounded text-xs font-medium ${roleColors[user.role]}`}>
                     {user.role}
                   </span>
+                </td>
+                <td className="px-6 py-4">
+                  {user.guid ? (
+                    <span className={`${adminLevelColors[user.adminLevel ?? 0]}`}>
+                      {user.adminLevel ?? 0} - {user.adminLevelName || 'Guest'}
+                    </span>
+                  ) : (
+                    <span className="text-gray-500 text-sm">No GUID</span>
+                  )}
                 </td>
                 <td className="px-6 py-4 text-gray-400">{formatDate(user.createdAt)}</td>
                 <td className="px-6 py-4 text-right">
@@ -379,7 +426,7 @@ export default function Users() {
                 />
               </div>
               <div>
-                <label className="block text-sm text-gray-400 mb-1">Role</label>
+                <label className="block text-sm text-gray-400 mb-1">Panel Role</label>
                 <select
                   value={formData.role}
                   onChange={(e) => setFormData({ ...formData, role: e.target.value as typeof formData.role })}
@@ -393,6 +440,29 @@ export default function Users() {
                 {editingUser.id === currentUser?.id && (
                   <p className="text-xs text-gray-500 mt-1">You cannot change your own role</p>
                 )}
+              </div>
+              <div>
+                <label className="block text-sm text-gray-400 mb-1">ET Admin Level (In-Game)</label>
+                {editingUser.guid ? (
+                  <select
+                    value={formData.adminLevel ?? 0}
+                    onChange={(e) => setFormData({ ...formData, adminLevel: parseInt(e.target.value) })}
+                    className="w-full bg-gray-700 rounded px-3 py-2.5 md:py-2 text-base focus:outline-none focus:ring-2 focus:ring-orange-500"
+                  >
+                    {levelsData?.levels.map((level) => (
+                      <option key={level.id} value={level.level}>
+                        {level.level} - {level.name}
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  <div className="bg-gray-700 rounded px-3 py-2.5 md:py-2 text-gray-500">
+                    No game account linked (user must run /etman register in-game)
+                  </div>
+                )}
+                <p className="text-xs text-gray-500 mt-1">
+                  Controls access to !commands in-game
+                </p>
               </div>
               {formError && (
                 <div className="text-red-400 text-sm">{formError}</div>

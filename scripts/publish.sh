@@ -127,31 +127,31 @@ sudo mv /tmp/etserver.service /etc/systemd/system/etserver.service && sudo syste
 
 echo "  - etserver.service updated with Dynamic Map Loader support"
 
-# Step 5b: Sync voice server binary
-echo -e "${YELLOW}Step 5b: Syncing voice server to VPS...${NC}"
+# Step 5b: Sync etman server binary
+echo -e "${YELLOW}Step 5b: Syncing etman server to VPS...${NC}"
 # Check build directory first (where build.sh outputs), then fallback to dist
-VOICE_SERVER_SRC="$PROJECT_DIR/voice-server/build/voice_server"
-if [ ! -f "$VOICE_SERVER_SRC" ]; then
-    VOICE_SERVER_SRC="$PROJECT_DIR/dist/server/voice_server"
+ETMAN_SERVER_SRC="$PROJECT_DIR/etman-server/build/etman_server"
+if [ ! -f "$ETMAN_SERVER_SRC" ]; then
+    ETMAN_SERVER_SRC="$PROJECT_DIR/dist/server/etman_server"
 fi
-if [ -f "$VOICE_SERVER_SRC" ]; then
-    # Stop voice-server first so binary isn't locked
-    ssh $SSH_OPTS "$REMOTE_HOST" "sudo systemctl stop voice-server 2>/dev/null || true"
+if [ -f "$ETMAN_SERVER_SRC" ]; then
+    # Stop etman-server first so binary isn't locked
+    ssh $SSH_OPTS "$REMOTE_HOST" "sudo systemctl stop etman-server 2>/dev/null || true"
     rsync -avz --progress \
-        "$VOICE_SERVER_SRC" \
+        "$ETMAN_SERVER_SRC" \
         "$REMOTE_HOST:$REMOTE_DIR/"
-    ssh $SSH_OPTS "$REMOTE_HOST" "chmod +x $REMOTE_DIR/voice_server"
-    echo "  - voice_server synced from $VOICE_SERVER_SRC"
+    ssh $SSH_OPTS "$REMOTE_HOST" "chmod +x $REMOTE_DIR/etman_server"
+    echo "  - etman_server synced from $ETMAN_SERVER_SRC"
 else
-    echo -e "${RED}  - ERROR: voice_server not found! Build it first with: cd voice-server && ./build.sh${NC}"
+    echo -e "${RED}  - ERROR: etman_server not found! Build it first with: ./scripts/build-all.sh${NC}"
 fi
 
-# Step 5c: Create/update voice-server.service on VPS
+# Step 5c: Create/update etman-server.service on VPS
 # Note: DATABASE_URL uses etpanel123 password (set Dec 2025)
-echo -e "${YELLOW}Step 5c: Updating voice-server.service on VPS...${NC}"
-ssh $SSH_OPTS "$REMOTE_HOST" "cat > /tmp/voice-server.service << 'EOF'
+echo -e "${YELLOW}Step 5c: Updating etman-server.service on VPS...${NC}"
+ssh $SSH_OPTS "$REMOTE_HOST" "cat > /tmp/etman-server.service << 'EOF'
 [Unit]
-Description=ET:Legacy Voice Chat Server
+Description=ET:Legacy ETMan Server (Voice + Sounds + Admin)
 After=network.target etserver.service postgresql.service
 Wants=etserver.service
 
@@ -160,7 +160,7 @@ Type=simple
 User=andy
 WorkingDirectory=/home/andy/etlegacy
 Environment="DATABASE_URL=postgresql://etpanel:etpanel123@localhost:5432/etpanel"
-ExecStart=/home/andy/etlegacy/voice_server 27961 27960
+ExecStart=/home/andy/etlegacy/etman_server 27961 27960
 Restart=always
 RestartSec=5
 StandardOutput=journal
@@ -169,8 +169,8 @@ StandardError=journal
 [Install]
 WantedBy=multi-user.target
 EOF
-sudo mv /tmp/voice-server.service /etc/systemd/system/voice-server.service && sudo systemctl daemon-reload && sudo systemctl enable voice-server"
-echo "  - voice-server.service updated"
+sudo mv /tmp/etman-server.service /etc/systemd/system/etman-server.service && sudo systemctl daemon-reload && sudo systemctl enable etman-server"
+echo "  - etman-server.service updated"
 
 # Step 6: Restart server and monitor
 echo -e "${YELLOW}Step 6: Restarting services...${NC}"
@@ -179,8 +179,8 @@ ssh $SSH_OPTS "$REMOTE_HOST" "
     sudo systemctl restart etserver
     sleep 2
 
-    echo '  Restarting voice-server...'
-    sudo systemctl restart voice-server 2>/dev/null || echo '    (voice-server not started - may need voice_server binary)'
+    echo '  Restarting etman-server...'
+    sudo systemctl restart etman-server 2>/dev/null || echo '    (etman-server not started - may need etman_server binary)'
 
     echo '  Restarting et-monitor...'
     sudo systemctl restart et-monitor 2>/dev/null || echo '    (et-monitor service not found)'
@@ -201,10 +201,10 @@ ssh $SSH_OPTS "$REMOTE_HOST" "
         echo '  ✗ etserver NOT running'
     fi
 
-    if pgrep -f voice_server > /dev/null; then
-        echo '  ✓ voice-server running (port 27961)'
+    if pgrep -f etman_server > /dev/null; then
+        echo '  ✓ etman-server running (port 27961)'
     else
-        echo '  ✗ voice-server NOT running'
+        echo '  ✗ etman-server NOT running'
     fi
 
     if pgrep -f server-monitor.sh > /dev/null; then

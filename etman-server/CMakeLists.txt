@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.10)
-project(voice_server C)
+project(etman_server C)
 
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
@@ -20,21 +20,24 @@ else()
     set(PLATFORM_LIBS m)
 endif()
 
-# Voice Server executable
-add_executable(voice_server
+# ETMan Server executable (voice + sounds + admin)
+add_executable(etman_server
     main.c
     sound_manager.c
     db_manager.c
+    admin/admin.c
+    admin/commands.c
 )
 
-target_include_directories(voice_server PRIVATE
+target_include_directories(etman_server PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
     ${OPUS_INCLUDE_DIRS}
     ${LIBPQ_INCLUDE_DIRS}
     ${UUID_INCLUDE_DIRS}
     ${MINIMP3_INCLUDE}
 )
 
-target_link_libraries(voice_server
+target_link_libraries(etman_server
     ${OPUS_LIBRARIES}
     ${LIBPQ_LIBRARIES}
     ${UUID_LIBRARIES}
@@ -42,4 +45,4 @@ target_link_libraries(voice_server
 )
 
 # Installation
-install(TARGETS voice_server DESTINATION bin)
+install(TARGETS etman_server DESTINATION bin)

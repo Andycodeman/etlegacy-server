@@ -37,6 +37,7 @@
 #include "../../etmain/ui/menudef.h"
 #include "g_strparse.h"
 #include "g_etpanel.h"
+#include "g_etman.h"
 
 #ifdef FEATURE_OMNIBOT
 #include "g_etbot_interface.h"
@@ -2819,6 +2820,16 @@ void ClientBegin(int clientNum)
 		G_LuaHook_ClientBegin(clientNum);
 	}
 #endif
+
+	// Notify ETMan admin system of player connection
+	{
+		char userinfo[MAX_INFO_STRING];
+		trap_GetUserinfo(clientNum, userinfo, sizeof(userinfo));
+		G_ETMan_PlayerConnect(clientNum,
+			Info_ValueForKey(userinfo, "cl_guid"),
+			client->pers.netname,
+			client->sess.sessionTeam);
+	}
 }
 
 #if 0 // not used

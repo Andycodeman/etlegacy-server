@@ -29,7 +29,7 @@ M.maps = {
     "et_mor2_night_final",
     "fa_bremen_final",
     "mml_minastirith_fp3",
-    "capuzzo_final"
+    "capuzzo"
 }
 
 -- Current position in rotation (1-indexed for Lua)
