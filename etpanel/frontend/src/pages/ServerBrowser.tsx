@@ -43,7 +43,8 @@ export default function ServerBrowser() {
   const { data, isLoading, error, refetch, isFetching } = useQuery<BrowserResponse>({
     queryKey: ['serverBrowser'],
     queryFn: browser.servers,
-    staleTime: 30000,
+    staleTime: 0, // Always consider data stale so refresh always fetches fresh
+    gcTime: 0, // Don't cache results (formerly cacheTime)
   });
 
   const addMutation = useMutation({

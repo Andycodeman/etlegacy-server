@@ -1,22 +1,30 @@
+# ⚠️⚠️⚠️ STOP! READ THIS FIRST! ⚠️⚠️⚠️
+
+```
+╔══════════════════════════════════════════════════════════════════════════════╗
+║                                                                              ║
+║   🧠 MANDATORY: QUERY MEMORY BEFORE STARTING ANY TASK!                       ║
+║                                                                              ║
+║   BEFORE doing ANYTHING, run:                                                ║
+║   cd ~/projects/et/etlegacy && export FORCE_TRANSFORMERS=1 && \              ║
+║   npx claude-flow memory query "<relevant search terms>" \                   ║
+║   --namespace <namespace> --reasoningbank                                    ║
+║                                                                              ║
+║   AFTER completing ANY task, run:                                            ║
+║   cd ~/projects/et/etlegacy && export FORCE_TRANSFORMERS=1 && \              ║
+║   npx claude-flow memory store "<key>" "<what was done>" \                   ║
+║   --namespace <namespace> --reasoningbank                                    ║
+║                                                                              ║
+║   Namespaces: build, server, etpanel, bugs, decisions, lessons               ║
+║                                                                              ║
+╚══════════════════════════════════════════════════════════════════════════════╝
+```
+
+---
+
 # ET:Legacy Server Project
 
 Custom ET:Legacy server with voice chat, custom rockets, survival mode. Uses 64-bit architecture with Lua scripting.
-
-## 🧠 MANDATORY: ReasoningBank Memory System
-
-### ⚠️ CRITICAL: Use Memory BEFORE and AFTER EVERY Task
-
-```bash
-# ✅ Query BEFORE starting work
-cd ~/projects/et/etlegacy && export FORCE_TRANSFORMERS=1 && npx claude-flow memory query "search terms" --namespace build --reasoningbank
-
-# ✅ Store AFTER completing work
-cd ~/projects/et/etlegacy && export FORCE_TRANSFORMERS=1 && npx claude-flow memory store "key" "what was done" --namespace build --reasoningbank
-```
-
-**Requirements:** `FORCE_TRANSFORMERS=1` + `--namespace` + run from `~/projects/et/etlegacy`
-
-**Namespaces:** `build`, `server`, `etpanel`, `bugs`, `decisions`, `lessons`
 
 ---
 
