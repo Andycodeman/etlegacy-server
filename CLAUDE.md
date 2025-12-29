@@ -28,7 +28,12 @@ Custom ET:Legacy server with voice chat, custom rockets, survival mode. Uses 64-
 
 ---
 
-## 🎮 Project Status (Dec 2024)
+## ⚠️ IMPORTANT: Current Year is 2025
+When storing memory entries or referencing dates, use 2025 (not 2024).
+
+---
+
+## 🎮 Project Status (Dec 2025)
 
 | Component | Status | URL |
 |-----------|--------|-----|
