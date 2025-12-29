@@ -1910,6 +1910,9 @@ void G_ShutdownGame(int restart)
 	// Shutdown ETMan admin system
 	G_ETMan_Shutdown();
 
+	// Reset panzerfest if active (map change during panzerfest)
+	G_PanzerfestShutdown();
+
 	// gametype latching
 	if (((g_gametype.integer == GT_WOLF || g_gametype.integer == GT_WOLF_CAMPAIGN  || g_gametype.integer == GT_WOLF_MAPVOTE) && (g_entities[ENTITYNUM_WORLD].r.worldflags & NO_GT_WOLF)) ||
 	    (g_gametype.integer == GT_WOLF_STOPWATCH && (g_entities[ENTITYNUM_WORLD].r.worldflags & NO_STOPWATCH)) ||

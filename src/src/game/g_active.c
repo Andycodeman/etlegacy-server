@@ -1266,6 +1266,12 @@ void WolfFindMedic(gentity_t *self)
 
 // Phase durations in milliseconds
 #define PHASE_DURATION_MS 30000
+
+// Survival mode constants (needed for panzerfest speed matching)
+#define SURVIVAL_MAX_LEVEL       6      // Maximum speed bonus level
+#define SURVIVAL_SPEED_PER_LEVEL 0.40f  // +40% speed per level (Level 6 = 3.4x)
+#define SURVIVAL_MAX_SPEED       (1.0f + (SURVIVAL_MAX_LEVEL * SURVIVAL_SPEED_PER_LEVEL))  // 3.4x
+#define PANZERFEST_MIN_SPEED     0.5f   // Minimum speed at end of phase 3 (half normal)
 #define VICTORY_PAUSE_MS  3000
 
 // Configuration
@@ -1326,6 +1332,57 @@ void G_PanzerfestInit(void)
 }
 
 /**
+ * @brief Shutdown panzerfest on map change/rotate
+ * Restores teams and resets all player state
+ */
+void G_PanzerfestShutdown(void)
+{
+	int       i;
+	gentity_t *ent;
+
+	if (!level.panzerfest.active)
+	{
+		return;
+	}
+
+	G_Printf("^2PANZERFEST: ^7Map change during active panzerfest - restoring teams\n");
+
+	// Restore original teams for all players
+	for (i = 0; i < level.maxclients; i++)
+	{
+		ent = &g_entities[i];
+
+		if (!ent->client || ent->client->pers.connected != CON_CONNECTED)
+		{
+			continue;
+		}
+
+		if (level.panzerfest.originalTeams[i] == -1 || level.panzerfest.originalTeams[i] == TEAM_SPECTATOR)
+		{
+			continue;
+		}
+
+		// Restore to original team if different
+		if (ent->client->sess.sessionTeam != level.panzerfest.originalTeams[i])
+		{
+			const char *teamName = (level.panzerfest.originalTeams[i] == TEAM_AXIS) ? "red" : "blue";
+			SetTeam(ent, teamName, qtrue, WP_NONE, WP_NONE, qfalse);
+		}
+
+		// Reset all bonus state
+		ent->client->killStreakCount      = 0;
+		ent->client->killStreakBonusLevel = 0;
+		ent->client->survivalSpawnTime    = 0;
+		ent->client->survivalSpeedLevel   = 0;
+	}
+
+	// Reset panzerfest state
+	level.panzerfest.active          = qfalse;
+	level.panzerfest.targetClientNum = -1;
+	level.panzerfest.phase           = PANZERFEST_INACTIVE;
+}
+
+/**
  * @brief Start panzerfest mode
  * @param[in] target The player who triggered panzerfest
  */
@@ -1372,7 +1429,7 @@ void G_PanzerfestStart(gentity_t *target)
 	level.panzerfest.messageIndex           = 0;
 	level.panzerfest.phase                  = PANZERFEST_BOOST;
 	level.panzerfest.currentMultiplier      = (float)PANZERFEST_MULTIPLIER;
-	level.panzerfest.currentSpeedMultiplier = 3.0f;  // Same as max survival level (3x)
+	level.panzerfest.currentSpeedMultiplier = SURVIVAL_MAX_SPEED;  // Same as max survival level (~2.98x)
 	level.panzerfest.currentDelay           = 0;
 
 	// Store original teams and switch everyone to enemy team (except target)
@@ -1499,9 +1556,14 @@ void G_PanzerfestEnd(qboolean targetDied)
 			SetTeam(ent, teamName, qtrue, WP_NONE, WP_NONE, qfalse);
 		}
 
-		// Reset kill streaks
+		// Reset kill streaks AND survival levels for everyone
 		ent->client->killStreakCount      = 0;
 		ent->client->killStreakBonusLevel = 0;
+		ent->client->survivalSpawnTime    = level.time;  // Reset survival timer
+		ent->client->survivalSpeedLevel   = 0;
+
+		// Send HUD reset to this client (all zeros)
+		trap_SendServerCommand(i, va("panzerfest_bonus 0 0 0 0 0 0 %d 100", PANZERFEST_KILLS));
 	}
 
 	// Start cooldown
@@ -1572,13 +1634,17 @@ void G_PanzerfestThink(void)
 		{
 			level.panzerfest.lastTick = level.time;
 
+			// Both should reach their minimum at the same time (6 ticks = 30 seconds)
+			// Fire rate: 7 -> 1 over 6 ticks = decrease by 1.0 per tick
 			level.panzerfest.currentMultiplier -= 1.0f;
 			if (level.panzerfest.currentMultiplier < 1.0f)
 			{
 				level.panzerfest.currentMultiplier = 1.0f;
 			}
 
-			level.panzerfest.currentSpeedMultiplier -= 0.5f;
+			// Speed: SURVIVAL_MAX_SPEED (3.4) -> 1.0 over 6 ticks
+			// Decrease per tick = (3.4 - 1.0) / 6 = 0.4 per tick
+			level.panzerfest.currentSpeedMultiplier -= (SURVIVAL_MAX_SPEED - 1.0f) / 6.0f;
 			if (level.panzerfest.currentSpeedMultiplier < 1.0f)
 			{
 				level.panzerfest.currentSpeedMultiplier = 1.0f;
@@ -1604,40 +1670,53 @@ void G_PanzerfestThink(void)
 			level.panzerfest.currentSpeedMultiplier = 1.0f;
 			level.panzerfest.currentDelay           = 0;
 
-			trap_SendServerCommand(-1, "cp \"^1SPEED LOCKED AT NORMAL!\n^3Fire rate still dropping!\n\" 3");
-			trap_SendServerCommand(-1, "chat \"^1*** PHASE 3: FIRE RATE PENALTY! *** ^3Speed normal, fire rate getting WORSE! 60 seconds left...\"");
+			trap_SendServerCommand(-1, "cp \"^1SPEED AT NORMAL!\n^3Both still dropping!\n\" 3");
+			trap_SendServerCommand(-1, "chat \"^1*** PHASE 3: PENALTY PHASE! *** ^3Speed dropping to 0.5x, fire delay increasing! 60 seconds left...\"");
 		}
 	}
-	// Phase 3: FIRE SLOWDOWN (30s, add delay 0->6000ms)
+	// Phase 3: FIRE SLOWDOWN + SPEED SLOWDOWN (30s)
+	// Fire delay: 0 -> 6000ms (add 1 second per tick)
+	// Speed: 1.0x -> 0.5x (decrease by ~0.083 per tick)
 	else if (level.panzerfest.phase == PANZERFEST_FIRE_SLOWDOWN)
 	{
 		if (level.time - level.panzerfest.lastTick >= 5000)
 		{
 			level.panzerfest.lastTick = level.time;
-			level.panzerfest.currentDelay += 1000;
 
+			// Increase fire delay by 1 second
+			level.panzerfest.currentDelay += 1000;
 			if (level.panzerfest.currentDelay > 6000)
 			{
 				level.panzerfest.currentDelay = 6000;
 			}
 
+			// Decrease speed from 1.0 to 0.5 over 6 ticks
+			// (1.0 - 0.5) / 6 = 0.0833 per tick
+			level.panzerfest.currentSpeedMultiplier -= (1.0f - PANZERFEST_MIN_SPEED) / 6.0f;
+			if (level.panzerfest.currentSpeedMultiplier < PANZERFEST_MIN_SPEED)
+			{
+				level.panzerfest.currentSpeedMultiplier = PANZERFEST_MIN_SPEED;
+			}
+
 			if (level.panzerfest.messageIndex < NUM_MESSAGES)
 			{
-				trap_SendServerCommand(-1, va("chat \"%s ^7(Delay: ^1+%d sec^7)\"",
+				trap_SendServerCommand(-1, va("chat \"%s ^7(Delay: ^1+%d sec^7, Speed: ^3%.1fx^7)\"",
 				                              phase3Messages[level.panzerfest.messageIndex],
-				                              level.panzerfest.currentDelay / 1000));
+				                              level.panzerfest.currentDelay / 1000,
+				                              level.panzerfest.currentSpeedMultiplier));
 				level.panzerfest.messageIndex++;
 			}
 		}
 
 		if (phaseElapsed >= PHASE_DURATION_MS)
 		{
-			level.panzerfest.phase          = PANZERFEST_SURVIVE;
-			level.panzerfest.phaseStartTime = level.time;
-			level.panzerfest.currentDelay   = 6000;
+			level.panzerfest.phase                  = PANZERFEST_SURVIVE;
+			level.panzerfest.phaseStartTime         = level.time;
+			level.panzerfest.currentDelay           = 6000;
+			level.panzerfest.currentSpeedMultiplier = PANZERFEST_MIN_SPEED;  // Lock at 0.5x
 
 			trap_SendServerCommand(-1, "cp \"^1MAXIMUM PENALTY!\n^3SURVIVE 30 MORE SECONDS!\n\" 3");
-			trap_SendServerCommand(-1, "chat \"^1*** PHASE 4: SURVIVE! *** ^3Max delay, normal speed. ^230 SECONDS TO GO!\"");
+			trap_SendServerCommand(-1, va("chat \"^1*** PHASE 4: SURVIVE! *** ^3Max delay (6s), half speed (%.1fx). ^230 SECONDS TO GO!\"", PANZERFEST_MIN_SPEED));
 		}
 	}
 	// Phase 4: SURVIVE (30s at max penalty)
@@ -1649,28 +1728,99 @@ void G_PanzerfestThink(void)
 			level.panzerfest.phaseStartTime = level.time;
 
 			trap_SendServerCommand(-1, va("cp \"\n"
-			                              "^6*****************************************\n"
-			                              "^2           MOMENT OF SILENCE\n"
-			                              "^6*****************************************\n"
+			                              "\n"
+			                              "^6************************************\n"
+			                              "\n"
+			                              "^6********* ^2MOMENT OF SILENCE ^6********\n"
+			                              "\n"
+			                              "^6************************************\n"
 			                              "\n"
 			                              "^3%s\n"
+			                              "\n"
 			                              "^2HAS ACHIEVED THE IMPOSSIBLE!\n"
 			                              "\n"
 			                              "^6**** ^2ABSOLUTE LEGEND ^6****\n"
-			                              "^2SURVIVED 2 FULL MINUTES!\n"
-			                              "^6*****************************************\n\" 5",
+			                              "\n"
+			                              "^2SURVIVED 2 FULL MINUTES!\n\" 5",
 			                              targetName));
-
-			trap_SendServerCommand(-1, va("chat \"^6*** ^2INCREDIBLE! ^6*** ^3%s ^2SURVIVED 2 MINUTES! ^6A TRUE WARRIOR!\"", targetName));
 		}
 	}
-	// Victory Pause (3s)
+	// Victory Pause (3s) - just end panzerfest, no more messages to avoid overlap
 	else if (level.panzerfest.phase == PANZERFEST_VICTORY_PAUSE)
 	{
 		if (phaseElapsed >= VICTORY_PAUSE_MS)
 		{
-			trap_SendServerCommand(-1, "chat \"^2*** PANZERFEST COMPLETE! *** ^7Resuming normal play. ALL HAIL THE CHAMPION!\"");
 			G_PanzerfestEnd(qfalse);
+		}
+	}
+
+	// PANZERFEST FIX: Send periodic HUD update to target (every 500ms)
+	// This ensures the client sees updated time, speed, and fire rate values
+	if (level.panzerfest.targetClientNum >= 0 && level.panzerfest.targetClientNum < MAX_CLIENTS)
+	{
+		gentity_t *targetEnt = &g_entities[level.panzerfest.targetClientNum];
+		if (targetEnt->client && targetEnt->inuse)
+		{
+			static int lastHudUpdate = 0;
+			if (level.time - lastHudUpdate >= 500)
+			{
+				lastHudUpdate = level.time;
+
+				int fireRateMultiplier = (int)(level.panzerfest.currentMultiplier * 100);
+				int totalDuration      = PHASE_DURATION_MS * 4;  // 2 minutes
+				int timeLeft           = (totalDuration - totalElapsed) / 1000;
+				if (timeLeft < 0) timeLeft = 0;
+
+				// Calculate fire rate level based on current multiplier (for HUD bar display)
+				// Multiplier goes from 7 (level 6) down to 1 (level 0)
+				// Level = multiplier - 1, clamped to 0-6
+				int fireRateLevel;
+				if (level.panzerfest.currentMultiplier >= 7.0f)
+				{
+					fireRateLevel = MAX_BONUS_LEVEL;  // 6
+				}
+				else if (level.panzerfest.currentMultiplier <= 1.01f)
+				{
+					fireRateLevel = 0;
+				}
+				else
+				{
+					// Multiplier 7 = level 6, multiplier 2 = level 1, multiplier 1 = level 0
+					fireRateLevel = (int)(level.panzerfest.currentMultiplier - 1.0f + 0.5f);
+					if (fireRateLevel > MAX_BONUS_LEVEL) fireRateLevel = MAX_BONUS_LEVEL;
+					if (fireRateLevel < 0) fireRateLevel = 0;
+				}
+
+				// Calculate survival level based on current speed multiplier (for HUD bar display)
+				// Speed goes from SURVIVAL_MAX_SPEED (~3.4) down to 0.5
+				int survivalLevel;
+				if (level.panzerfest.currentSpeedMultiplier >= SURVIVAL_MAX_SPEED - 0.01f)
+				{
+					survivalLevel = SURVIVAL_MAX_LEVEL;  // 6
+				}
+				else if (level.panzerfest.currentSpeedMultiplier <= 1.01f)
+				{
+					survivalLevel = 0;
+				}
+				else
+				{
+					// Map speed multiplier back to level
+					survivalLevel = (int)((level.panzerfest.currentSpeedMultiplier - 1.0f) / SURVIVAL_SPEED_PER_LEVEL + 0.5f);
+					if (survivalLevel > SURVIVAL_MAX_LEVEL) survivalLevel = SURVIVAL_MAX_LEVEL;
+					if (survivalLevel < 0) survivalLevel = 0;
+				}
+
+				trap_SendServerCommand(level.panzerfest.targetClientNum,
+					va("panzerfest_bonus %d %d %d %d %d %d %d %d",
+						fireRateLevel,  // calculated from current multiplier (shows bar decreasing)
+						survivalLevel,  // calculated from current speed
+						level.panzerfest.phase,
+						timeLeft,
+						1,  // isTarget
+						targetEnt->client->killStreakCount,
+						PANZERFEST_KILLS,
+						fireRateMultiplier));
+			}
 		}
 	}
 }
@@ -1793,14 +1943,20 @@ float G_BonusGetFireRateMultiplier(int clientNum)
 		return 1.0f;
 	}
 
-	// Check panzerfest first (pure C)
-	panzerfestMul = G_PanzerfestGetFireRateMultiplier(clientNum);
-	if (panzerfestMul < 1.0f)
+	// During panzerfest: target uses panzerfest fire rate ONLY (no kill streak bonus)
+	if (level.panzerfest.active && clientNum == level.panzerfest.targetClientNum)
 	{
-		return panzerfestMul;
+		// Phases 1-2: use currentMultiplier (7x -> 1x)
+		if (level.panzerfest.currentMultiplier > 1.0f)
+		{
+			return 1.0f / level.panzerfest.currentMultiplier;
+		}
+		// Phases 3-4: normal fire rate (1.0x), delay handled separately
+		// DO NOT fall through to kill streak bonus!
+		return 1.0f;
 	}
 
-	// Use kill streak bonus level
+	// Use kill streak bonus level (only when NOT panzerfest target)
 	bonusLevel = ent->client->killStreakBonusLevel;
 
 	if (bonusLevel <= 0)
@@ -1836,10 +1992,31 @@ void G_BonusPlayerKill(gentity_t *attacker)
 
 	clientNum = attacker - g_entities;
 
-	// Don't track kills during panzerfest (except target continues counting)
-	if (level.panzerfest.active && clientNum != level.panzerfest.targetClientNum)
+	// PANZERFEST FIX: During panzerfest, don't track ANY kills for bonus levels
+	// The panzerfest target's fire rate is controlled by panzerfest phases, not kill count
+	// Other players don't get bonuses during panzerfest either
+	if (level.panzerfest.active)
 	{
-		return;
+		// Still send HUD update for panzerfest target (shows time left, phase info)
+		if (clientNum == level.panzerfest.targetClientNum)
+		{
+			int fireRateMultiplier = (int)(level.panzerfest.currentMultiplier * 100);
+			int totalElapsed       = level.time - level.panzerfest.startTime;
+			int totalDuration      = PHASE_DURATION_MS * 4;  // 2 minutes
+			int timeLeft           = (totalDuration - totalElapsed) / 1000;
+			if (timeLeft < 0) timeLeft = 0;
+
+			trap_SendServerCommand(clientNum, va("panzerfest_bonus %d %d %d %d %d %d %d %d",
+				attacker->client->killStreakBonusLevel,  // frozen at panzerfest start
+				attacker->client->survivalSpeedLevel,    // frozen at panzerfest start
+				level.panzerfest.phase,
+				timeLeft,
+				1,  // isTarget
+				attacker->client->killStreakCount,  // still show their kill count
+				PANZERFEST_KILLS,
+				fireRateMultiplier));
+		}
+		return;  // Don't update any bonus levels during panzerfest
 	}
 
 	// Increment kill count
@@ -1857,9 +2034,9 @@ void G_BonusPlayerKill(gentity_t *attacker)
 	{
 		attacker->client->killStreakBonusLevel = newBonusLevel;
 
-		// Notify player of bonus level change (skip if panzerfest active)
+		// Notify player of bonus level change
 		// Use bp (banner - top of screen) for prominent display that won't be overwritten
-		if (newBonusLevel > 0 && !level.panzerfest.active)
+		if (newBonusLevel > 0)
 		{
 			int fireRateBonus = newBonusLevel + 1;  // Level 1 = 2x, Level 6 = 7x
 
@@ -1983,9 +2160,7 @@ void G_BonusPlayerDeath(gentity_t *ent)
 // ============================================================================
 
 #define SURVIVAL_INTERVAL_MS    30000  // 30 seconds between speed bonuses
-#define SURVIVAL_MAX_LEVEL      6      // Maximum speed bonus level
-#define SURVIVAL_SPEED_PER_LEVEL 0.33f // +33% speed per level (Level 1=1.33x, Level 6=2.98x ~3x)
-#define SURVIVAL_MAX_SPEED      3.0f   // Max speed multiplier (used for panzerfest too)
+// Note: SURVIVAL_MAX_LEVEL, SURVIVAL_SPEED_PER_LEVEL, SURVIVAL_MAX_SPEED defined earlier with panzerfest
 
 /**
  * @brief Get speed multiplier based on survival level
@@ -2046,6 +2221,12 @@ void G_SurvivalThink(gentity_t *ent)
 
 	// Skip if spawn time not set (shouldn't happen but be safe)
 	if (cl->survivalSpawnTime == 0)
+	{
+		return;
+	}
+
+	// PANZERFEST FIX: Freeze survival levels during panzerfest - no more level-ups
+	if (level.panzerfest.active)
 	{
 		return;
 	}
@@ -2423,27 +2604,23 @@ void ClientThink_real(gentity_t *ent)
 		client->ps.speed *= (client->rickrollSpeedScale * 0.01);
 	}
 
-	// ETMan: Panzerfest speed multiplier (pure C)
+	// ETMan: Speed multipliers - PANZERFEST OVERRIDES SURVIVAL (never compound)
 	{
-		float panzerfestSpeed = G_PanzerfestGetSpeedMultiplier(ent - g_entities);
-		if (panzerfestSpeed > 1.0f)
+		int clientNum = ent - g_entities;
+		// Check if this player is the panzerfest target
+		if (level.panzerfest.active && clientNum == level.panzerfest.targetClientNum)
 		{
-			client->ps.speed *= panzerfestSpeed;
+			// During panzerfest: use ONLY panzerfest speed (based on g_speed.value)
+			// This applies for ALL phases including when speed < 1.0 (phases 3-4)
+			client->ps.speed = g_speed.value * level.panzerfest.currentSpeedMultiplier;
 		}
-	}
-
-	// ETMan: Survival mode speed multiplier (pure C)
-	{
-		float survivalSpeed = G_SurvivalGetSpeedMultiplier(ent - g_entities);
-		if (survivalSpeed > 1.0f)
+		else
 		{
-			float oldSpeed = client->ps.speed;
-			client->ps.speed *= survivalSpeed;
-			// Debug: Log speed change occasionally (every 5 seconds based on level.time)
-			if (client->survivalSpeedLevel > 0 && (level.time % 5000) < 50)
+			// Not the panzerfest target: apply survival speed normally
+			float survivalSpeed = G_SurvivalGetSpeedMultiplier(clientNum);
+			if (survivalSpeed > 1.0f)
 			{
-				G_Printf("^2SURVIVAL DEBUG: ^7Client %d speed: %.0f -> %.0f (x%.2f, level %d)\n",
-					(int)(ent - g_entities), oldSpeed, client->ps.speed, survivalSpeed, client->survivalSpeedLevel);
+				client->ps.speed *= survivalSpeed;
 			}
 		}
 	}

@@ -4202,6 +4202,12 @@ static void PM_Weapon(void)
 
 	pm->ps->weaponTime += addTime;
 
+	// ETMan: Add panzerfest fire rate delay (phases 3-4)
+	if (pm->pmext->fireRateDelay > 0)
+	{
+		pm->ps->weaponTime += pm->pmext->fireRateDelay;
+	}
+
 #ifdef CGAMEDLL
 	if (pm->ps->grenadeTimeLeft)
 	{

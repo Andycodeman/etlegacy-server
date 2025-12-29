@@ -1386,7 +1386,8 @@ void CG_DrawPanzerfestBonus(void) {
 		}
 
 		// Multiplier text to the LEFT of bar
-		Com_sprintf(text, sizeof(text), "%.1fx", 1.0f + (cg.survivalLevel * 0.33f));
+		// +40% per level: Level 1=1.4x, Level 2=1.8x, ... Level 6=3.4x
+		Com_sprintf(text, sizeof(text), "%.1fx", 1.0f + (cg.survivalLevel * 0.40f));
 		textX = x - 4.0f - CG_Text_Width_Ext(text, 0.13f, 0, &cgs.media.limboFont2);
 		CG_Text_Paint_Ext(textX, y + 8.0f, 0.13f, 0.13f, speedColor,
 			text, 0, 0, ITEM_TEXTSTYLE_SHADOWED, &cgs.media.limboFont2);

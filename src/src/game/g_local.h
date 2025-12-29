@@ -1824,6 +1824,7 @@ float G_SurvivalGetSpeedMultiplier(int clientNum);
 
 // ETMan: Panzerfest functions (pure C - JayMod pattern)
 void G_PanzerfestInit(void);
+void G_PanzerfestShutdown(void);
 void G_PanzerfestStart(gentity_t *target);
 void G_PanzerfestEnd(qboolean targetDied);
 void G_PanzerfestThink(void);
