@@ -3,13 +3,19 @@ import { z } from 'zod';
 import { db, schema } from '../db/index.js';
 import { eq, and, desc, asc, sql, ilike, or } from 'drizzle-orm';
 import { authenticate, requireAdmin } from '../middleware/auth.js';
-import { createReadStream, existsSync, statSync, writeFileSync, mkdirSync } from 'fs';
+import { createReadStream, existsSync, statSync, writeFileSync, mkdirSync, unlinkSync } from 'fs';
 import { join, extname } from 'path';
 import { randomUUID } from 'crypto';
 import { pipeline } from 'stream/promises';
-
-// Voice server sounds directory - sound files are stored here
-const SOUNDS_DIR = process.env.SOUNDS_DIR || '/home/andy/etlegacy/sounds';
+import { SOUNDS_DIR, SOUNDS_TEMP_DIR, MAX_CLIP_DURATION_SECONDS } from '../config.js';
+import {
+  getAudioDuration,
+  generateWaveformPeaks,
+  clipAndConvertAudio,
+  ensureTempDir,
+  cleanupTempFiles,
+  deleteTempFile,
+} from '../utils/audio.js';
 
 // Validation schemas
 const addSoundSchema = z.object({
@@ -56,19 +62,38 @@ const uploadFromUrlSchema = z.object({
   alias: z.string().min(1).max(32).regex(/^[a-zA-Z0-9_]+$/, 'Only letters, numbers, and underscores allowed'),
 });
 
-// Max file size: 2MB (only 30 second clips supported)
+const tempUploadFromUrlSchema = z.object({
+  url: z.string().url(),
+});
+
+const saveClipSchema = z.object({
+  tempId: z.string().uuid(),
+  alias: z.string().min(1).max(32).regex(/^[a-zA-Z0-9_]+$/, 'Only letters, numbers, and underscores allowed'),
+  startTime: z.number().min(0),
+  endTime: z.number().min(0),
+  isPublic: z.boolean().optional().default(false),
+});
+
+// Max file size for temp uploads: 20MB (larger files allowed, will be clipped down)
+const MAX_TEMP_FILE_SIZE = 20 * 1024 * 1024;
+// Max file size for final clips: 2MB
 const MAX_FILE_SIZE = 2 * 1024 * 1024;
 
-// Helper to get MP3 duration (basic approach - reads file size estimate)
+// Helper to get MP3 duration - uses FFmpeg if available, falls back to estimate
 async function getMP3Duration(filePath: string): Promise<number | null> {
   try {
-    // For a proper implementation, we'd use a library like music-metadata
-    // For now, estimate based on typical MP3 bitrate (128kbps)
-    const stats = statSync(filePath);
-    const estimatedDuration = Math.round((stats.size * 8) / (128 * 1000));
-    return estimatedDuration > 0 ? estimatedDuration : null;
+    // Try accurate FFmpeg-based duration first
+    const duration = await getAudioDuration(filePath);
+    return Math.round(duration);
   } catch {
-    return null;
+    // Fall back to bitrate estimate
+    try {
+      const stats = statSync(filePath);
+      const estimatedDuration = Math.round((stats.size * 8) / (128 * 1000));
+      return estimatedDuration > 0 ? estimatedDuration : null;
+    } catch {
+      return null;
+    }
   }
 }
 
@@ -505,6 +530,348 @@ export const soundsRoutes: FastifyPluginAsync = async (fastify) => {
       fastify.log.error({ err }, 'URL import error');
       return reply.status(500).send({ error: 'Failed to download file from URL' });
     }
+  });
+
+  // ============================================================================
+  // Temp Upload & Clip Editor (NEW)
+  // ============================================================================
+
+  // Upload MP3 file to temp storage for editing
+  fastify.post('/upload-temp', { preHandler: authenticate }, async (request, reply) => {
+    const guid = await getUserGuid(request.user.userId);
+    if (!guid) {
+      return reply.status(400).send({ error: 'No GUID linked to account. Use /etman register in-game.' });
+    }
+
+    const data = await request.file();
+    if (!data) {
+      return reply.status(400).send({ error: 'No file uploaded' });
+    }
+
+    // Validate file type
+    const ext = extname(data.filename).toLowerCase();
+    if (ext !== '.mp3') {
+      return reply.status(400).send({ error: 'Only MP3 files are allowed' });
+    }
+
+    // Read file into buffer
+    const chunks: Buffer[] = [];
+    for await (const chunk of data.file) {
+      chunks.push(chunk);
+    }
+    const buffer = Buffer.concat(chunks);
+
+    if (buffer.length > MAX_TEMP_FILE_SIZE) {
+      return reply.status(400).send({ error: 'File too large. Maximum size is 20MB for editing.' });
+    }
+
+    // Ensure temp directory exists
+    ensureTempDir();
+
+    // Generate temp file ID
+    const tempId = randomUUID();
+    const tempFilePath = join(SOUNDS_TEMP_DIR, `${tempId}.mp3`);
+
+    // Write file to temp storage
+    writeFileSync(tempFilePath, buffer);
+
+    // Get accurate duration using ffprobe
+    let durationSeconds: number;
+    try {
+      durationSeconds = await getAudioDuration(tempFilePath);
+    } catch (err) {
+      // Clean up and report error
+      unlinkSync(tempFilePath);
+      fastify.log.error({ err }, 'Failed to get audio duration');
+      return reply.status(400).send({ error: 'Could not read audio file. Make sure it is a valid MP3.' });
+    }
+
+    return {
+      success: true,
+      tempId,
+      durationSeconds,
+      fileSize: buffer.length,
+      originalName: data.filename,
+      maxClipDuration: MAX_CLIP_DURATION_SECONDS,
+    };
+  });
+
+  // Import MP3 from URL to temp storage for editing
+  fastify.post('/import-url-temp', { preHandler: authenticate }, async (request, reply) => {
+    const body = tempUploadFromUrlSchema.safeParse(request.body);
+    if (!body.success) {
+      return reply.status(400).send({ error: 'Invalid request. Provide a valid URL.' });
+    }
+
+    const guid = await getUserGuid(request.user.userId);
+    if (!guid) {
+      return reply.status(400).send({ error: 'No GUID linked to account. Use /etman register in-game.' });
+    }
+
+    const { url } = body.data;
+
+    try {
+      // Fetch the URL
+      const response = await fetch(url);
+      if (!response.ok) {
+        return reply.status(400).send({ error: `Failed to download: ${response.statusText}` });
+      }
+
+      // Check content type
+      const contentType = response.headers.get('content-type') || '';
+      if (!contentType.includes('audio/mpeg') && !contentType.includes('audio/mp3')) {
+        // Also allow if URL ends with .mp3
+        if (!url.toLowerCase().endsWith('.mp3')) {
+          return reply.status(400).send({ error: 'URL does not point to an MP3 file' });
+        }
+      }
+
+      // Check content length if available
+      const contentLength = response.headers.get('content-length');
+      if (contentLength && parseInt(contentLength, 10) > MAX_TEMP_FILE_SIZE) {
+        return reply.status(400).send({ error: 'File too large. Maximum size is 20MB for editing.' });
+      }
+
+      // Read the file
+      const arrayBuffer = await response.arrayBuffer();
+      const buffer = Buffer.from(arrayBuffer);
+
+      if (buffer.length > MAX_TEMP_FILE_SIZE) {
+        return reply.status(400).send({ error: 'File too large. Maximum size is 20MB for editing.' });
+      }
+
+      // Ensure temp directory exists
+      ensureTempDir();
+
+      // Generate temp file ID
+      const tempId = randomUUID();
+      const tempFilePath = join(SOUNDS_TEMP_DIR, `${tempId}.mp3`);
+
+      // Extract original filename from URL
+      const urlPath = new URL(url).pathname;
+      const originalName = urlPath.split('/').pop() || 'downloaded.mp3';
+
+      // Write file to temp storage
+      writeFileSync(tempFilePath, buffer);
+
+      // Get accurate duration using ffprobe
+      let durationSeconds: number;
+      try {
+        durationSeconds = await getAudioDuration(tempFilePath);
+      } catch (err) {
+        // Clean up and report error
+        unlinkSync(tempFilePath);
+        fastify.log.error({ err }, 'Failed to get audio duration');
+        return reply.status(400).send({ error: 'Could not read audio file. Make sure the URL points to a valid MP3.' });
+      }
+
+      return {
+        success: true,
+        tempId,
+        durationSeconds,
+        fileSize: buffer.length,
+        originalName,
+        maxClipDuration: MAX_CLIP_DURATION_SECONDS,
+      };
+    } catch (err) {
+      fastify.log.error({ err }, 'URL temp import error');
+      return reply.status(500).send({ error: 'Failed to download file from URL' });
+    }
+  });
+
+  // Stream temp file for preview
+  fastify.get('/temp/:tempId', { preHandler: authenticate }, async (request, reply) => {
+    const { tempId } = request.params as { tempId: string };
+
+    // Validate tempId is a valid UUID
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(tempId)) {
+      return reply.status(400).send({ error: 'Invalid temp file ID' });
+    }
+
+    const tempFilePath = join(SOUNDS_TEMP_DIR, `${tempId}.mp3`);
+
+    if (!existsSync(tempFilePath)) {
+      return reply.status(404).send({ error: 'Temp file not found or expired' });
+    }
+
+    const stats = statSync(tempFilePath);
+    const range = request.headers.range;
+
+    if (range) {
+      // Handle range requests for seeking
+      const parts = range.replace(/bytes=/, '').split('-');
+      const start = parseInt(parts[0], 10);
+      const end = parts[1] ? parseInt(parts[1], 10) : stats.size - 1;
+      const chunkSize = end - start + 1;
+
+      reply.code(206);
+      reply.header('Content-Range', `bytes ${start}-${end}/${stats.size}`);
+      reply.header('Accept-Ranges', 'bytes');
+      reply.header('Content-Length', chunkSize);
+      reply.header('Content-Type', 'audio/mpeg');
+
+      return reply.send(createReadStream(tempFilePath, { start, end }));
+    }
+
+    reply.header('Content-Length', stats.size);
+    reply.header('Content-Type', 'audio/mpeg');
+    reply.header('Accept-Ranges', 'bytes');
+
+    return reply.send(createReadStream(tempFilePath));
+  });
+
+  // Get waveform data for temp file
+  fastify.get('/temp/:tempId/waveform', { preHandler: authenticate }, async (request, reply) => {
+    const { tempId } = request.params as { tempId: string };
+
+    // Validate tempId is a valid UUID
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(tempId)) {
+      return reply.status(400).send({ error: 'Invalid temp file ID' });
+    }
+
+    const tempFilePath = join(SOUNDS_TEMP_DIR, `${tempId}.mp3`);
+
+    if (!existsSync(tempFilePath)) {
+      return reply.status(404).send({ error: 'Temp file not found or expired' });
+    }
+
+    try {
+      const peaks = await generateWaveformPeaks(tempFilePath, 200);
+      return { peaks };
+    } catch (err) {
+      fastify.log.error({ err }, 'Failed to generate waveform');
+      // Return flat waveform on error
+      return { peaks: new Array(200).fill(0.1) };
+    }
+  });
+
+  // Save clipped audio as permanent sound
+  fastify.post('/save-clip', { preHandler: authenticate }, async (request, reply) => {
+    const body = saveClipSchema.safeParse(request.body);
+    if (!body.success) {
+      return reply.status(400).send({ error: 'Invalid input', details: body.error.flatten() });
+    }
+
+    const guid = await getUserGuid(request.user.userId);
+    if (!guid) {
+      return reply.status(400).send({ error: 'No GUID linked to account. Use /etman register in-game.' });
+    }
+
+    const { tempId, alias, startTime, endTime, isPublic } = body.data;
+
+    // Validate clip duration
+    const clipDuration = endTime - startTime;
+    if (clipDuration <= 0) {
+      return reply.status(400).send({ error: 'End time must be after start time' });
+    }
+    if (clipDuration > MAX_CLIP_DURATION_SECONDS) {
+      return reply.status(400).send({ error: `Clip duration cannot exceed ${MAX_CLIP_DURATION_SECONDS} seconds` });
+    }
+
+    // Check alias doesn't already exist for this user
+    const [existingAlias] = await db
+      .select({ id: schema.userSounds.id })
+      .from(schema.userSounds)
+      .where(and(eq(schema.userSounds.guid, guid), eq(schema.userSounds.alias, alias)))
+      .limit(1);
+
+    if (existingAlias) {
+      return reply.status(409).send({ error: 'You already have a sound with this alias' });
+    }
+
+    // Check temp file exists
+    const tempFilePath = join(SOUNDS_TEMP_DIR, `${tempId}.mp3`);
+    if (!existsSync(tempFilePath)) {
+      return reply.status(404).send({ error: 'Temp file not found or expired. Please upload again.' });
+    }
+
+    // Ensure sounds directory exists
+    if (!existsSync(SOUNDS_DIR)) {
+      mkdirSync(SOUNDS_DIR, { recursive: true });
+    }
+
+    // Generate unique filename for permanent storage
+    const uniqueFilename = `${randomUUID()}.mp3`;
+    const permanentFilePath = join(SOUNDS_DIR, uniqueFilename);
+
+    try {
+      // Clip and convert the audio
+      const { duration, fileSize } = await clipAndConvertAudio(
+        tempFilePath,
+        permanentFilePath,
+        startTime,
+        endTime
+      );
+
+      // Check final file size
+      if (fileSize > MAX_FILE_SIZE) {
+        // Clean up the clipped file
+        unlinkSync(permanentFilePath);
+        return reply.status(400).send({
+          error: 'Clipped audio exceeds 2MB. Try selecting a shorter portion.',
+        });
+      }
+
+      // Create sound file record
+      const [soundFile] = await db
+        .insert(schema.soundFiles)
+        .values({
+          filename: uniqueFilename,
+          originalName: `${alias}.mp3`,
+          filePath: uniqueFilename,
+          fileSize,
+          durationSeconds: duration,
+          addedByGuid: guid,
+          isPublic,
+          referenceCount: 1,
+        })
+        .returning({ id: schema.soundFiles.id });
+
+      // Create user sound record
+      await db.insert(schema.userSounds).values({
+        guid,
+        soundFileId: soundFile.id,
+        alias,
+        visibility: isPublic ? 'public' : 'private',
+      });
+
+      // Clean up temp file
+      deleteTempFile(tempId);
+
+      return {
+        success: true,
+        alias,
+        fileSize,
+        durationSeconds: duration,
+        isPublic,
+      };
+    } catch (err) {
+      fastify.log.error({ err }, 'Error saving clipped audio');
+      // Clean up any partial files
+      if (existsSync(permanentFilePath)) {
+        unlinkSync(permanentFilePath);
+      }
+      return reply.status(500).send({ error: 'Failed to process audio clip' });
+    }
+  });
+
+  // Delete temp file (cleanup)
+  fastify.delete('/temp/:tempId', { preHandler: authenticate }, async (request, reply) => {
+    const { tempId } = request.params as { tempId: string };
+
+    // Validate tempId is a valid UUID
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(tempId)) {
+      return reply.status(400).send({ error: 'Invalid temp file ID' });
+    }
+
+    const deleted = deleteTempFile(tempId);
+    return { success: deleted };
+  });
+
+  // Admin: Trigger temp file cleanup
+  fastify.post('/admin/cleanup-temp', { preHandler: requireAdmin }, async (request, reply) => {
+    const result = await cleanupTempFiles();
+    return { success: true, ...result };
   });
 
   // ============================================================================

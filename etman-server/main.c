@@ -178,6 +178,13 @@ static uint64_t g_totalBytesReceived = 0;
 static uint64_t g_lastSoundPacketTime = 0;
 #define SOUND_PACKET_INTERVAL_MS 20  /* 20ms between Opus packets */
 
+/*
+ * Reset sound playback timing (called when new sound starts)
+ */
+void resetSoundPlaybackTiming(void) {
+    g_lastSoundPacketTime = 0;
+}
+
 /* Get current time in milliseconds */
 static uint64_t getTimeMs(void) {
     struct timeval tv;
@@ -849,49 +856,62 @@ void broadcastOpusPacket(uint8_t fromClient, uint8_t channel,
 
 /*
  * Process sound playback - streams Opus packets at correct interval
+ * Sends multiple packets if we've fallen behind to maintain smooth playback
  */
 static void processSoundPlayback(void) {
     if (!SoundMgr_IsPlaying()) {
         return;
     }
 
-    /* Check timing - need to send packet every 20ms */
     uint64_t nowMs = getTimeMs();
-
-    /* Debug timing on first packet */
     static int packetCount = 0;
+    static uint32_t soundSeq = 0;
+
+    /* Initialize timing on first packet */
     if (g_lastSoundPacketTime == 0) {
         printf("SoundMgr: Starting playback stream at time %lu\n", (unsigned long)nowMs);
+        g_lastSoundPacketTime = nowMs;
         packetCount = 0;
+        soundSeq = 0;
     }
 
-    if (g_lastSoundPacketTime > 0) {
-        uint64_t elapsed = nowMs - g_lastSoundPacketTime;
-        if (elapsed < SOUND_PACKET_INTERVAL_MS) {
-            return;  /* Not time yet */
+    /* Calculate how many packets we should have sent by now */
+    uint64_t elapsed = nowMs - g_lastSoundPacketTime;
+    int packetsToSend = (int)(elapsed / SOUND_PACKET_INTERVAL_MS);
+
+    if (packetsToSend <= 0) {
+        return;  /* Not time yet */
+    }
+
+    /* Cap catch-up to avoid flooding (max 3 packets per iteration) */
+    if (packetsToSend > 3) {
+        packetsToSend = 3;
+    }
+
+    /* Send the packets we owe */
+    for (int i = 0; i < packetsToSend; i++) {
+        uint8_t opusBuffer[512];
+        int opusLen = 0;
+
+        if (SoundMgr_GetNextOpusPacket(opusBuffer, &opusLen)) {
+            uint8_t initiatorId = (uint8_t)SoundMgr_GetPlaybackClientId();
+            broadcastOpusPacket(initiatorId, VOICE_CHAN_SOUND, soundSeq++, opusBuffer, opusLen);
+            packetCount++;
+
+            /* Debug: log occasionally */
+            if (packetCount <= 5 || (packetCount % 100 == 0)) {
+                printf("SoundMgr: Packet %d (sent %d this frame)\n", packetCount, i + 1);
+            }
+        } else {
+            /* Playback finished */
+            g_lastSoundPacketTime = 0;
+            printf("SoundMgr: Playback finished after %d packets\n", packetCount);
+            return;
         }
-        /* Log if timing is way off */
-        if (packetCount < 5 || (packetCount % 100 == 0)) {
-            printf("SoundMgr: Packet %d, elapsed=%lums since last\n", packetCount, (unsigned long)elapsed);
-        }
     }
-    g_lastSoundPacketTime = nowMs;
-    packetCount++;
 
-    /* Get next Opus packet and broadcast it */
-    uint8_t opusBuffer[512];
-    int opusLen = 0;
-
-    static uint32_t soundSeq = 0;
-    if (SoundMgr_GetNextOpusPacket(opusBuffer, &opusLen)) {
-        /* Use the actual client ID of who initiated the sound */
-        uint8_t initiatorId = (uint8_t)SoundMgr_GetPlaybackClientId();
-        broadcastOpusPacket(initiatorId, VOICE_CHAN_SOUND, soundSeq++, opusBuffer, opusLen);
-    } else {
-        /* Playback finished - reset timing */
-        g_lastSoundPacketTime = 0;
-        printf("SoundMgr: Playback finished\n");
-    }
+    /* Advance timing by exactly the packets we sent (keeps timing accurate) */
+    g_lastSoundPacketTime += packetsToSend * SOUND_PACKET_INTERVAL_MS;
 }
 
 /*

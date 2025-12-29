@@ -52,8 +52,10 @@
 
 /*
  * Jitter buffer for smooth playback
+ * 10 frames = 200ms buffer, helps smooth out network variance
  */
-#define VOICE_JITTER_FRAMES   5
+#define VOICE_JITTER_FRAMES   10
+#define VOICE_JITTER_MIN_START 5  /* Wait for 5 frames (100ms) before starting playback */
 
 /*
  * Network packet types
@@ -128,6 +130,7 @@ typedef struct
 	uint32_t     lastSequence;
 	int          lastPacketTime;
 	qboolean     active;
+	qboolean     buffering;  /* qtrue until we have enough frames to start playback */
 } voiceClientDecoder_t;
 
 /*
@@ -552,6 +555,7 @@ static qboolean Voice_CreateDecoder(int clientNum)
 	dec->jitterCount = 0;
 	dec->lastSequence = 0;
 	dec->active = qfalse;
+	dec->buffering = qtrue;  /* Start in buffering mode */
 
 	return qtrue;
 }
@@ -771,6 +775,19 @@ static int Voice_OutputCallback(const void *input, void *output,
 			continue;
 		}
 
+		/* Wait for buffer to fill before starting playback */
+		if (dec->buffering)
+		{
+			if (dec->jitterCount >= VOICE_JITTER_MIN_START)
+			{
+				dec->buffering = qfalse;  /* Buffer filled, start playing */
+			}
+			else
+			{
+				continue;  /* Still buffering, don't play yet */
+			}
+		}
+
 		// Add to mix buffer
 		for (j = 0; j < (int)(frameCount * VOICE_CHANNELS_OUT); j++)
 		{
@@ -891,6 +908,55 @@ static void Voice_ProcessIncoming(void)
 		if (voice.clientInfo[clientNum].muted)
 		{
 			continue;
+		}
+
+		/* If this is first packet of a new stream, reset buffering state.
+		 * Detect new stream by:
+		 *   1. Not active (timed out)
+		 *   2. Gap of 200ms+ since last packet
+		 *   3. Sequence number reset (new sound started - seq goes back to 0 or small value)
+		 * Must do this BEFORE decoding so we decode into the correct slot. */
+		{
+			uint32_t seq = ntohl(relay->sequence);
+			qboolean isNewStream = qfalse;
+
+			if (!dec->active)
+			{
+				isNewStream = qtrue;
+			}
+			else if (cg.time - dec->lastPacketTime > 200)
+			{
+				isNewStream = qtrue;
+			}
+			else if (seq < dec->lastSequence && dec->lastSequence - seq > 100)
+			{
+				/* Sequence wrapped back (e.g., new sound started at seq 0 while
+				 * we were at seq 500). A difference > 100 indicates reset, not
+				 * just out-of-order packets. */
+				isNewStream = qtrue;
+			}
+
+			if (isNewStream)
+			{
+				/* Clear the entire jitter buffer to remove old audio data.
+				 * Without this, old frames from previous sound would play first. */
+				Com_Memset(dec->jitterBuffer, 0, sizeof(dec->jitterBuffer));
+
+				dec->jitterWrite = 0;
+				dec->jitterRead = 0;
+				dec->jitterCount = 0;
+				dec->buffering = qtrue;
+				dec->lastSequence = 0;
+
+				/* Reset Opus decoder state to clear any stale internal buffers.
+				 * This prevents garbled audio at the start of new streams. */
+				if (dec->decoder)
+				{
+					opus_decoder_ctl(dec->decoder, OPUS_RESET_STATE);
+				}
+			}
+
+			dec->lastSequence = seq;
 		}
 
 		// Decode Opus to PCM (opus data starts after relay header)

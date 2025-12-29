@@ -47,7 +47,7 @@
 #define OPUS_CHANNELS       1
 #define OPUS_FRAME_MS       20
 #define OPUS_FRAME_SIZE     (OPUS_SAMPLE_RATE * OPUS_FRAME_MS / 1000)  /* 960 */
-#define OPUS_BITRATE        24000
+#define OPUS_BITRATE        64000  /* 64kbps for much better music quality */
 #define MAX_PENDING_DOWNLOADS   4
 #define MAX_PENDING_SHARES      64
 
@@ -132,6 +132,7 @@ extern void sendResponseToClient(uint32_t clientId, uint8_t respType,
                                  const char *message);
 extern void broadcastOpusPacket(uint8_t fromClient, uint8_t channel,
                                 uint32_t sequence, const uint8_t *opus, int opusLen);
+extern void resetSoundPlaybackTiming(void);
 
 /*
  * Store pending shares for a client (for index-based accept/reject)
@@ -1944,6 +1945,16 @@ bool SoundMgr_PlaySound(uint32_t clientId, const char *guid, const char *name) {
         free(g_soundMgr.playback.pcmBuffer);
     }
 
+    /* Reset Opus encoder state to avoid garbled audio at start of new sounds.
+     * The encoder carries state from previous encoding which corrupts the
+     * first few frames of a new stream. */
+    if (g_soundMgr.playback.opusEncoder) {
+        opus_encoder_ctl((OpusEncoder*)g_soundMgr.playback.opusEncoder, OPUS_RESET_STATE);
+    }
+
+    /* Reset playback timing so sequence starts at 0 */
+    resetSoundPlaybackTiming();
+
     g_soundMgr.playback.pcmBuffer = pcmData;
     g_soundMgr.playback.pcmSamples = pcmSamples;
     g_soundMgr.playback.pcmPosition = 0;
@@ -2002,6 +2013,16 @@ static bool SoundMgr_PlaySoundByPath(uint32_t clientId, const char *guid,
     if (g_soundMgr.playback.pcmBuffer) {
         free(g_soundMgr.playback.pcmBuffer);
     }
+
+    /* Reset Opus encoder state to avoid garbled audio at start of new sounds.
+     * The encoder carries state from previous encoding which corrupts the
+     * first few frames of a new stream. */
+    if (g_soundMgr.playback.opusEncoder) {
+        opus_encoder_ctl((OpusEncoder*)g_soundMgr.playback.opusEncoder, OPUS_RESET_STATE);
+    }
+
+    /* Reset playback timing so sequence starts at 0 */
+    resetSoundPlaybackTiming();
 
     g_soundMgr.playback.pcmBuffer = pcmData;
     g_soundMgr.playback.pcmSamples = pcmSamples;

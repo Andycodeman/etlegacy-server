@@ -1,8 +1,9 @@
 import { useState, useEffect, useMemo } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { sounds } from '../api/client';
-import type { UserSound, PendingShare } from '../api/client';
+import type { UserSound, PendingShare, TempUploadResponse } from '../api/client';
 import AudioPlayer from '../components/AudioPlayer';
+import SoundClipEditor from '../components/SoundClipEditor';
 
 function formatFileSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -61,11 +62,15 @@ export default function MySounds() {
   // Upload modal state
   const [uploadModal, setUploadModal] = useState(false);
   const [uploadMode, setUploadMode] = useState<'file' | 'url'>('file');
-  const [uploadAlias, setUploadAlias] = useState('');
   const [uploadUrl, setUploadUrl] = useState('');
   const [uploadFile, setUploadFile] = useState<File | null>(null);
   const [uploadError, setUploadError] = useState('');
   const [isUploading, setIsUploading] = useState(false);
+
+  // Clip editor state (after temp upload)
+  const [tempUploadData, setTempUploadData] = useState<TempUploadResponse | null>(null);
+  const [isSavingClip, setIsSavingClip] = useState(false);
+  const [saveClipError, setSaveClipError] = useState('');
 
   // Debounce search
   useEffect(() => {
@@ -122,6 +127,11 @@ export default function MySounds() {
       queryClient.invalidateQueries({ queryKey: ['mySounds'] });
       setDeleteConfirm(null);
     },
+    onError: (error) => {
+      console.error('Delete failed:', error);
+      alert('Failed to delete sound: ' + (error as Error).message);
+      setDeleteConfirm(null);
+    },
   });
 
   const visibilityMutation = useMutation({
@@ -165,51 +175,74 @@ export default function MySounds() {
 
   // Upload handlers
   const resetUploadModal = () => {
+    // Clean up temp file if we're canceling during edit
+    if (tempUploadData) {
+      sounds.deleteTempFile(tempUploadData.tempId).catch(() => {});
+    }
     setUploadModal(false);
     setUploadMode('file');
-    setUploadAlias('');
     setUploadUrl('');
     setUploadFile(null);
     setUploadError('');
     setIsUploading(false);
+    setTempUploadData(null);
+    setIsSavingClip(false);
+    setSaveClipError('');
   };
 
-  const handleUpload = async () => {
-    if (!uploadAlias || !/^[a-zA-Z0-9_]+$/.test(uploadAlias)) {
-      setUploadError('Invalid alias. Only letters, numbers, and underscores allowed.');
-      return;
-    }
-
-    // Check for duplicate alias
-    if (soundsData?.sounds.some((s: UserSound) => s.alias.toLowerCase() === uploadAlias.toLowerCase())) {
-      setUploadError('You already have a sound with this alias');
-      return;
-    }
-
+  // Upload to temp storage and switch to clip editor
+  const handleTempUpload = async () => {
     setIsUploading(true);
     setUploadError('');
 
     try {
+      let result: TempUploadResponse;
+
       if (uploadMode === 'file') {
         if (!uploadFile) {
           setUploadError('Please select a file');
           setIsUploading(false);
           return;
         }
-        await sounds.uploadFile(uploadFile, uploadAlias);
+        result = await sounds.uploadFileToTemp(uploadFile);
       } else {
         if (!uploadUrl) {
           setUploadError('Please enter a URL');
           setIsUploading(false);
           return;
         }
-        await sounds.importFromUrl(uploadUrl, uploadAlias);
+        result = await sounds.importFromUrlToTemp(uploadUrl);
       }
-      queryClient.invalidateQueries({ queryKey: ['mySounds'] });
-      resetUploadModal();
+
+      // Switch to clip editor
+      setTempUploadData(result);
+      setIsUploading(false);
     } catch (err) {
       setUploadError((err as Error).message);
       setIsUploading(false);
+    }
+  };
+
+  // Save the clipped audio
+  const handleSaveClip = async (alias: string, startTime: number, endTime: number, isPublic: boolean) => {
+    if (!tempUploadData) return;
+
+    // Check for duplicate alias
+    if (soundsData?.sounds.some((s: UserSound) => s.alias.toLowerCase() === alias.toLowerCase())) {
+      setSaveClipError('You already have a sound with this alias');
+      return;
+    }
+
+    setIsSavingClip(true);
+    setSaveClipError('');
+
+    try {
+      await sounds.saveClip(tempUploadData.tempId, alias, startTime, endTime, isPublic);
+      queryClient.invalidateQueries({ queryKey: ['mySounds'] });
+      resetUploadModal();
+    } catch (err) {
+      setSaveClipError((err as Error).message);
+      setIsSavingClip(false);
     }
   };
 
@@ -220,17 +253,13 @@ export default function MySounds() {
         setUploadError('Only MP3 files are allowed');
         return;
       }
-      if (file.size > 2 * 1024 * 1024) {
-        setUploadError('File too large. Maximum size is 2MB.');
+      // Allow up to 20MB for editing (will be clipped to 30 seconds)
+      if (file.size > 20 * 1024 * 1024) {
+        setUploadError('File too large. Maximum size is 20MB.');
         return;
       }
       setUploadFile(file);
       setUploadError('');
-      // Auto-fill alias from filename if empty
-      if (!uploadAlias) {
-        const nameWithoutExt = file.name.replace(/\.mp3$/i, '').replace(/[^a-zA-Z0-9_]/g, '_');
-        setUploadAlias(nameWithoutExt);
-      }
     }
   };
 
@@ -508,13 +537,20 @@ export default function MySounds() {
                       {deleteConfirm === sound.alias ? (
                         <div className="flex gap-1">
                           <button
-                            onClick={() => deleteMutation.mutate(sound.alias)}
-                            className="px-2 py-1 bg-red-600 hover:bg-red-500 rounded text-xs"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              deleteMutation.mutate(sound.alias);
+                            }}
+                            disabled={deleteMutation.isPending}
+                            className="px-2 py-1 bg-red-600 hover:bg-red-500 disabled:bg-red-800 rounded text-xs"
                           >
-                            Yes
+                            {deleteMutation.isPending ? '...' : 'Yes'}
                           </button>
                           <button
-                            onClick={() => setDeleteConfirm(null)}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setDeleteConfirm(null);
+                            }}
                             className="px-2 py-1 bg-gray-600 hover:bg-gray-500 rounded text-xs"
                           >
                             No
@@ -522,7 +558,10 @@ export default function MySounds() {
                         </div>
                       ) : (
                         <button
-                          onClick={() => setDeleteConfirm(sound.alias)}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setDeleteConfirm(sound.alias);
+                          }}
                           className="p-1.5 text-gray-400 hover:text-red-400 hover:bg-gray-700 rounded transition-colors"
                           title="Delete"
                         >
@@ -637,13 +676,20 @@ export default function MySounds() {
                         {deleteConfirm === sound.alias ? (
                           <div className="flex gap-1">
                             <button
-                              onClick={() => deleteMutation.mutate(sound.alias)}
-                              className="px-2 py-1 bg-red-600 hover:bg-red-500 rounded text-xs"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                deleteMutation.mutate(sound.alias);
+                              }}
+                              disabled={deleteMutation.isPending}
+                              className="px-2 py-1 bg-red-600 hover:bg-red-500 disabled:bg-red-800 rounded text-xs"
                             >
-                              Yes
+                              {deleteMutation.isPending ? '...' : 'Yes'}
                             </button>
                             <button
-                              onClick={() => setDeleteConfirm(null)}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setDeleteConfirm(null);
+                              }}
                               className="px-2 py-1 bg-gray-600 hover:bg-gray-500 rounded text-xs"
                             >
                               No
@@ -651,7 +697,10 @@ export default function MySounds() {
                           </div>
                         ) : (
                           <button
-                            onClick={() => setDeleteConfirm(sound.alias)}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setDeleteConfirm(sound.alias);
+                            }}
                             className="p-1.5 text-gray-400 hover:text-red-400 hover:bg-gray-700 rounded transition-colors"
                             title="Delete"
                           >
@@ -710,112 +759,110 @@ export default function MySounds() {
         </div>
       )}
 
-      {/* Click outside to close menus */}
-      {(visibilityMenu || deleteConfirm) && (
-        <div
-          className="fixed inset-0 z-0"
-          onClick={() => {
-            setVisibilityMenu(null);
-            setDeleteConfirm(null);
-          }}
-        />
-      )}
 
       {/* Upload Modal */}
       {uploadModal && (
-        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
-          <div className="bg-gray-800 rounded-lg p-6 max-w-md w-full">
-            <h3 className="text-lg font-semibold mb-4">Add New Sound</h3>
-
-            {/* Mode Toggle */}
-            <div className="flex mb-4 bg-gray-700 rounded-lg p-1">
-              <button
-                onClick={() => setUploadMode('file')}
-                className={`flex-1 py-2 px-4 rounded-md text-sm font-medium transition-colors ${
-                  uploadMode === 'file' ? 'bg-orange-600 text-white' : 'text-gray-300 hover:text-white'
-                }`}
-              >
-                Upload File
-              </button>
-              <button
-                onClick={() => setUploadMode('url')}
-                className={`flex-1 py-2 px-4 rounded-md text-sm font-medium transition-colors ${
-                  uploadMode === 'url' ? 'bg-orange-600 text-white' : 'text-gray-300 hover:text-white'
-                }`}
-              >
-                From URL
-              </button>
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4 overflow-y-auto">
+          {tempUploadData ? (
+            /* Clip Editor Mode */
+            <div className="max-w-3xl w-full my-8">
+              <SoundClipEditor
+                tempId={tempUploadData.tempId}
+                durationSeconds={tempUploadData.durationSeconds}
+                maxClipDuration={tempUploadData.maxClipDuration}
+                originalName={tempUploadData.originalName}
+                onSave={handleSaveClip}
+                onCancel={resetUploadModal}
+                isSaving={isSavingClip}
+                saveError={saveClipError}
+              />
             </div>
+          ) : (
+            /* Upload Form Mode */
+            <div className="bg-gray-800 rounded-lg p-6 max-w-md w-full">
+              <h3 className="text-lg font-semibold mb-4">Add New Sound</h3>
 
-            <div className="space-y-4">
-              {/* File Upload */}
-              {uploadMode === 'file' && (
-                <div>
-                  <label className="block text-sm text-gray-400 mb-1">MP3 File (max 2MB)</label>
-                  <input
-                    type="file"
-                    accept=".mp3,audio/mpeg"
-                    onChange={handleFileSelect}
-                    className="w-full bg-gray-700 border border-gray-600 rounded px-4 py-2 text-white file:mr-4 file:py-1 file:px-4 file:rounded file:border-0 file:bg-orange-600 file:text-white file:cursor-pointer hover:file:bg-orange-500"
-                  />
-                  {uploadFile && (
-                    <p className="text-sm text-gray-400 mt-1">
-                      Selected: {uploadFile.name} ({(uploadFile.size / 1024).toFixed(1)} KB)
+              {/* Mode Toggle */}
+              <div className="flex mb-4 bg-gray-700 rounded-lg p-1">
+                <button
+                  onClick={() => setUploadMode('file')}
+                  className={`flex-1 py-2 px-4 rounded-md text-sm font-medium transition-colors ${
+                    uploadMode === 'file' ? 'bg-orange-600 text-white' : 'text-gray-300 hover:text-white'
+                  }`}
+                >
+                  Upload File
+                </button>
+                <button
+                  onClick={() => setUploadMode('url')}
+                  className={`flex-1 py-2 px-4 rounded-md text-sm font-medium transition-colors ${
+                    uploadMode === 'url' ? 'bg-orange-600 text-white' : 'text-gray-300 hover:text-white'
+                  }`}
+                >
+                  From URL
+                </button>
+              </div>
+
+              <div className="space-y-4">
+                {/* File Upload */}
+                {uploadMode === 'file' && (
+                  <div>
+                    <label className="block text-sm text-gray-400 mb-1">MP3 File (max 20MB)</label>
+                    <input
+                      type="file"
+                      accept=".mp3,audio/mpeg"
+                      onChange={handleFileSelect}
+                      className="w-full bg-gray-700 border border-gray-600 rounded px-4 py-2 text-white file:mr-4 file:py-1 file:px-4 file:rounded file:border-0 file:bg-orange-600 file:text-white file:cursor-pointer hover:file:bg-orange-500"
+                    />
+                    {uploadFile && (
+                      <p className="text-sm text-gray-400 mt-1">
+                        Selected: {uploadFile.name} ({(uploadFile.size / 1024 / 1024).toFixed(2)} MB)
+                      </p>
+                    )}
+                    <p className="text-xs text-gray-500 mt-2">
+                      You'll be able to select a 30-second clip after uploading
                     </p>
-                  )}
-                </div>
+                  </div>
+                )}
+
+                {/* URL Input */}
+                {uploadMode === 'url' && (
+                  <div>
+                    <label className="block text-sm text-gray-400 mb-1">MP3 URL</label>
+                    <input
+                      type="url"
+                      value={uploadUrl}
+                      onChange={(e) => setUploadUrl(e.target.value)}
+                      placeholder="https://example.com/sound.mp3"
+                      className="w-full bg-gray-700 border border-gray-600 rounded px-4 py-2 text-white placeholder-gray-400 focus:outline-none focus:border-blue-500"
+                    />
+                    <p className="text-xs text-gray-500 mt-2">
+                      The server will download the MP3 and you can select a 30-second clip
+                    </p>
+                  </div>
+                )}
+              </div>
+
+              {uploadError && (
+                <p className="text-red-400 text-sm mt-3">{uploadError}</p>
               )}
 
-              {/* URL Input */}
-              {uploadMode === 'url' && (
-                <div>
-                  <label className="block text-sm text-gray-400 mb-1">MP3 URL</label>
-                  <input
-                    type="url"
-                    value={uploadUrl}
-                    onChange={(e) => setUploadUrl(e.target.value)}
-                    placeholder="https://example.com/sound.mp3"
-                    className="w-full bg-gray-700 border border-gray-600 rounded px-4 py-2 text-white placeholder-gray-400 focus:outline-none focus:border-blue-500"
-                  />
-                </div>
-              )}
-
-              {/* Alias Input */}
-              <div>
-                <label className="block text-sm text-gray-400 mb-1">Alias (used in-game)</label>
-                <input
-                  type="text"
-                  value={uploadAlias}
-                  onChange={(e) => setUploadAlias(e.target.value.replace(/[^a-zA-Z0-9_]/g, ''))}
-                  placeholder="my_sound"
-                  className="w-full bg-gray-700 border border-gray-600 rounded px-4 py-2 text-white placeholder-gray-400 focus:outline-none focus:border-blue-500"
-                />
-                <p className="text-xs text-gray-500 mt-1">
-                  Only letters, numbers, and underscores
-                </p>
+              <div className="flex justify-end gap-3 mt-6">
+                <button
+                  onClick={resetUploadModal}
+                  className="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleTempUpload}
+                  disabled={isUploading || (uploadMode === 'file' ? !uploadFile : !uploadUrl)}
+                  className="px-4 py-2 bg-orange-600 hover:bg-orange-500 disabled:bg-gray-600 disabled:cursor-not-allowed rounded font-medium transition-colors"
+                >
+                  {isUploading ? 'Uploading...' : 'Continue to Editor'}
+                </button>
               </div>
             </div>
-
-            {uploadError && (
-              <p className="text-red-400 text-sm mt-3">{uploadError}</p>
-            )}
-
-            <div className="flex justify-end gap-3 mt-6">
-              <button
-                onClick={resetUploadModal}
-                className="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded transition-colors"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleUpload}
-                disabled={isUploading || !uploadAlias || (uploadMode === 'file' ? !uploadFile : !uploadUrl)}
-                className="px-4 py-2 bg-orange-600 hover:bg-orange-500 disabled:bg-gray-600 disabled:cursor-not-allowed rounded font-medium transition-colors"
-              >
-                {isUploading ? 'Uploading...' : 'Add Sound'}
-              </button>
-            </div>
-          </div>
+          )}
         </div>
       )}
     </div>

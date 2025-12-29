@@ -22,6 +22,10 @@ const envSchema = z.object({
 
   // Game Events API Key
   GAME_API_KEY: z.string(),
+
+  // Sound Storage
+  SOUNDS_DIR: z.string().default('/home/andy/etlegacy/sounds'),
+  SOUNDS_TEMP_DIR: z.string().default('/home/andy/etlegacy/sounds/temp'),
 });
 
 const parsed = envSchema.safeParse(process.env);
@@ -36,3 +40,9 @@ export const config = parsed.data;
 
 export const isDev = config.NODE_ENV === 'development';
 export const isProd = config.NODE_ENV === 'production';
+
+// Sound configuration
+export const SOUNDS_DIR = config.SOUNDS_DIR;
+export const SOUNDS_TEMP_DIR = config.SOUNDS_TEMP_DIR;
+export const TEMP_FILE_TTL_HOURS = 24; // Temp files older than this are cleaned up
+export const MAX_CLIP_DURATION_SECONDS = 30; // Maximum clip length allowed

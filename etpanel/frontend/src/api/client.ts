@@ -563,6 +563,52 @@ export const sounds = {
       method: 'POST',
       body: { url, alias },
     }),
+
+  // Temp upload operations (for clip editor)
+  uploadFileToTemp: async (file: File): Promise<TempUploadResponse> => {
+    const token = localStorage.getItem('accessToken');
+    if (!token) throw new Error('Not authenticated');
+
+    const formData = new FormData();
+    formData.append('file', file);
+
+    const response = await fetch(`${API_BASE}/sounds/upload-temp`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+      body: formData,
+    });
+
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({ error: 'Upload failed' }));
+      throw new Error(error.error || 'Upload failed');
+    }
+
+    return response.json();
+  },
+
+  importFromUrlToTemp: (url: string) =>
+    apiRequest<TempUploadResponse>('/sounds/import-url-temp', {
+      method: 'POST',
+      body: { url },
+    }),
+
+  getTempStreamUrl: (tempId: string): string => {
+    return `${API_BASE}/sounds/temp/${tempId}`;
+  },
+
+  getWaveform: (tempId: string) =>
+    apiRequest<WaveformResponse>(`/sounds/temp/${tempId}/waveform`),
+
+  saveClip: (tempId: string, alias: string, startTime: number, endTime: number, isPublic: boolean = false) =>
+    apiRequest<SaveClipResponse>('/sounds/save-clip', {
+      method: 'POST',
+      body: { tempId, alias, startTime, endTime, isPublic },
+    }),
+
+  deleteTempFile: (tempId: string) =>
+    apiRequest<{ success: boolean }>(`/sounds/temp/${tempId}`, { method: 'DELETE' }),
 };
 
 // Sound types
@@ -666,6 +712,27 @@ export interface UploadResponse {
   fileSize: number;
   durationSeconds?: number;
   originalName?: string;
+}
+
+export interface TempUploadResponse {
+  success: boolean;
+  tempId: string;
+  durationSeconds: number;
+  fileSize: number;
+  originalName: string;
+  maxClipDuration: number;
+}
+
+export interface WaveformResponse {
+  peaks: number[];
+}
+
+export interface SaveClipResponse {
+  success: boolean;
+  alias: string;
+  fileSize: number;
+  durationSeconds: number;
+  isPublic: boolean;
 }
 
 // Browser types
