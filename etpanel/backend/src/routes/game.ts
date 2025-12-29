@@ -17,6 +17,7 @@ import {
 const playerConnectSchema = z.object({
   slot: z.number().int().min(0).max(63),
   name: z.string(),
+  display_name: z.string().optional(),  // Original name with ET color codes
   guid: z.string().max(32),
   timestamp: z.number(),
 });
@@ -32,9 +33,11 @@ const playerDisconnectSchema = z.object({
 const killSchema = z.object({
   killer_slot: z.number().int().min(0).max(63),
   killer_name: z.string(),
+  killer_display_name: z.string().optional(),  // With color codes
   killer_guid: z.string().max(32),
   victim_slot: z.number().int().min(0).max(63),
   victim_name: z.string(),
+  victim_display_name: z.string().optional(),  // With color codes
   victim_guid: z.string().max(32),  // Now includes BOT_xxx for bots
   victim_is_bot: z.boolean().optional(),
   is_team_kill: z.boolean().optional(),
@@ -47,9 +50,11 @@ const killSchema = z.object({
 const deathSchema = z.object({
   slot: z.number().int().min(0).max(63),
   name: z.string(),
+  display_name: z.string().optional(),  // With color codes
   guid: z.string().max(32),
   killer_slot: z.number().int().optional(),
   killer_name: z.string().optional(),
+  killer_display_name: z.string().optional(),  // With color codes
   killer_guid: z.string().max(32).optional(),  // Now includes BOT_xxx for bots
   killer_is_bot: z.boolean().optional(),
   is_team_kill: z.boolean().optional(),

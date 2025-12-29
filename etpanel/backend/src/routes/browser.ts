@@ -85,7 +85,7 @@ async function queryServer(ip: string, port: number): Promise<ServerInfo | null>
             players.push({
               score: parseInt(match[1], 10),
               ping: parseInt(match[2], 10),
-              name: cleanPlayerName(match[3]),
+              name: match[3], // Keep color codes for frontend rendering
             });
           }
         }

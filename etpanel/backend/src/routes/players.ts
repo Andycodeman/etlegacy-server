@@ -118,7 +118,7 @@ export const playerRoutes: FastifyPluginAsync = async (fastify) => {
       limit?: number;
     };
 
-    // Build matchup query
+    // Build matchup query with join to get opponent's current name/displayName from player_stats
     let conditions = [eq(schema.playerMatchups.playerGuid, guid)];
 
     if (opponent) {
@@ -128,9 +128,27 @@ export const playerRoutes: FastifyPluginAsync = async (fastify) => {
       conditions.push(eq(schema.playerMatchups.weapon, weapon));
     }
 
+    // Left join with player_stats to get opponent name/displayName
     const matchups = await db
-      .select()
+      .select({
+        id: schema.playerMatchups.id,
+        playerGuid: schema.playerMatchups.playerGuid,
+        opponentGuid: schema.playerMatchups.opponentGuid,
+        opponentIsBot: schema.playerMatchups.opponentIsBot,
+        weapon: schema.playerMatchups.weapon,
+        kills: schema.playerMatchups.kills,
+        deaths: schema.playerMatchups.deaths,
+        teamKills: schema.playerMatchups.teamKills,
+        teamDeaths: schema.playerMatchups.teamDeaths,
+        // Get name/displayName from player_stats (will be null for bots)
+        opponentName: schema.playerStats.name,
+        opponentDisplayName: schema.playerStats.displayName,
+      })
       .from(schema.playerMatchups)
+      .leftJoin(
+        schema.playerStats,
+        eq(schema.playerMatchups.opponentGuid, schema.playerStats.guid)
+      )
       .where(and(...conditions))
       .orderBy(
         desc(sql`${schema.playerMatchups.kills} + ${schema.playerMatchups.deaths}`)
@@ -141,6 +159,7 @@ export const playerRoutes: FastifyPluginAsync = async (fastify) => {
     const opponentStats = new Map<string, {
       opponentGuid: string;
       opponentName: string;
+      opponentDisplayName: string | null;
       opponentIsBot: boolean;
       totalKills: number;
       totalDeaths: number;
@@ -159,7 +178,10 @@ export const playerRoutes: FastifyPluginAsync = async (fastify) => {
       if (!opponentStats.has(m.opponentGuid)) {
         opponentStats.set(m.opponentGuid, {
           opponentGuid: m.opponentGuid,
-          opponentName: m.opponentName,
+          // Get name from player_stats join (null for bots, use guid as fallback)
+          opponentName: m.opponentName || m.opponentGuid,
+          // Use displayName from player_stats (null for bots)
+          opponentDisplayName: m.opponentDisplayName,
           opponentIsBot: m.opponentIsBot,
           totalKills: 0,
           totalDeaths: 0,

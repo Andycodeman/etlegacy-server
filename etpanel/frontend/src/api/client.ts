@@ -215,6 +215,7 @@ export interface PlayerStats {
   id: number;
   guid: string;
   name: string;
+  displayName?: string;  // Original name with ET color codes
   kills: number;
   deaths: number;
   botKills: number;
@@ -228,6 +229,7 @@ export interface PlayerStats {
 export interface OpponentMatchup {
   opponentGuid: string;
   opponentName: string;
+  opponentDisplayName?: string;  // Name with ET color codes
   opponentIsBot: boolean;
   totalKills: number;
   totalDeaths: number;

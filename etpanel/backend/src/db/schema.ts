@@ -72,7 +72,8 @@ export const playerStats = pgTable(
   {
     id: serial('id').primaryKey(),
     guid: varchar('guid', { length: 32 }).notNull(),
-    name: varchar('name', { length: 100 }).notNull(),
+    name: varchar('name', { length: 100 }).notNull(), // Clean name (color codes stripped) for sorting/searching
+    displayName: varchar('display_name', { length: 100 }), // Original name with ET color codes for display
     // Human vs Human stats
     kills: integer('kills').default(0).notNull(),
     deaths: integer('deaths').default(0).notNull(),
@@ -107,13 +108,13 @@ export const killLog = pgTable('kill_log', {
 
 // Player vs Player matchup stats (aggregated by weapon)
 // Tracks kills/deaths between specific player pairs with weapon breakdown
+// Note: opponent name/displayName come from JOIN with player_stats, not stored here
 export const playerMatchups = pgTable(
   'player_matchups',
   {
     id: serial('id').primaryKey(),
     playerGuid: varchar('player_guid', { length: 32 }).notNull(),  // The player whose stats these are
     opponentGuid: varchar('opponent_guid', { length: 32 }).notNull(),  // Their opponent (human or BOT_xxx)
-    opponentName: varchar('opponent_name', { length: 100 }).notNull(),  // Display name (for bots especially)
     opponentIsBot: boolean('opponent_is_bot').default(false).notNull(),
     weapon: varchar('weapon', { length: 50 }).notNull(),  // e.g., MOD_MP40, MOD_KNIFE
     kills: integer('kills').default(0).notNull(),  // Times player killed opponent with this weapon

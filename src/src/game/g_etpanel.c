@@ -162,9 +162,9 @@ static int ETPanel_GetTeam(int clientNum)
 }
 
 /**
- * @brief Escape a string for JSON
- * Handles quotes, backslashes, control characters, and ET color codes
- * Players can have weird characters in names - this ensures valid JSON
+ * @brief Escape a string for JSON (strips ET color codes)
+ * Handles quotes, backslashes, control characters
+ * Used for clean names suitable for sorting/searching
  */
 static void ETPanel_EscapeJson(const char *in, char *out, int outSize)
 {
@@ -229,6 +229,73 @@ static void ETPanel_EscapeJson(const char *in, char *out, int outSize)
 			else
 			{
 				// Normal printable ASCII
+				out[j++] = c;
+			}
+			break;
+		}
+		i++;
+	}
+	out[j] = '\0';
+}
+
+/**
+ * @brief Escape a string for JSON while PRESERVING ET color codes (^X)
+ * Used for display names where we want to show colors in the UI
+ */
+static void ETPanel_EscapeJsonWithColors(const char *in, char *out, int outSize)
+{
+	int          i = 0, j = 0;
+	unsigned char c;
+
+	while (in[i] && j < outSize - 6)  // Leave room for \uXXXX escape
+	{
+		c = (unsigned char)in[i];
+
+		// Handle characters that need escaping in JSON
+		switch (c)
+		{
+		case '"':
+			out[j++] = '\\';
+			out[j++] = '"';
+			break;
+		case '\\':
+			out[j++] = '\\';
+			out[j++] = '\\';
+			break;
+		case '\n':
+			out[j++] = '\\';
+			out[j++] = 'n';
+			break;
+		case '\r':
+			out[j++] = '\\';
+			out[j++] = 'r';
+			break;
+		case '\t':
+			out[j++] = '\\';
+			out[j++] = 't';
+			break;
+		case '\b':
+			out[j++] = '\\';
+			out[j++] = 'b';
+			break;
+		case '\f':
+			out[j++] = '\\';
+			out[j++] = 'f';
+			break;
+		default:
+			// Skip control characters (0x00-0x1F) except those handled above
+			if (c < 0x20)
+			{
+				// Skip these - they're invalid in JSON strings
+			}
+			// Skip high-bit characters (0x80-0xFF) that might not be valid UTF-8
+			else if (c >= 0x80)
+			{
+				out[j++] = '_';
+			}
+			else
+			{
+				// Normal printable ASCII (including ^ for color codes)
 				out[j++] = c;
 			}
 			break;
@@ -333,6 +400,7 @@ void G_ETPanel_PlayerConnect(int clientNum, qboolean firstTime, qboolean isBot)
 {
 	char json[1024];
 	char nameEsc[MAX_NETNAME * 2];
+	char displayNameEsc[MAX_NETNAME * 2];
 	char guidEsc[128];
 
 	if (!etpanel_enabled.integer)
@@ -350,12 +418,14 @@ void G_ETPanel_PlayerConnect(int clientNum, qboolean firstTime, qboolean isBot)
 	playerConnectTime[clientNum] = level.time;
 
 	ETPanel_EscapeJson(ETPanel_GetName(clientNum), nameEsc, sizeof(nameEsc));
+	ETPanel_EscapeJsonWithColors(ETPanel_GetName(clientNum), displayNameEsc, sizeof(displayNameEsc));
 	ETPanel_EscapeJson(ETPanel_GetGuid(clientNum), guidEsc, sizeof(guidEsc));
 
 	Com_sprintf(json, sizeof(json),
-	            "{\"slot\":%d,\"name\":\"%s\",\"guid\":\"%s\",\"timestamp\":%d}",
+	            "{\"slot\":%d,\"name\":\"%s\",\"display_name\":\"%s\",\"guid\":\"%s\",\"timestamp\":%d}",
 	            clientNum,
 	            nameEsc,
+	            displayNameEsc,
 	            guidEsc,
 	            ETPanel_GetTimestamp());
 
@@ -419,9 +489,11 @@ void G_ETPanel_PlayerDisconnect(int clientNum)
  */
 void G_ETPanel_Kill(int victim, int killer, int meansOfDeath)
 {
-	char       json[1024];
+	char       json[2048];
 	char       killerNameEsc[MAX_NETNAME * 2];
 	char       victimNameEsc[MAX_NETNAME * 2];
+	char       killerDisplayNameEsc[MAX_NETNAME * 2];
+	char       victimDisplayNameEsc[MAX_NETNAME * 2];
 	char       killerGuidEsc[128];
 	char       victimGuidEsc[128];
 	qboolean   killerIsBot, victimIsBot;
@@ -459,19 +531,22 @@ void G_ETPanel_Kill(int victim, int killer, int meansOfDeath)
 		}
 	}
 
-	// Escape strings
+	// Escape strings - both clean and display versions
 	if (killer >= 0 && killer < MAX_CLIENTS)
 	{
 		ETPanel_EscapeJson(ETPanel_GetName(killer), killerNameEsc, sizeof(killerNameEsc));
+		ETPanel_EscapeJsonWithColors(ETPanel_GetName(killer), killerDisplayNameEsc, sizeof(killerDisplayNameEsc));
 		ETPanel_EscapeJson(ETPanel_GetGuid(killer), killerGuidEsc, sizeof(killerGuidEsc));
 	}
 	else
 	{
 		Q_strncpyz(killerNameEsc, "World", sizeof(killerNameEsc));
+		Q_strncpyz(killerDisplayNameEsc, "World", sizeof(killerDisplayNameEsc));
 		Q_strncpyz(killerGuidEsc, "WORLD", sizeof(killerGuidEsc));
 	}
 
 	ETPanel_EscapeJson(ETPanel_GetName(victim), victimNameEsc, sizeof(victimNameEsc));
+	ETPanel_EscapeJsonWithColors(ETPanel_GetName(victim), victimDisplayNameEsc, sizeof(victimDisplayNameEsc));
 	ETPanel_EscapeJson(ETPanel_GetGuid(victim), victimGuidEsc, sizeof(victimGuidEsc));
 
 	// Check for suicide
@@ -481,9 +556,10 @@ void G_ETPanel_Kill(int victim, int killer, int meansOfDeath)
 		if (!victimIsBot)
 		{
 			Com_sprintf(json, sizeof(json),
-			            "{\"slot\":%d,\"name\":\"%s\",\"guid\":\"%s\",\"cause\":\"%s\",\"death_type\":\"suicide\",\"map\":\"%s\",\"timestamp\":%d}",
+			            "{\"slot\":%d,\"name\":\"%s\",\"display_name\":\"%s\",\"guid\":\"%s\",\"cause\":\"%s\",\"death_type\":\"suicide\",\"map\":\"%s\",\"timestamp\":%d}",
 			            victim,
 			            victimNameEsc,
+			            victimDisplayNameEsc,
 			            victimGuidEsc,
 			            weapon,
 			            level.rawmapname,
@@ -497,14 +573,16 @@ void G_ETPanel_Kill(int victim, int killer, int meansOfDeath)
 	if (!killerIsBot)
 	{
 		Com_sprintf(json, sizeof(json),
-		            "{\"killer_slot\":%d,\"killer_name\":\"%s\",\"killer_guid\":\"%s\","
-		            "\"victim_slot\":%d,\"victim_name\":\"%s\",\"victim_guid\":\"%s\","
+		            "{\"killer_slot\":%d,\"killer_name\":\"%s\",\"killer_display_name\":\"%s\",\"killer_guid\":\"%s\","
+		            "\"victim_slot\":%d,\"victim_name\":\"%s\",\"victim_display_name\":\"%s\",\"victim_guid\":\"%s\","
 		            "\"victim_is_bot\":%s,\"is_team_kill\":%s,\"weapon\":\"%s\",\"map\":\"%s\",\"timestamp\":%d}",
 		            killer,
 		            killerNameEsc,
+		            killerDisplayNameEsc,
 		            killerGuidEsc,
 		            victim,
 		            victimNameEsc,
+		            victimDisplayNameEsc,
 		            victimGuidEsc,
 		            victimIsBot ? "true" : "false",
 		            isTeamKill ? "true" : "false",
@@ -518,14 +596,16 @@ void G_ETPanel_Kill(int victim, int killer, int meansOfDeath)
 	if (!victimIsBot)
 	{
 		Com_sprintf(json, sizeof(json),
-		            "{\"slot\":%d,\"name\":\"%s\",\"guid\":\"%s\","
-		            "\"killer_slot\":%d,\"killer_name\":\"%s\",\"killer_guid\":\"%s\","
+		            "{\"slot\":%d,\"name\":\"%s\",\"display_name\":\"%s\",\"guid\":\"%s\","
+		            "\"killer_slot\":%d,\"killer_name\":\"%s\",\"killer_display_name\":\"%s\",\"killer_guid\":\"%s\","
 		            "\"killer_is_bot\":%s,\"is_team_kill\":%s,\"cause\":\"%s\",\"death_type\":\"%s\",\"map\":\"%s\",\"timestamp\":%d}",
 		            victim,
 		            victimNameEsc,
+		            victimDisplayNameEsc,
 		            victimGuidEsc,
 		            killer,
 		            killerNameEsc,
+		            killerDisplayNameEsc,
 		            killerGuidEsc,
 		            killerIsBot ? "true" : "false",
 		            isTeamKill ? "true" : "false",

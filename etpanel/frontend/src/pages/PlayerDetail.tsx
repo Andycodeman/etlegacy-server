@@ -2,10 +2,7 @@ import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useParams, Link, useLocation } from 'react-router-dom';
 import { players } from '../api/client';
-
-function stripColors(text: string): string {
-  return text.replace(/\^[0-9a-zA-Z]/g, '');
-}
+import { stripColors, renderETColors } from '../utils/etColors';
 
 function formatPlaytime(seconds: number): string {
   const hours = Math.floor(seconds / 3600);
@@ -87,7 +84,7 @@ export default function PlayerDetail() {
 
       {/* Player header */}
       <div className="bg-gray-800 rounded-lg p-6">
-        <h1 className="text-3xl font-bold mb-4">{stripColors(player.name)}</h1>
+        <h1 className="text-3xl font-bold mb-4">{renderETColors(player.displayName || player.name)}</h1>
 
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
           <div className="bg-gray-700/50 rounded p-4">
@@ -197,13 +194,13 @@ export default function PlayerDetail() {
                       <tr key={matchup.opponentGuid} className="border-b border-gray-700/50 hover:bg-gray-700/30">
                         <td className="py-3 pr-4 font-medium">
                           {matchup.opponentIsBot ? (
-                            <span className="text-purple-400">{stripColors(matchup.opponentName)}</span>
+                            <span>{renderETColors(matchup.opponentDisplayName || matchup.opponentName)}</span>
                           ) : (
                             <Link
                               to={`${basePath}/${matchup.opponentGuid}`}
-                              className="text-blue-400 hover:text-blue-300 hover:underline"
+                              className="hover:underline"
                             >
-                              {stripColors(matchup.opponentName)}
+                              {renderETColors(matchup.opponentDisplayName || matchup.opponentName)}
                             </Link>
                           )}
                         </td>

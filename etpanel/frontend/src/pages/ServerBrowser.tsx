@@ -2,10 +2,7 @@ import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { browser } from '../api/client';
 import type { BrowserResponse } from '../api/client';
-
-function stripColors(text: string): string {
-  return text.replace(/\^[0-9a-zA-Z]/g, '');
-}
+import { stripColors, renderETColors } from '../utils/etColors';
 
 interface Player {
   name: string;
@@ -304,7 +301,7 @@ export default function ServerBrowser() {
                         />
                       ) : (
                         <h3 className="font-semibold truncate">
-                          {stripColors(server.hostname || server.favoriteName)}
+                          {renderETColors(server.hostname || server.favoriteName)}
                         </h3>
                       )}
                       {!server.online && (
@@ -409,7 +406,7 @@ export default function ServerBrowser() {
                           className="bg-gray-700 rounded p-2 flex items-center justify-between"
                         >
                           <span className="font-medium truncate">
-                            {stripColors(player.name)}
+                            {renderETColors(player.name)}
                           </span>
                           <div className="flex items-center gap-3 text-sm">
                             <span className="text-gray-300">{player.score}</span>
@@ -451,7 +448,7 @@ export default function ServerBrowser() {
                           .map((player, idx) => (
                             <tr key={idx} className="border-b border-gray-700/50">
                               <td className="py-2 font-medium">
-                                {stripColors(player.name)}
+                                {renderETColors(player.name)}
                               </td>
                               <td className="py-2 text-right text-gray-300">
                                 {player.score}

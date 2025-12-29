@@ -2,10 +2,7 @@ import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Link, useLocation } from 'react-router-dom';
 import { players } from '../api/client';
-
-function stripColors(text: string): string {
-  return text.replace(/\^[0-9a-zA-Z]/g, '');
-}
+import { renderETColors } from '../utils/etColors';
 
 function formatPlaytime(seconds: number): string {
   const hours = Math.floor(seconds / 3600);
@@ -171,8 +168,8 @@ export default function Players() {
                   className="block bg-gray-700 rounded-lg p-4 hover:bg-gray-600 transition-colors"
                 >
                   <div className="flex items-center justify-between mb-2">
-                    <span className="font-medium text-blue-400">
-                      {stripColors(player.name)}
+                    <span className="font-medium">
+                      {renderETColors(player.displayName || player.name)}
                     </span>
                     <span className="text-xs text-gray-400">#{index + 1}</span>
                   </div>
@@ -245,9 +242,9 @@ export default function Players() {
                       <td className="py-3 pr-4">
                         <Link
                           to={`${isPublicRoute ? '/stats' : '/players'}/${player.guid}`}
-                          className="font-medium text-blue-400 hover:text-blue-300 hover:underline"
+                          className="font-medium hover:underline"
                         >
-                          {stripColors(player.name)}
+                          {renderETColors(player.displayName || player.name)}
                         </Link>
                       </td>
                       <td className="py-3 pr-4">

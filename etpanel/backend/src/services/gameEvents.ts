@@ -5,6 +5,7 @@ import { broadcast } from '../websocket/index.js';
 export interface PlayerConnectEvent {
   slot: number;
   name: string;
+  display_name?: string;  // Original name with ET color codes
   guid: string;
   timestamp: number;
 }
@@ -20,9 +21,11 @@ export interface PlayerDisconnectEvent {
 export interface KillEvent {
   killer_slot: number;
   killer_name: string;
+  killer_display_name?: string;
   killer_guid: string;
   victim_slot: number;
   victim_name: string;
+  victim_display_name?: string;
   victim_guid: string;
   victim_is_bot?: boolean;
   is_team_kill?: boolean;
@@ -35,9 +38,11 @@ export interface KillEvent {
 export interface DeathEvent {
   slot: number;
   name: string;
+  display_name?: string;
   guid: string;
   killer_slot?: number;
   killer_name?: string;
+  killer_display_name?: string;
   killer_guid?: string;
   killer_is_bot?: boolean;
   is_team_kill?: boolean;
@@ -57,18 +62,21 @@ export interface ChatEvent {
 }
 
 export async function handlePlayerConnect(event: PlayerConnectEvent) {
-  // Upsert player stats
+  // Upsert player stats - always update name and displayName on connect
+  // (players can change their name between sessions, but GUID stays the same)
   await db
     .insert(schema.playerStats)
     .values({
       guid: event.guid,
       name: event.name,
+      displayName: event.display_name || event.name,  // Use display_name if provided, fallback to name
       lastSeen: new Date(),
     })
     .onConflictDoUpdate({
       target: schema.playerStats.guid,
       set: {
         name: event.name,
+        displayName: event.display_name || event.name,  // Always update displayName on connect
         lastSeen: new Date(),
       },
     });
@@ -79,6 +87,7 @@ export async function handlePlayerConnect(event: PlayerConnectEvent) {
     data: {
       slot: event.slot,
       name: event.name,
+      displayName: event.display_name,
       timestamp: new Date(event.timestamp * 1000).toISOString(),
     },
   });
@@ -105,10 +114,10 @@ export async function handlePlayerDisconnect(event: PlayerDisconnectEvent) {
 }
 
 // Upsert a matchup record (player -> opponent with weapon)
+// Note: opponent name comes from JOIN with player_stats, not stored here
 async function upsertMatchup(
   playerGuid: string,
   opponentGuid: string,
-  opponentName: string,
   opponentIsBot: boolean,
   weapon: string,
   field: 'kills' | 'deaths' | 'teamKills' | 'teamDeaths'
@@ -118,7 +127,6 @@ async function upsertMatchup(
     .update(schema.playerMatchups)
     .set({
       [field]: sql`${schema.playerMatchups[field]} + 1`,
-      opponentName: opponentName,  // Update name in case it changed
       updatedAt: new Date(),
     })
     .where(
@@ -134,7 +142,6 @@ async function upsertMatchup(
     await db.insert(schema.playerMatchups).values({
       playerGuid,
       opponentGuid,
-      opponentName,
       opponentIsBot,
       weapon,
       [field]: 1,
@@ -146,7 +153,7 @@ export async function handleKill(event: KillEvent) {
   const isVictimBot = event.victim_is_bot || event.kill_type === 'bot';
   const isTeamKill = event.is_team_kill || event.kill_type === 'teamkill';
 
-  // Log the kill
+  // Log the kill (we could add display name columns to kill_log later if needed)
   await db.insert(schema.killLog).values({
     killerGuid: event.killer_guid,
     victimGuid: event.victim_guid,
@@ -190,7 +197,6 @@ export async function handleKill(event: KillEvent) {
   await upsertMatchup(
     event.killer_guid,
     event.victim_guid,
-    event.victim_name,
     isVictimBot,
     event.weapon,
     matchupField
@@ -246,7 +252,6 @@ export async function handleDeath(event: DeathEvent) {
     await upsertMatchup(
       event.guid,
       event.killer_guid,
-      event.killer_name || 'Unknown',
       killerIsBot,
       event.cause,
       matchupField
