@@ -35,6 +35,8 @@ Makefile
 # Waypoint files (Omni-bot)
 *.way
 *.gm
+# But track our custom omnibot config
+!omni-bot/et/scripts/et_autoexec.gm
 
 # Map files (BSP compiled maps)
 *.bsp

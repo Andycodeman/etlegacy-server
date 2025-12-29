@@ -85,11 +85,18 @@ rsync -avz --progress \
     "$REMOTE_HOST:$REMOTE_DIR/scripts/"
 ssh $SSH_OPTS "$REMOTE_HOST" "chmod +x $REMOTE_DIR/scripts/map_switch.sh"
 
-# Step 4b: Sync omni-bot waypoints
-echo -e "${YELLOW}Step 4b: Syncing omni-bot waypoints...${NC}"
+# Step 4b: Sync omni-bot waypoints and custom scripts
+echo -e "${YELLOW}Step 4b: Syncing omni-bot waypoints and scripts...${NC}"
 rsync -avz --progress \
     "$LOCAL_SERVER/omni-bot/et/nav/" \
     "$REMOTE_HOST:$REMOTE_DIR/omni-bot/et/nav/" 2>/dev/null || echo "  (No waypoints to sync)"
+# Sync custom omnibot scripts (et_autoexec.gm forces bots to soldier class)
+if [ -d "$PROJECT_DIR/omni-bot/et/scripts" ]; then
+    rsync -avz --progress \
+        "$PROJECT_DIR/omni-bot/et/scripts/" \
+        "$REMOTE_HOST:$REMOTE_DIR/omni-bot/et/scripts/"
+    echo "  - Custom omnibot scripts synced"
+fi
 
 # Step 4c: Sync server-monitor.sh
 echo -e "${YELLOW}Step 4c: Syncing server-monitor.sh...${NC}"
