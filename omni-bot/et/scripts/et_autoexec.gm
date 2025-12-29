@@ -34,25 +34,36 @@ global MAP_TALK = true;
 // enable / disable the class manager
 global DisableClassManager = 0;
 
+// ============================================================================
+// ETMAN: Bot Ammo Dispensing Toggle
+// ============================================================================
+// Set to 1 to DISABLE ammo drops from bots (default: 1 = disabled)
+// Set to 0 to ENABLE ammo drops from bots
+// This is checked by goal_dispenseammo.gm, goal_supplyself.gm, goal_deliversupplies.gm
+// To change: edit this value and restart server, or add to server.cfg:
+//   set omnibot_disableammo "0"  (to enable ammo drops)
+//   set omnibot_disableammo "1"  (to disable ammo drops)
+global ETMAN_DISABLE_AMMO = 1;
+
 // set up the class counts
-// ETMan Custom: Force bots to only use Soldier class (no ammo spam from Field Ops)
+// ETMan Custom: Allow all classes, but disable ammo dispensing
+// Field Ops can still use airstrikes/artillery, just no ammo spam
 Util.InitializeClassTables();
 countAxis = Server.MinClassCount[TEAM.AXIS];
 countAllies = Server.MinClassCount[TEAM.ALLIES];
 
-// All bots = Soldier only
+// Allow all classes (ammo dispensing disabled via modified goal_dispenseammo.gm)
 countAxis[CLASS.SOLDIER] = 99;
-countAxis[CLASS.MEDIC] = 0;
-countAxis[CLASS.ENGINEER] = 0;
-countAxis[CLASS.COVERTOPS] = 0;
-countAxis[CLASS.FIELDOPS] = 0;
+countAxis[CLASS.MEDIC] = 99;
+countAxis[CLASS.ENGINEER] = 99;
+countAxis[CLASS.COVERTOPS] = 99;
+countAxis[CLASS.FIELDOPS] = 99;
 
 countAllies[CLASS.SOLDIER] = 99;
-countAllies[CLASS.MEDIC] = 0;
-countAllies[CLASS.ENGINEER] = 0;
-countAllies[CLASS.COVERTOPS] = 0;
-countAllies[CLASS.FIELDOPS] = 0;
-
+countAllies[CLASS.MEDIC] = 99;
+countAllies[CLASS.ENGINEER] = 99;
+countAllies[CLASS.COVERTOPS] = 99;
+countAllies[CLASS.FIELDOPS] = 99;
 
 global PostMapLoad = function()
 {
