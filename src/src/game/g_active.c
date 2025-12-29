@@ -1417,19 +1417,18 @@ void G_PanzerfestStart(gentity_t *target)
 	}
 
 	// BIG ANNOUNCEMENT
-	trap_SendServerCommand(-1, va("cp \"\n^1=================================\n"
-	                              "^3%s\n"
-	                              "^1IS A BADASS!\n"
-	                              "^6*** PANZERFEST! ***\n"
-	                              "^1=================================\n"
-	                              "^27x FIRE RATE + 4x SPEED!\n"
+	trap_SendServerCommand(-1, va("cp \"\n"
+	                              "^3%s\n\n"
+	                              "^1IS A BADASS!\n\n"
+	                              "^6*** PANZERFEST! ***\n\n"
+	                              "^27x FIRE RATE + 3x SPEED!\n\n"
 	                              "^22 MINUTES TO SURVIVE!\n\" 6",
 	                              target->client->pers.netname));
 
-	trap_SendServerCommand(-1, va("chat \"^1*** ^6PANZERFEST! ^1*** ^3%s ^7is a ^1BADASS^7! ^27x FIRE + 4x SPEED! ^22 MINUTES TO SURVIVE!\"",
+	trap_SendServerCommand(-1, va("chat \"^1*** ^6PANZERFEST! ^1*** ^3%s ^7is a ^1BADASS^7! 7x FIRE + 3x SPEED! 2 MINUTES TO SURVIVE!\"",
 	                              target->client->pers.netname));
 
-	G_Printf("^2PANZERFEST: ^7%s triggered with %d kills! (7x fire + 4x speed)\n",
+	G_Printf("^2PANZERFEST: ^7%s triggered with %d kills! (7x fire + 3x speed)\n",
 	         target->client->pers.netname, target->client->killStreakCount);
 }
 
@@ -1463,13 +1462,13 @@ void G_PanzerfestEnd(qboolean targetDied)
 	if (targetDied)
 	{
 		int msgIdx = rand() % NUM_MESSAGES;
-		trap_SendServerCommand(-1, va("cp \"\n^1=================================\n"
-		                              "^3%s\n"
-		                              "%s\n"
-		                              "^1=================================\n"
+		trap_SendServerCommand(-1, va("cp \"\n"
+		                              "^3%s\n\n"
+		                              "%s\n\n"
 		                              "^2THE PEASANTS WIN THIS ROUND!\n\" 4",
 		                              targetName, failureMessages[msgIdx]));
-		trap_SendServerCommand(-1, va("chat \"^1*** PANZERFEST OVER! *** ^3%s ^1GOT REKT! ^7%s\"",
+		trap_SendServerCommand(-1, va("chat \"^1*** PANZERFEST OVER! ***\""));
+		trap_SendServerCommand(-1, va("chat \"^3%s ^1GOT REKT! %s\"",
 		                              targetName, failureMessages[msgIdx]));
 	}
 
