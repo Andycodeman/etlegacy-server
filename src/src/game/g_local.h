@@ -1060,6 +1060,11 @@ struct gclient_s
 	int killStreakCount;         ///< Current kill streak count (resets on death/spawn)
 	int killStreakBonusLevel;    ///< Current bonus level (0-6, determines fire rate)
 
+	// ETMan: Survival mode - speed bonus for staying alive (pure C)
+	// Every 30 seconds alive grants +5% speed, up to 6 levels (+30% max)
+	int survivalSpawnTime;       ///< level.time when player spawned (reset on death/spawn)
+	int survivalSpeedLevel;      ///< Current survival speed level (0-6, +5% per level)
+
 	unsigned int combatState;
 
 	// antilag
@@ -1812,6 +1817,10 @@ float G_BonusGetFireRateMultiplier(int clientNum);
 void G_BonusPlayerKill(gentity_t *attacker);
 void G_BonusPlayerSpawn(gentity_t *ent, qboolean revived);
 void G_BonusPlayerDeath(gentity_t *ent);
+
+// ETMan: Survival mode functions (pure C - speed bonus for staying alive)
+void G_SurvivalThink(gentity_t *ent);
+float G_SurvivalGetSpeedMultiplier(int clientNum);
 
 // ETMan: Panzerfest functions (pure C - JayMod pattern)
 void G_PanzerfestInit(void);

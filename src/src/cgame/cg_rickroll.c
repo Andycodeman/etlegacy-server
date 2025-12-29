@@ -1302,87 +1302,107 @@ void CG_DrawPanzerfestBonus(void) {
 		return;
 	}
 
-	// Position in bottom-right, above stamina area - close to edge
-	// Use Ccg_WideX for widescreen support
-	w = 80.0f;
+	// Position in bottom-right, just above the charge/stamina bar
+	// Bar fits 6 segments perfectly: 6 segments * 10px + 5 gaps * 2px + 2px border = 72px
+	// Layout from bottom to top: Kill Streak bar, Survival bar, then Panzerfest text
+	float segmentW = 10.0f;    // Width of each segment
+	float segmentGap = 2.0f;   // Gap between segments
+	float border = 1.0f;       // Border thickness
+	w = (segmentW * 6) + (segmentGap * 5) + (border * 2);  // = 72px total
 	h = 10.0f;
-	barWidth = 10.0f;  // Width of each segment
-	x = Ccg_WideX(SCREEN_WIDTH) - w - 4.0f;  // Right-aligned with 4px margin (close to edge)
-	y = SCREEN_HEIGHT - 100.0f;
+	float textMargin = 28.0f;  // Space for multiplier text on left
+	x = Ccg_WideX(SCREEN_WIDTH) - w - 4.0f;  // Right against screen edge (like clock)
 
-	// === KILL STREAK (Fire Rate) Bar ===
+	// Position above the charge bar (charge bar is around y=430-440)
+	float baseY = SCREEN_HEIGHT - 115.0f;  // Clear above charge bar
+	float barSpacing = 22.0f;  // Space between bar sections (label + bar)
+	float labelWidth;
+	float textX;  // For multiplier text on left
+
+	// === KILL STREAK (Fire Rate) Bar - BOTTOM ===
 	if (cg.killStreakLevel > 0 || cg.panzerfestPhase > 0) {
-		// Level text (left of bar)
-		Com_sprintf(text, sizeof(text), "%dx", cg.killStreakLevel + 1);
-		CG_Text_Paint_Ext(x - 22.0f, y + 8.0f, 0.12f, 0.12f, fireColor,
-			text, 0, 0, ITEM_TEXTSTYLE_SHADOWED, &cgs.media.limboFont2);
+		y = baseY;
 
-		// Background
+		// Bar first
 		CG_FillRect(x, y, w, h, bgColor);
 		CG_DrawRect_FixedBorder(x, y, w, h, 1, borderColor);
 
-		// Draw 6 segments
+		// Draw 6 segments - perfectly fitted
 		for (i = 0; i < 6; i++) {
-			float segX = x + 2.0f + (i * (barWidth + 2.0f));
-			float segW = barWidth;
-			float segH = h - 4.0f;
-			float segY = y + 2.0f;
+			float segX = x + border + (i * (segmentW + segmentGap));
+			float segY = y + border;
+			float segH = h - (border * 2);
 
 			if (i < cg.killStreakLevel) {
-				// Filled segment - pulse effect on max level
 				if (cg.killStreakLevel == 6) {
 					float pulse = 0.7f + 0.3f * sin((float)cg.time * 0.01f);
 					fireColor[3] = pulse;
 				}
-				CG_FillRect(segX, segY, segW, segH, fireColor);
+				CG_FillRect(segX, segY, segmentW, segH, fireColor);
 			} else {
-				CG_FillRect(segX, segY, segW, segH, segmentEmpty);
+				CG_FillRect(segX, segY, segmentW, segH, segmentEmpty);
 			}
 		}
 
-		// Label (right of bar)
-		CG_Text_Paint_Ext(x + w + 4.0f, y + 8.0f, 0.12f, 0.12f, labelColor,
-			"FIRE", 0, 0, ITEM_TEXTSTYLE_SHADOWED, &cgs.media.limboFont2);
-
-		y -= 16.0f;  // Move up for next bar
-	}
-
-	// === SURVIVAL (Speed) Bar ===
-	if (cg.survivalLevel > 0 || cg.panzerfestPhase > 0) {
-		// Level text (left of bar)
-		Com_sprintf(text, sizeof(text), "%.1fx", 1.0f + (cg.survivalLevel * 0.5f));
-		CG_Text_Paint_Ext(x - 28.0f, y + 8.0f, 0.12f, 0.12f, speedColor,
+		// Multiplier text to the LEFT of bar
+		Com_sprintf(text, sizeof(text), "%dx", cg.killStreakLevel + 1);
+		textX = x - 4.0f - CG_Text_Width_Ext(text, 0.13f, 0, &cgs.media.limboFont2);
+		CG_Text_Paint_Ext(textX, y + 8.0f, 0.13f, 0.13f, fireColor,
 			text, 0, 0, ITEM_TEXTSTYLE_SHADOWED, &cgs.media.limboFont2);
 
-		// Background
+		// Title centered above bar with kill count (tight)
+		{
+			int kills = cg.killStreakLevel * 5;
+			Com_sprintf(text, sizeof(text), "KILLS (%d)", kills);
+			labelWidth = CG_Text_Width_Ext(text, 0.11f, 0, &cgs.media.limboFont2);
+			CG_Text_Paint_Ext(x + (w - labelWidth) / 2.0f, y - 2.0f, 0.11f, 0.11f, fireColor,
+				text, 0, 0, ITEM_TEXTSTYLE_SHADOWED, &cgs.media.limboFont2);
+		}
+	}
+
+	// === SURVIVAL (Speed) Bar - ABOVE KILL STREAK ===
+	if (cg.survivalLevel > 0 || cg.panzerfestPhase > 0) {
+		y = baseY - barSpacing;
+
+		// Bar first
 		CG_FillRect(x, y, w, h, bgColor);
 		CG_DrawRect_FixedBorder(x, y, w, h, 1, borderColor);
 
-		// Draw 6 segments
+		// Draw 6 segments - perfectly fitted
 		for (i = 0; i < 6; i++) {
-			float segX = x + 2.0f + (i * (barWidth + 2.0f));
-			float segW = barWidth;
-			float segH = h - 4.0f;
-			float segY = y + 2.0f;
+			float segX = x + border + (i * (segmentW + segmentGap));
+			float segY = y + border;
+			float segH = h - (border * 2);
 
 			if (i < cg.survivalLevel) {
-				// Filled segment - pulse effect on max level
 				if (cg.survivalLevel == 6) {
 					float pulse = 0.7f + 0.3f * sin((float)cg.time * 0.008f);
 					speedColor[3] = pulse;
 				}
-				CG_FillRect(segX, segY, segW, segH, speedColor);
+				CG_FillRect(segX, segY, segmentW, segH, speedColor);
 			} else {
-				CG_FillRect(segX, segY, segW, segH, segmentEmpty);
+				CG_FillRect(segX, segY, segmentW, segH, segmentEmpty);
 			}
 		}
 
-		// Label (right of bar)
-		CG_Text_Paint_Ext(x + w + 4.0f, y + 8.0f, 0.12f, 0.12f, labelColor,
-			"SPEED", 0, 0, ITEM_TEXTSTYLE_SHADOWED, &cgs.media.limboFont2);
+		// Multiplier text to the LEFT of bar
+		Com_sprintf(text, sizeof(text), "%.1fx", 1.0f + (cg.survivalLevel * 0.33f));
+		textX = x - 4.0f - CG_Text_Width_Ext(text, 0.13f, 0, &cgs.media.limboFont2);
+		CG_Text_Paint_Ext(textX, y + 8.0f, 0.13f, 0.13f, speedColor,
+			text, 0, 0, ITEM_TEXTSTYLE_SHADOWED, &cgs.media.limboFont2);
 
-		y -= 16.0f;
+		// Title centered above bar with survival time (tight)
+		{
+			int survivalSecs = cg.survivalLevel * 30;
+			Com_sprintf(text, sizeof(text), "SURVIVAL (%ds)", survivalSecs);
+			labelWidth = CG_Text_Width_Ext(text, 0.11f, 0, &cgs.media.limboFont2);
+			CG_Text_Paint_Ext(x + (w - labelWidth) / 2.0f, y - 2.0f, 0.11f, 0.11f, speedColor,
+				text, 0, 0, ITEM_TEXTSTYLE_SHADOWED, &cgs.media.limboFont2);
+		}
 	}
+
+	// Panzerfest indicator position - above the survival bar, closer
+	y = baseY - (barSpacing * 2) + 5.0f;
 
 	// === PANZERFEST Indicator ===
 	if (cg.panzerfestPhase > 0) {
@@ -1428,23 +1448,23 @@ void CG_DrawPanzerfestBonus(void) {
 				break;
 		}
 
-		// Draw panzerfest label
-		CG_Text_Paint_Ext(x, y - 2.0f, 0.14f, 0.14f, panzerfestColor,
-			phaseText, 0, 0, ITEM_TEXTSTYLE_SHADOWED, &cgs.media.limboFont2);
-
-		// Timer
+		// Draw panzerfest label + timer combined, right-aligned to match bars
 		if (cg.panzerfestTimeLeft > 0) {
 			mins = cg.panzerfestTimeLeft / 60;
 			secs = cg.panzerfestTimeLeft % 60;
-			Com_sprintf(text, sizeof(text), "%d:%02d", mins, secs);
-			CG_Text_Paint_Ext(x + 65.0f, y - 2.0f, 0.14f, 0.14f, panzerfestColor,
-				text, 0, 0, ITEM_TEXTSTYLE_SHADOWED, &cgs.media.limboFont2);
+			Com_sprintf(text, sizeof(text), "%s %d:%02d", phaseText, mins, secs);
+		} else {
+			Com_sprintf(text, sizeof(text), "%s", phaseText);
 		}
+		labelWidth = CG_Text_Width_Ext(text, 0.14f, 0, &cgs.media.limboFont2);
+		CG_Text_Paint_Ext(x + w - labelWidth - 4.0f, y - 2.0f, 0.14f, 0.14f, panzerfestColor,
+			text, 0, 0, ITEM_TEXTSTYLE_SHADOWED, &cgs.media.limboFont2);
 
-		// Target indicator
+		// Target indicator - also right-aligned
 		if (cg.isPanzerfestTarget) {
-			y -= 14.0f;
-			CG_Text_Paint_Ext(x, y - 2.0f, 0.12f, 0.12f, panzerfestColor,
+			y -= 12.0f;
+			labelWidth = CG_Text_Width_Ext("YOU ARE THE TARGET!", 0.10f, 0, &cgs.media.limboFont2);
+			CG_Text_Paint_Ext(x + w - labelWidth, y - 2.0f, 0.10f, 0.10f, panzerfestColor,
 				"YOU ARE THE TARGET!", 0, 0, ITEM_TEXTSTYLE_SHADOWED, &cgs.media.limboFont2);
 		}
 	}
@@ -1453,11 +1473,6 @@ void CG_DrawPanzerfestBonus(void) {
 	if (cg.panzerfestKillCount > 0 && cg.panzerfestPhase == 0 && cg.panzerfestKillsNeeded > 0) {
 		vec4_t progressColor;
 		float percentage = (float)cg.panzerfestKillCount / (float)cg.panzerfestKillsNeeded;
-
-		// Position above other HUD elements, right-aligned close to edge
-		// Use Ccg_WideX for widescreen support
-		float progressX = Ccg_WideX(SCREEN_WIDTH) - 90.0f;  // Close to right edge
-		float progressY = SCREEN_HEIGHT - 130.0f;
 
 		// Color gradient: white -> yellow -> orange -> red as you get closer
 		if (percentage >= 0.8f) {
@@ -1470,9 +1485,10 @@ void CG_DrawPanzerfestBonus(void) {
 			Vector4Set(progressColor, 1.0f, 1.0f, 1.0f, 0.8f);  // White
 		}
 
-		// Draw "PANZERFEST X/30" text - right aligned close to edge
+		// Draw "PANZERFEST X/30" text - right aligned to match bars, uses same y position
 		Com_sprintf(text, sizeof(text), "PANZERFEST %d/%d", cg.panzerfestKillCount, cg.panzerfestKillsNeeded);
-		CG_Text_Paint_Ext(progressX, progressY, 0.14f, 0.14f, progressColor,
+		labelWidth = CG_Text_Width_Ext(text, 0.14f, 0, &cgs.media.limboFont2);
+		CG_Text_Paint_Ext(x + w - labelWidth - 4.0f, y - 2.0f, 0.14f, 0.14f, progressColor,
 			text, 0, 0, ITEM_TEXTSTYLE_SHADOWED, &cgs.media.limboFont2);
 	}
 }

@@ -45,7 +45,7 @@ end
     NOW HANDLED IN PURE C (g_active.c) - JayMod pattern
     Kill streak = faster fire rate (C: G_BonusPlayerKill, G_BonusGetFireRateMultiplier)
     Panzerfest = everyone vs you at 30 kills (C: G_PanzerfestStart, G_PanzerfestThink)
-    Survival speed bonus is NOT yet implemented in C (was Lua-only)
+    Survival speed = +5% per 30s alive, max +30% (C: G_SurvivalThink, G_SurvivalGetSpeedMultiplier)
 ]]--
 
 --[[

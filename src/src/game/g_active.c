@@ -1372,7 +1372,7 @@ void G_PanzerfestStart(gentity_t *target)
 	level.panzerfest.messageIndex           = 0;
 	level.panzerfest.phase                  = PANZERFEST_BOOST;
 	level.panzerfest.currentMultiplier      = (float)PANZERFEST_MULTIPLIER;
-	level.panzerfest.currentSpeedMultiplier = 4.0f;  // 4x speed
+	level.panzerfest.currentSpeedMultiplier = 3.0f;  // Same as max survival level (3x)
 	level.panzerfest.currentDelay           = 0;
 
 	// Store original teams and switch everyone to enemy team (except target)
@@ -1859,15 +1859,20 @@ void G_BonusPlayerKill(gentity_t *attacker)
 		attacker->client->killStreakBonusLevel = newBonusLevel;
 
 		// Notify player of bonus level change (skip if panzerfest active)
+		// Use bp (banner - top of screen) for prominent display that won't be overwritten
 		if (newBonusLevel > 0 && !level.panzerfest.active)
 		{
+			int fireRateBonus = newBonusLevel + 1;  // Level 1 = 2x, Level 6 = 7x
+
 			if (newBonusLevel == MAX_BONUS_LEVEL)
 			{
-				trap_SendServerCommand(clientNum, "cp \"^1KILL STREAK: ^6MAXIMUM FIRE RATE!\"");
+				trap_SendServerCommand(clientNum, va("bp \"^1KILL STREAK MAX! ^6Fire Rate: %dx\"",
+					fireRateBonus));
 			}
 			else
 			{
-				trap_SendServerCommand(clientNum, va("cp \"^1KILL STREAK: ^3Fire Rate Level %d\"", newBonusLevel));
+				trap_SendServerCommand(clientNum, va("bp \"^1KILL STREAK Lv%d! ^3Fire Rate: %dx\"",
+					newBonusLevel, fireRateBonus));
 			}
 		}
 	}
@@ -1892,7 +1897,7 @@ void G_BonusPlayerKill(gentity_t *attacker)
 
 		trap_SendServerCommand(clientNum, va("panzerfest_bonus %d %d %d %d %d %d %d %d",
 			attacker->client->killStreakBonusLevel,
-			0,  // survivalLevel (not implemented in C yet)
+			attacker->client->survivalSpeedLevel,  // Now implemented in C!
 			panzerfestPhase,
 			timeLeft,
 			isTarget,
@@ -1925,8 +1930,16 @@ void G_BonusPlayerSpawn(gentity_t *ent, qboolean revived)
 		// Full spawn - reset kill streak
 		ent->client->killStreakCount      = 0;
 		ent->client->killStreakBonusLevel = 0;
+
+		// Reset survival mode - start fresh timer
+		ent->client->survivalSpawnTime  = level.time;
+		ent->client->survivalSpeedLevel = 0;
 	}
-	// If revived, keep the kill streak (player didn't "die")
+	else
+	{
+		// Revived - keep kill streak and survival level, but DON'T reset spawn time
+		// Player keeps their earned speed bonus since they didn't "die"
+	}
 }
 
 /**
@@ -1944,15 +1957,165 @@ void G_BonusPlayerDeath(gentity_t *ent)
 
 	clientNum = ent - g_entities;
 
+	// Log survival level lost on death (if any)
+	if (ent->client->survivalSpeedLevel > 0)
+	{
+		G_Printf("^2SURVIVAL: ^7Client %d died with Level %d (lost +%d%% speed)\n",
+			clientNum, ent->client->survivalSpeedLevel, ent->client->survivalSpeedLevel * 5);
+	}
+
 	// Reset kill streak on death
 	ent->client->killStreakCount      = 0;
 	ent->client->killStreakBonusLevel = 0;
+
+	// Reset survival mode on death
+	ent->client->survivalSpawnTime  = 0;
+	ent->client->survivalSpeedLevel = 0;
 
 	// Send HUD reset to client (all zeros, fire rate back to normal 100)
 	trap_SendServerCommand(clientNum, va("panzerfest_bonus 0 0 0 0 0 0 %d 100", PANZERFEST_KILLS));
 
 	// Check if panzerfest target died
 	G_PanzerfestCheckDeath(ent);
+}
+
+// ============================================================================
+// SURVIVAL MODE - Speed bonus for staying alive
+// ============================================================================
+
+#define SURVIVAL_INTERVAL_MS    30000  // 30 seconds between speed bonuses
+#define SURVIVAL_MAX_LEVEL      6      // Maximum speed bonus level
+#define SURVIVAL_SPEED_PER_LEVEL 0.33f // +33% speed per level (Level 1=1.33x, Level 6=2.98x ~3x)
+#define SURVIVAL_MAX_SPEED      3.0f   // Max speed multiplier (used for panzerfest too)
+
+/**
+ * @brief Get speed multiplier based on survival level
+ * @param[in] clientNum Client number
+ * @return Speed multiplier (1.0 = normal, up to 3.0 at max level)
+ */
+float G_SurvivalGetSpeedMultiplier(int clientNum)
+{
+	gclient_t *cl;
+
+	if (clientNum < 0 || clientNum >= MAX_CLIENTS)
+	{
+		return 1.0f;
+	}
+
+	cl = &level.clients[clientNum];
+	if (!cl)
+	{
+		return 1.0f;
+	}
+
+	// Return multiplier: 1.0 + (level * 0.05)
+	// Level 0 = 1.0x, Level 6 = 1.30x
+	return 1.0f + (cl->survivalSpeedLevel * SURVIVAL_SPEED_PER_LEVEL);
+}
+
+/**
+ * @brief Check and update survival mode for a player
+ * Called every frame from ClientThink_real
+ * @param[in,out] ent The player entity
+ */
+void G_SurvivalThink(gentity_t *ent)
+{
+	int       clientNum;
+	int       timeAlive;
+	int       expectedLevel;
+	gclient_t *cl;
+
+	if (!ent || !ent->client)
+	{
+		return;
+	}
+
+	cl        = ent->client;
+	clientNum = ent - g_entities;
+
+	// Skip spectators and dead players
+	if (cl->sess.sessionTeam == TEAM_SPECTATOR || cl->ps.pm_type == PM_DEAD)
+	{
+		return;
+	}
+
+	// Skip bots
+	if (ent->r.svFlags & SVF_BOT)
+	{
+		return;
+	}
+
+	// Skip if spawn time not set (shouldn't happen but be safe)
+	if (cl->survivalSpawnTime == 0)
+	{
+		return;
+	}
+
+	// Calculate how long player has been alive
+	timeAlive = level.time - cl->survivalSpawnTime;
+
+	// Calculate what level they should be at based on time alive
+	// Level 1 at 30s, Level 2 at 60s, etc.
+	expectedLevel = timeAlive / SURVIVAL_INTERVAL_MS;
+	if (expectedLevel > SURVIVAL_MAX_LEVEL)
+	{
+		expectedLevel = SURVIVAL_MAX_LEVEL;
+	}
+
+	// Check if player leveled up
+	if (expectedLevel > cl->survivalSpeedLevel)
+	{
+		int oldLevel = cl->survivalSpeedLevel;
+		cl->survivalSpeedLevel = expectedLevel;
+
+		// Announce level up to player with banner (top of screen)
+		// Use bp (banner) for prominent display that won't be overwritten
+		{
+			float speedMultiplier = 1.0f + (expectedLevel * SURVIVAL_SPEED_PER_LEVEL);
+
+			if (expectedLevel == SURVIVAL_MAX_LEVEL)
+			{
+				trap_SendServerCommand(clientNum, va("bp \"^2SURVIVAL MAX! ^6Speed: %.1fx\"",
+					speedMultiplier));
+			}
+			else
+			{
+				trap_SendServerCommand(clientNum, va("bp \"^2SURVIVAL Lv%d! ^3Speed: %.1fx\"",
+					expectedLevel, speedMultiplier));
+			}
+		}
+
+		G_Printf("^2SURVIVAL: ^7Client %d leveled up: %d -> %d (alive %ds)\n",
+			clientNum, oldLevel, expectedLevel, timeAlive / 1000);
+
+		// Send HUD update
+		// Format: panzerfest_bonus <killStreakLevel> <survivalLevel> <panzerfestPhase> <timeLeft> <isTarget> <killCount> <killsNeeded> <fireRateMultiplier>
+		{
+			int fireRateMultiplier = 100 + (cl->killStreakBonusLevel * 100);
+			int panzerfestPhase    = level.panzerfest.active ? level.panzerfest.phase : 0;
+			int isTarget           = (level.panzerfest.active && clientNum == level.panzerfest.targetClientNum) ? 1 : 0;
+			int timeLeft           = 0;
+
+			if (level.panzerfest.active && isTarget)
+			{
+				int totalElapsed  = level.time - level.panzerfest.startTime;
+				int totalDuration = PHASE_DURATION_MS * 4;
+				timeLeft          = (totalDuration - totalElapsed) / 1000;
+				if (timeLeft < 0) timeLeft = 0;
+				fireRateMultiplier = (int)(level.panzerfest.currentMultiplier * 100);
+			}
+
+			trap_SendServerCommand(clientNum, va("panzerfest_bonus %d %d %d %d %d %d %d %d",
+				cl->killStreakBonusLevel,
+				cl->survivalSpeedLevel,
+				panzerfestPhase,
+				timeLeft,
+				isTarget,
+				cl->killStreakCount,
+				PANZERFEST_KILLS,
+				fireRateMultiplier));
+		}
+	}
 }
 
 /**
@@ -2067,6 +2230,9 @@ void ClientThink_real(gentity_t *ent)
 		client->rickrollForcedWeapon = 0;
 		client->rickrollForcedWeaponUntil = 0;
 	}
+
+	// ETMan: Survival mode - check for speed level up every 30 seconds alive
+	G_SurvivalThink(ent);
 
 	if ((ent->s.eFlags & EF_MOUNTEDTANK) && ent->tagParent)
 	{
@@ -2264,6 +2430,22 @@ void ClientThink_real(gentity_t *ent)
 		if (panzerfestSpeed > 1.0f)
 		{
 			client->ps.speed *= panzerfestSpeed;
+		}
+	}
+
+	// ETMan: Survival mode speed multiplier (pure C)
+	{
+		float survivalSpeed = G_SurvivalGetSpeedMultiplier(ent - g_entities);
+		if (survivalSpeed > 1.0f)
+		{
+			float oldSpeed = client->ps.speed;
+			client->ps.speed *= survivalSpeed;
+			// Debug: Log speed change occasionally (every 5 seconds based on level.time)
+			if (client->survivalSpeedLevel > 0 && (level.time % 5000) < 50)
+			{
+				G_Printf("^2SURVIVAL DEBUG: ^7Client %d speed: %.0f -> %.0f (x%.2f, level %d)\n",
+					(int)(ent - g_entities), oldSpeed, client->ps.speed, survivalSpeed, client->survivalSpeedLevel);
+			}
 		}
 	}
 
