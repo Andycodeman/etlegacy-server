@@ -229,6 +229,43 @@ static void SV_CurrentMap_f(void)
 }
 
 /**
+ * @brief SV_SetNextMapCvar - Set nextmap cvar to next map in rotation
+ * Called from sv_init.c after map loads so "vstr nextmap" works correctly
+ */
+void SV_SetNextMapCvar(void)
+{
+	const char *currentMap = Cvar_VariableString("mapname");
+	const char *nextMap;
+	int i;
+
+	SV_LoadMapRotation();
+
+	if (mapRotationCount == 0)
+	{
+		return;
+	}
+
+	// Find current map
+	currentMapIndex = 0;
+	for (i = 0; i < mapRotationCount; i++)
+	{
+		if (!Q_stricmp(currentMap, mapRotation[i]))
+		{
+			currentMapIndex = i;
+			break;
+		}
+	}
+
+	// Get next map
+	nextMap = mapRotation[(currentMapIndex + 1) % mapRotationCount];
+
+	// Set nextmap cvar to "map <nextmap>" so vstr nextmap works
+	Cvar_Set("nextmap", va("map %s", nextMap));
+
+	Com_Printf("[MapRotation] Set nextmap to: %s\n", nextMap);
+}
+
+/**
  * @brief Returns the player with name from Cmd_Argv(1)
  * @return
  */

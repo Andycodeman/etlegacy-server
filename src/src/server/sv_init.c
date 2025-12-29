@@ -1020,6 +1020,13 @@ void SV_SpawnServer(const char *server)
 
 	SV_UpdateConfigStrings();
 
+	// ETMan: Set nextmap cvar for map rotation
+	// This ensures "vstr nextmap" at intermission loads the correct next map
+	{
+		extern void SV_SetNextMapCvar(void);
+		SV_SetNextMapCvar();
+	}
+
 	Com_Printf("---------------------------------\n");
 }
 
