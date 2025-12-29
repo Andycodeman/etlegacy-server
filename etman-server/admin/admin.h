@@ -322,5 +322,6 @@ void Cmd_Fling(int slot, AdminPlayer *caller, const char *args);
 void Cmd_Up(int slot, AdminPlayer *caller, const char *args);
 void Cmd_KickBots(int slot, AdminPlayer *caller, const char *args);
 void Cmd_PutBots(int slot, AdminPlayer *caller, const char *args);
+void Cmd_TimeLeft(int slot, AdminPlayer *caller, const char *args);
 
 #endif /* ETMAN_ADMIN_H */

@@ -329,6 +329,7 @@ extern vmCvar_t g_debugEvents;
 
 
 extern vmCvar_t g_suddenDeath;
+extern vmCvar_t g_forceTimelimitEnd;
 extern vmCvar_t g_dropObjDelay;
 
 // flood protection

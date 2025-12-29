@@ -71,6 +71,7 @@ static const AdminCommand g_commands[] = {
     { "up",         Cmd_Up,         4, "!up <player> [strength]",      "Launch player into sky" },
     { "kickbots",   Cmd_KickBots,   3, "!kickbots",                    "Remove all bots" },
     { "putbots",    Cmd_PutBots,    3, "!putbots [count]",             "Add bots (default: 12)" },
+    { "timeleft",   Cmd_TimeLeft,   3, "!timeleft <mm:ss>",            "Set remaining map time" },
 
     { NULL, NULL, 0, NULL, NULL }  /* Terminator */
 };

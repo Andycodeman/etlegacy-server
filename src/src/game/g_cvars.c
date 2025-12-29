@@ -348,6 +348,7 @@ vmCvar_t g_debugEvents;
 vmCvar_t g_debugAnim;
 
 vmCvar_t g_suddenDeath;
+vmCvar_t g_forceTimelimitEnd;
 
 vmCvar_t g_dropObjDelay;
 
@@ -424,8 +425,8 @@ cvarTable_t gameCvarTable[] =
 	{ &g_noTeamSwitching,                 "g_noTeamSwitching",                 "0",                          CVAR_ARCHIVE,                                    0, qtrue,  qfalse },
 
 	{ &g_userTimeLimit,                   "g_userTimeLimit",                   "0",                          0,                                               0, qfalse, qtrue  },
-	{ &g_userAlliedRespawnTime,           "g_userAlliedRespawnTime",           "0",                          0,                                               0, qfalse, qtrue  },
-	{ &g_userAxisRespawnTime,             "g_userAxisRespawnTime",             "0",                          0,                                               0, qfalse, qtrue  },
+	{ &g_userAlliedRespawnTime,           "g_userAlliedRespawnTime",           "2",                          0,                                               0, qfalse, qtrue  },
+	{ &g_userAxisRespawnTime,             "g_userAxisRespawnTime",             "2",                          0,                                               0, qfalse, qtrue  },
 
 	{ &g_swapteams,                       "g_swapteams",                       "0",                          CVAR_ROM,                                        0, qfalse, qfalse },
 
@@ -652,8 +653,8 @@ cvarTable_t gameCvarTable[] =
 	{ &g_shakeIntensity,                  "g_shakeIntensity",                  "100",                        0,                                               0, qfalse, qfalse },  // 0=off, 100=normal, 200=double
 	{ &g_fallDamage,                      "g_fallDamage",                      "1",                          0,                                               0, qfalse, qfalse },  // 1=on, 0=off (overrides g_misc)
 	{ &g_fallDamageScale,                 "g_fallDamageScale",                 "1.0",                        0,                                               0, qtrue,  qtrue  },  // ETMan: Scale fall damage (0.0-1.0)
-	{ &g_intermissionTime,                "g_intermissionTime",                "60",                         0,                                               0, qfalse, qfalse },
-	{ &g_intermissionReadyPercent,        "g_intermissionReadyPercent",        "100",                        0,                                               0, qfalse, qfalse },
+	{ &g_intermissionTime,                "g_intermissionTime",                "30",                         0,                                               0, qfalse, qfalse },
+	{ &g_intermissionReadyPercent,        "g_intermissionReadyPercent",        "60",                         0,                                               0, qfalse, qfalse },
 	{ &g_mapScriptDirectory,              "g_mapScriptDirectory",              "mapscripts",                 0,                                               0, qfalse, qfalse },
 	{ &g_mapConfigs,                      "g_mapConfigs",                      "",                           0,                                               0, qfalse, qfalse },
 	{ &g_customConfig,                    "g_customConfig",                    "defaultpublic",              CVAR_ARCHIVE,                                    0, qfalse, qfalse },
@@ -684,6 +685,7 @@ cvarTable_t gameCvarTable[] =
 	{ &g_stickyCharge,                    "g_stickyCharge",                    "0",                          CVAR_ARCHIVE,                                    0, qfalse, qfalse },
 	{ &g_xpSaver,                         "g_xpSaver",                         "0",                          CVAR_ARCHIVE,                                    0, qfalse, qfalse },
 	{ &g_suddenDeath,                     "g_suddenDeath",                     "0",                          CVAR_ARCHIVE,                                    0, qtrue,  qfalse },
+	{ &g_forceTimelimitEnd,               "g_forceTimelimitEnd",               "0",                          CVAR_ARCHIVE,                                    0, qtrue,  qfalse },
 	{ &g_dropObjDelay,                    "g_dropObjDelay",                    "3000",                       CVAR_ARCHIVE,                                    0, qtrue,  qfalse },
 
 	{ &g_floodProtection,                 "g_floodProtection",                 "1",                          CVAR_ARCHIVE,                                    0, qtrue,  qfalse },

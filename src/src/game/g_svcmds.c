@@ -2523,6 +2523,60 @@ void Svcmd_Qsay_f(void)
 }
 
 /**
+ * @brief Svcmd_SetTimeLeft - Set remaining map time in seconds
+ * Usage: settimeleft <seconds>
+ * Calculates and sets timelimit so that remaining time equals specified value
+ */
+static void Svcmd_SetTimeLeft(void)
+{
+	char arg[16];
+	int  desiredSeconds;
+	int  elapsedMs;
+	int  newTimelimitMs;
+	float newTimelimitMin;
+	extern vmCvar_t g_timelimit;
+
+	if (trap_Argc() < 2)
+	{
+		G_Printf("Usage: settimeleft <seconds>\n");
+		G_Printf("Example: settimeleft 60 (1 minute remaining)\n");
+		return;
+	}
+
+	trap_Argv(1, arg, sizeof(arg));
+	desiredSeconds = atoi(arg);
+
+	if (desiredSeconds < 5)
+	{
+		desiredSeconds = 5; // Minimum 5 seconds
+	}
+
+	// Calculate elapsed time since map start (use timeCurrent for accuracy)
+	elapsedMs = level.timeCurrent - level.startTime;
+
+	// New timelimit = elapsed + desired remaining
+	newTimelimitMs = elapsedMs + (desiredSeconds * 1000);
+	newTimelimitMin = (float)newTimelimitMs / 60000.0f;
+
+	// Set the timelimit cvar and update the vmCvar
+	trap_Cvar_Set("timelimit", va("%.2f", newTimelimitMin));
+	trap_Cvar_Update(&g_timelimit);
+
+	G_Printf("[ETMan] Time remaining set to %d:%02d\n",
+		desiredSeconds / 60, desiredSeconds % 60);
+	G_Printf("[ETMan] DEBUG: elapsedMs=%d, desiredSec=%d, newTimelimitMin=%.2f\n",
+		elapsedMs, desiredSeconds, newTimelimitMin);
+	G_Printf("[ETMan] DEBUG: g_timelimit.value=%.2f, threshold=%d ms\n",
+		g_timelimit.value, (int)(g_timelimit.value * 60000));
+	G_Printf("[ETMan] DEBUG: level.timeCurrent=%d, level.startTime=%d, diff=%d\n",
+		level.timeCurrent, level.startTime, level.timeCurrent - level.startTime);
+
+	// Notify all players
+	trap_SendServerCommand(-1, va("cp \"^3Time remaining: ^7%d:%02d\"",
+		desiredSeconds / 60, desiredSeconds % 60));
+}
+
+/**
  * @brief Svcmd_PassVote_f
  */
 static void Svcmd_PassVote_f(void)
@@ -2597,6 +2651,7 @@ static consoleCommandTable_t consoleCommandTable[] =
 	{ "passvote",                   Svcmd_PassVote_f              },
 	{ "cancelvote",                 Svcmd_CancelVote_f            },
 	{ "qsay",                       Svcmd_Qsay_f                  },
+	{ "settimeleft",                Svcmd_SetTimeLeft             },
 #ifdef FEATURE_LUA
 	{ "gLoadLua",                   Svcmd_LoadLua_f               },
 #endif

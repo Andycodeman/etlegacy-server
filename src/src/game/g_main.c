@@ -3341,8 +3341,8 @@ void CheckIntermissionExit(void)
 
 			cl = level.clients + level.sortedClients[i];
 
-			// changed from counting bots to just ignoring them
-			if (cl->pers.connected != CON_CONNECTED || cl->sess.sessionTeam == TEAM_SPECTATOR
+			// ETMan: Include spectators in ready vote, only skip bots
+			if (cl->pers.connected != CON_CONNECTED
 			    || (g_entities[level.sortedClients[i]].r.svFlags & SVF_BOT))
 			{
 				continue;
@@ -3531,27 +3531,31 @@ void CheckExitRules(void)
 			}
 			else
 			{
-				// check for sudden death
-				if (ScoreIsTied())
+				// ETMan: g_forceTimelimitEnd 1 = end immediately, 0 = original sudden death behavior
+				if (!g_forceTimelimitEnd.integer)
 				{
-					// score is tied, so don't end the game
-					return;
-				}
-
-				if (level.suddenDeath)
-				{
-					if (DynamiteOnObjective())
+					// check for sudden death
+					if (ScoreIsTied())
 					{
+						// score is tied, so don't end the game
 						return;
 					}
-					level.suddenDeath = 0;
-				}
-				else
-				{
-					if (g_suddenDeath.integer && DynamiteOnObjective() && g_gametype.integer != GT_WOLF_STOPWATCH)
+
+					if (level.suddenDeath)
 					{
-						level.suddenDeath = 1;
-						return;
+						if (DynamiteOnObjective())
+						{
+							return;
+						}
+						level.suddenDeath = 0;
+					}
+					else
+					{
+						if (g_suddenDeath.integer && DynamiteOnObjective() && g_gametype.integer != GT_WOLF_STOPWATCH)
+						{
+							level.suddenDeath = 1;
+							return;
+						}
 					}
 				}
 			}

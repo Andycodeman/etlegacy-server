@@ -1140,3 +1140,107 @@ void Cmd_PutBots(int slot, AdminPlayer *caller, const char *args) {
     snprintf(cmd, sizeof(cmd), "bot minbots %d; bot maxbots %d", count, count);
     Admin_SendAction(ADMIN_ACTION_RCON, 0, cmd);
 }
+
+/*
+ * Helper: Query server status to get elapsed time
+ * Returns elapsed seconds, or -1 on error
+ */
+static int QueryElapsedTime(void) {
+    int sock;
+    struct sockaddr_in serverAddr;
+    char response[2048];
+    int len;
+    struct timeval tv;
+
+    sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+    if (sock < 0) return -1;
+
+    tv.tv_sec = 1;
+    tv.tv_usec = 0;
+    setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+
+    memset(&serverAddr, 0, sizeof(serverAddr));
+    serverAddr.sin_family = AF_INET;
+    serverAddr.sin_port = htons(27960);
+    serverAddr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+
+    /* Query server status */
+    const char *request = "\xff\xff\xff\xff" "getstatus";
+    if (sendto(sock, request, strlen(request), 0,
+               (struct sockaddr *)&serverAddr, sizeof(serverAddr)) < 0) {
+        close(sock);
+        return -1;
+    }
+
+    len = recv(sock, response, sizeof(response) - 1, 0);
+    close(sock);
+
+    if (len <= 0) return -1;
+    response[len] = '\0';
+
+    /* Look for g_levelStartTime in response */
+    char *p = strstr(response, "g_levelStartTime\\");
+    if (p) {
+        p += 17; /* Skip "g_levelStartTime\" */
+        int startTime = atoi(p);
+
+        /* Also need current server time - look for leveltime or similar */
+        /* Actually getstatus doesn't give us current time directly */
+    }
+
+    /* Fallback: we can't get elapsed time from getstatus easily
+     * Let's just return -1 and handle it in the command */
+    return -1;
+}
+
+/*
+ * !timeleft <mm:ss> - Set remaining time on the map
+ * Sets timelimit so that remaining time equals specified value
+ *
+ * Since we can't easily query elapsed time, we use a workaround:
+ * We query the server for current timelimit and time remaining via rcon status,
+ * but that's complex. For simplicity, we'll just set timelimit to a low value
+ * which will cause the map to end approximately when specified.
+ *
+ * Better approach: Add a C command "settimeleft" that does the calculation server-side.
+ */
+void Cmd_TimeLeft(int slot, AdminPlayer *caller, const char *args) {
+    if (!args || !args[0]) {
+        Admin_SendResponse(slot, "^1Usage: ^3!timeleft <mm:ss>");
+        Admin_SendResponse(slot, "^7Example: ^3!timeleft 0:30 ^7(30 sec remaining)");
+        return;
+    }
+
+    int minutes = 0, seconds = 0;
+
+    /* Parse mm:ss format */
+    if (strchr(args, ':')) {
+        sscanf(args, "%d:%d", &minutes, &seconds);
+    } else {
+        /* Just seconds or just minutes */
+        int val = atoi(args);
+        if (val >= 60) {
+            minutes = val;
+            seconds = 0;
+        } else {
+            minutes = 0;
+            seconds = val;
+        }
+    }
+
+    if (minutes < 0) minutes = 0;
+    if (seconds < 0) seconds = 0;
+    if (minutes == 0 && seconds < 5) {
+        seconds = 5; /* Minimum 5 seconds */
+    }
+
+    int totalSeconds = minutes * 60 + seconds;
+
+    /* Use the settimeleft rcon command we'll add to the server */
+    char cmd[64];
+    snprintf(cmd, sizeof(cmd), "settimeleft %d", totalSeconds);
+
+    Admin_SendResponse(255, "^3%s ^7set time remaining to ^3%d:%02d",
+                       caller->name, minutes, seconds);
+    Admin_SendAction(ADMIN_ACTION_RCON, 0, cmd);
+}
