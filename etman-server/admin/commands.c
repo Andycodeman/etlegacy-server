@@ -13,6 +13,10 @@
 #include <string.h>
 #include <time.h>
 #include <libpq-fe.h>
+#include <unistd.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
 
 /* Use DB_GetConnection() from db_manager.h for database access */
 
@@ -124,119 +128,189 @@ void Cmd_Time(int slot, AdminPlayer *caller, const char *args) {
 }
 
 /*
+ * Helper: Load maps from maplist.txt
+ * Returns number of maps loaded, stores in maps array
+ * maplist.txt format: one map per line, # for comments
+ * This is the SAME file the C server reads (sv_ccmds.c SV_LoadMapRotation)
+ */
+static int LoadMapList(char maps[][64], int maxMaps) {
+    FILE *fp = fopen("/home/andy/etlegacy/legacy/maplist.txt", "r");
+    if (!fp) {
+        return 0;
+    }
+
+    char line[256];
+    int mapCount = 0;
+
+    while (fgets(line, sizeof(line), fp) && mapCount < maxMaps) {
+        /* Trim leading whitespace */
+        char *p = line;
+        while (*p == ' ' || *p == '\t') p++;
+
+        /* Skip empty lines and comments */
+        if (*p == '\0' || *p == '\n' || *p == '\r' || *p == '#' || *p == '/') {
+            continue;
+        }
+
+        /* Trim trailing whitespace/newline */
+        int len = strlen(p);
+        while (len > 0 && (p[len-1] == ' ' || p[len-1] == '\t' || p[len-1] == '\n' || p[len-1] == '\r')) {
+            p[--len] = '\0';
+        }
+
+        if (len > 0) {
+            strncpy(maps[mapCount], p, 63);
+            maps[mapCount][63] = '\0';
+            mapCount++;
+        }
+    }
+    fclose(fp);
+    return mapCount;
+}
+
+/*
+ * Helper: Query current map from game server via rcon
+ * Sends "rcon <password> currentmap" and parses response
+ */
+static int QueryCurrentMap(char *outMap, int maxLen) {
+    int sock;
+    struct sockaddr_in serverAddr;
+    char request[128];
+    char response[512];
+    int len;
+    struct timeval tv;
+
+    /* Create UDP socket */
+    sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+    if (sock < 0) {
+        return 0;
+    }
+
+    /* Set timeout */
+    tv.tv_sec = 1;
+    tv.tv_usec = 0;
+    setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+
+    /* Server address */
+    memset(&serverAddr, 0, sizeof(serverAddr));
+    serverAddr.sin_family = AF_INET;
+    serverAddr.sin_port = htons(27960);
+    serverAddr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+
+    /* Build rcon request: \xff\xff\xff\xffrcon <password> currentmap */
+    snprintf(request, sizeof(request), "\xff\xff\xff\xff" "rcon emma01 currentmap");
+
+    /* Send request */
+    if (sendto(sock, request, strlen(request), 0,
+               (struct sockaddr *)&serverAddr, sizeof(serverAddr)) < 0) {
+        close(sock);
+        return 0;
+    }
+
+    /* Receive response */
+    len = recv(sock, response, sizeof(response) - 1, 0);
+    close(sock);
+
+    if (len <= 0) {
+        return 0;
+    }
+    response[len] = '\0';
+
+    /* Response format: \xff\xff\xff\xffprint\n<mapname>\n */
+    char *p = response;
+    /* Skip header */
+    if (len > 4 && memcmp(p, "\xff\xff\xff\xff", 4) == 0) {
+        p += 4;
+    }
+    /* Skip "print\n" */
+    if (strncmp(p, "print\n", 6) == 0) {
+        p += 6;
+    }
+
+    /* Copy map name, trim whitespace */
+    int mapLen = 0;
+    while (*p && *p != '\n' && *p != '\r' && mapLen < maxLen - 1) {
+        outMap[mapLen++] = *p++;
+    }
+    outMap[mapLen] = '\0';
+
+    return mapLen > 0 ? 1 : 0;
+}
+
+/*
  * !nextmap - Show next map in rotation
+ * Queries current map via rcon, finds next in maplist.txt
  */
 void Cmd_NextMap(int slot, AdminPlayer *caller, const char *args) {
     (void)caller;
     (void)args;
 
-    /* Show next map from rotation file */
-    FILE *fp = fopen("/home/andy/etlegacy/legacy/lua/map_rotation.lua", "r");
-    if (!fp) {
-        Admin_SendResponse(slot, "^1Error: Could not read map rotation file");
+    char maps[64][64];
+    int mapCount = LoadMapList(maps, 64);
+
+    if (mapCount == 0) {
+        Admin_SendResponse(slot, "^1Error: Could not read maplist.txt or no maps defined");
         return;
     }
 
-    char line[256];
-    char maps[20][64];
-    int mapCount = 0;
-    bool inMapsTable = false;
+    /* Query current map from game server */
     char currentMap[64] = "";
+    if (!QueryCurrentMap(currentMap, sizeof(currentMap))) {
+        Admin_SendResponse(slot, "^1Error: Could not query current map from server");
+        return;
+    }
 
-    /* Get current map */
-    /* TODO: Query from server, for now just show the rotation */
-
-    while (fgets(line, sizeof(line), fp) && mapCount < 20) {
-        if (strstr(line, "M.maps = {")) {
-            inMapsTable = true;
-            continue;
-        }
-        if (inMapsTable && strchr(line, '}')) {
+    /* Find current map in rotation */
+    int currentIndex = -1;
+    for (int i = 0; i < mapCount; i++) {
+        if (strcasecmp(currentMap, maps[i]) == 0) {
+            currentIndex = i;
             break;
         }
-        if (inMapsTable) {
-            char *start = strchr(line, '"');
-            if (start) {
-                start++;
-                char *end = strchr(start, '"');
-                if (end) {
-                    *end = '\0';
-                    strncpy(maps[mapCount], start, 63);
-                    maps[mapCount][63] = '\0';
-                    mapCount++;
-                }
-            }
-        }
     }
-    fclose(fp);
 
-    if (mapCount > 0) {
-        Admin_SendResponse(slot, "^3Next map in rotation: ^7%s", maps[0]);
-        Admin_SendResponse(slot, "^7Use ^3!rotate ^7to change now.");
+    if (currentIndex < 0) {
+        /* Current map not in rotation, next will be first map */
+        Admin_SendResponse(slot, "^3Current: ^7%s ^1(not in rotation)", currentMap);
+        Admin_SendResponse(slot, "^3Next map: ^7%s", maps[0]);
     } else {
-        Admin_SendResponse(slot, "^1Could not determine next map");
+        int nextIndex = (currentIndex + 1) % mapCount;
+        Admin_SendResponse(slot, "^3Current: ^7%s ^3(%d/%d)", currentMap, currentIndex + 1, mapCount);
+        Admin_SendResponse(slot, "^3Next map: ^7%s", maps[nextIndex]);
     }
+
+    Admin_SendResponse(slot, "^7Use ^3!rotate ^7to change now.");
 }
 
 /*
  * !maplist - Show map rotation
- * Reads from the Lua map_rotation.lua file to get actual rotation
+ * Reads from maplist.txt (same as server C code)
  */
 void Cmd_MapList(int slot, AdminPlayer *caller, const char *args) {
     (void)caller;
     (void)args;
 
-    /* Read actual map rotation from lua/map_rotation.lua */
-    FILE *fp = fopen("/home/andy/etlegacy/legacy/lua/map_rotation.lua", "r");
-    if (!fp) {
-        Admin_SendResponse(slot, "^3=== Map Rotation ===");
-        Admin_SendResponse(slot, "^1Error: Could not read map rotation file");
+    char allMaps[64][64];
+    int mapCount = LoadMapList(allMaps, 64);
+
+    Admin_SendResponse(slot, "^3=== Map Rotation (%d maps) ===", mapCount);
+
+    if (mapCount == 0) {
+        Admin_SendResponse(slot, "^1No maps found in maplist.txt");
         return;
     }
 
-    char line[256];
-    char maps[512] = "";
-    int mapCount = 0;
-    bool inMapsTable = false;
-
-    while (fgets(line, sizeof(line), fp)) {
-        /* Look for M.maps = { */
-        if (strstr(line, "M.maps = {")) {
-            inMapsTable = true;
-            continue;
+    /* Build comma-separated list */
+    char mapStr[512] = "";
+    for (int i = 0; i < mapCount; i++) {
+        if (i > 0) {
+            strncat(mapStr, ", ", sizeof(mapStr) - strlen(mapStr) - 1);
         }
-
-        /* End of maps table */
-        if (inMapsTable && strchr(line, '}')) {
-            break;
-        }
-
-        /* Parse map names inside the table */
-        if (inMapsTable) {
-            char *start = strchr(line, '"');
-            if (start) {
-                start++;
-                char *end = strchr(start, '"');
-                if (end) {
-                    *end = '\0';
-                    if (mapCount > 0) {
-                        strncat(maps, ", ", sizeof(maps) - strlen(maps) - 1);
-                    }
-                    strncat(maps, start, sizeof(maps) - strlen(maps) - 1);
-                    mapCount++;
-                }
-            }
-        }
+        strncat(mapStr, allMaps[i], sizeof(mapStr) - strlen(mapStr) - 1);
     }
-    fclose(fp);
 
-    Admin_SendResponse(slot, "^3=== Map Rotation (%d maps) ===", mapCount);
-    if (mapCount > 0) {
-        Admin_SendResponse(slot, "^7%s", maps);
-    } else {
-        Admin_SendResponse(slot, "^1No maps found in rotation");
-    }
-    Admin_SendResponse(slot, "^3Use ^7!map <name> ^3to change maps.");
+    Admin_SendResponse(slot, "^7%s", mapStr);
+    Admin_SendResponse(slot, "^3Use ^7!rotate ^3to advance, ^7!map <name> ^3to change.");
 }
 
 /*

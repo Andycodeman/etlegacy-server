@@ -46,8 +46,187 @@
 
 static time_t uptimeSince;
 
+// ETMan - Dynamic Map Rotation
+// Reads map list from maplist.txt (one map per line)
+#define MAX_MAP_ROTATION 64
+#define MAX_MAPNAME_LEN  64
+
+static char mapRotation[MAX_MAP_ROTATION][MAX_MAPNAME_LEN];
+static int  mapRotationCount = 0;
+static int  currentMapIndex  = 0;
+
 // Forward declaration from sv_init.c
 void SV_DynamicMapSwitch(const char *mapname);
+void SV_SpawnServer(const char *server);
+
+/**
+ * @brief Load map rotation from maplist.txt
+ * File format: one map name per line, # for comments
+ */
+static void SV_LoadMapRotation(void)
+{
+	fileHandle_t f;
+	int          len;
+	char         buf[4096];
+	char         *p, *line;
+
+	mapRotationCount = 0;
+
+	len = FS_FOpenFileRead("maplist.txt", &f, qfalse);
+	if (len <= 0)
+	{
+		Com_Printf("^3WARNING: maplist.txt not found, using default rotation\n");
+		// Fallback to a single default map
+		Q_strncpyz(mapRotation[0], "baserace", MAX_MAPNAME_LEN);
+		mapRotationCount = 1;
+		return;
+	}
+
+	if (len >= (int)sizeof(buf))
+	{
+		Com_Printf("^1ERROR: maplist.txt too large\n");
+		FS_FCloseFile(f);
+		return;
+	}
+
+	FS_Read(buf, len, f);
+	buf[len] = '\0';
+	FS_FCloseFile(f);
+
+	// Parse line by line
+	p = buf;
+	while (*p && mapRotationCount < MAX_MAP_ROTATION)
+	{
+		// Skip leading whitespace
+		while (*p == ' ' || *p == '\t')
+		{
+			p++;
+		}
+
+		// Find end of line
+		line = p;
+		while (*p && *p != '\n' && *p != '\r')
+		{
+			p++;
+		}
+
+		// Null terminate line
+		if (*p)
+		{
+			*p++ = '\0';
+			// Skip additional newline chars (CRLF)
+			while (*p == '\n' || *p == '\r')
+			{
+				p++;
+			}
+		}
+
+		// Skip empty lines and comments
+		if (line[0] == '\0' || line[0] == '#' || line[0] == '/')
+		{
+			continue;
+		}
+
+		// Trim trailing whitespace
+		{
+			int lineLen = strlen(line);
+			while (lineLen > 0 && (line[lineLen - 1] == ' ' || line[lineLen - 1] == '\t' || line[lineLen - 1] == '\r'))
+			{
+				line[--lineLen] = '\0';
+			}
+		}
+
+		// Add to rotation
+		Q_strncpyz(mapRotation[mapRotationCount], line, MAX_MAPNAME_LEN);
+		mapRotationCount++;
+	}
+
+	Com_Printf("Loaded %d maps from maplist.txt\n", mapRotationCount);
+}
+
+/**
+ * @brief Find current map index in rotation
+ */
+static void SV_UpdateMapIndex(void)
+{
+	const char *currentMap = Cvar_VariableString("mapname");
+	int i;
+
+	for (i = 0; i < mapRotationCount; i++)
+	{
+		if (!Q_stricmp(currentMap, mapRotation[i]))
+		{
+			currentMapIndex = i;
+			return;
+		}
+	}
+	// Map not in rotation, start from beginning
+	currentMapIndex = 0;
+}
+
+/**
+ * @brief SV_Rotate_f - Advance to next map in rotation
+ */
+static void SV_Rotate_f(void)
+{
+	const char *nextMap;
+
+	// Reload map list each time (allows live editing)
+	SV_LoadMapRotation();
+
+	if (mapRotationCount == 0)
+	{
+		Com_Printf("^1ERROR: No maps in rotation\n");
+		return;
+	}
+
+	// Find where we are in rotation
+	SV_UpdateMapIndex();
+
+	// Advance to next map
+	currentMapIndex = (currentMapIndex + 1) % mapRotationCount;
+	nextMap = mapRotation[currentMapIndex];
+
+	Com_Printf("Map rotation: advancing to %s (index %d/%d)\n",
+		nextMap, currentMapIndex + 1, mapRotationCount);
+
+	// SV_SpawnServer will call SV_DynamicMapSwitch internally before FS_Restart
+	// This ensures the symlink exists and filesystem is rescanned
+	SV_SpawnServer(nextMap);
+}
+
+/**
+ * @brief SV_MapList_f - Show map rotation list
+ */
+static void SV_MapList_f(void)
+{
+	const char *currentMap = Cvar_VariableString("mapname");
+	int i;
+
+	// Reload to show current file contents
+	SV_LoadMapRotation();
+
+	Com_Printf("Map Rotation (%d maps from maplist.txt):\n", mapRotationCount);
+	for (i = 0; i < mapRotationCount; i++)
+	{
+		if (!Q_stricmp(currentMap, mapRotation[i]))
+		{
+			Com_Printf("  %d. %s ^2<-- current\n", i + 1, mapRotation[i]);
+		}
+		else
+		{
+			Com_Printf("  %d. %s\n", i + 1, mapRotation[i]);
+		}
+	}
+}
+
+/**
+ * @brief SV_CurrentMap_f - Print current map name (for rcon queries)
+ */
+static void SV_CurrentMap_f(void)
+{
+	Com_Printf("%s\n", Cvar_VariableString("mapname"));
+}
 
 /**
  * @brief Returns the player with name from Cmd_Argv(1)
@@ -777,7 +956,9 @@ void SV_AddOperatorCommands(void)
 	Cmd_AddCommand("uptime", SV_Uptime_f, "Prints uptime info.");
 
 	// ETMan - Map rotation commands
-	// rotate and maplist commands are handled by Lua (lua/map_rotation.lua)
+	Cmd_AddCommand("rotate", SV_Rotate_f, "Advances to next map in rotation.");
+	Cmd_AddCommand("maplist", SV_MapList_f, "Shows the map rotation list.");
+	Cmd_AddCommand("currentmap", SV_CurrentMap_f, "Prints current map name.");
 
 #if defined(FEATURE_IRC_SERVER) && defined(DEDICATED)
 	Cmd_AddCommand("irc_connect", IRC_Connect, "Connects to an IRC server.");

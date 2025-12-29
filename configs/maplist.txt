@@ -1,0 +1,13 @@
+# ET:Legacy Map Rotation
+# One map per line. Use BSP names (not pk3 names).
+# map_switch.sh handles pk3 name mapping if needed.
+# Comments start with # or /
+
+baserace
+snatch3
+ctf_face_b1
+fragmaze_fixed
+et_mor2_night_final
+fa_bremen_final
+mml_minastirith_fp3
+capuzzo

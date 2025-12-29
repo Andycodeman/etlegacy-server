@@ -99,6 +99,11 @@ fi
 echo -e "${YELLOW}Deploying configs...${NC}"
 if [ -d "$PROJECT_DIR/configs" ]; then
     cp "$PROJECT_DIR/configs/"*.cfg "$LEGACY_DIR/" 2>/dev/null || true
+    # Deploy maplist.txt for dynamic map rotation (read by C code)
+    if [ -f "$PROJECT_DIR/configs/maplist.txt" ]; then
+        cp "$PROJECT_DIR/configs/maplist.txt" "$LEGACY_DIR/"
+        echo "  - maplist.txt deployed (dynamic map rotation)"
+    fi
     if [ -d "$PROJECT_DIR/configs/mapconfigs" ]; then
         mkdir -p "$LEGACY_DIR/mapconfigs"
         cp "$PROJECT_DIR/configs/mapconfigs/"*.cfg "$LEGACY_DIR/mapconfigs/" 2>/dev/null || true
