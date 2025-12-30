@@ -382,6 +382,7 @@ export interface LogsQueryParams {
   playerFilter?: string;
   customSince?: string;
   customUntil?: string;
+  signal?: AbortSignal;
 }
 
 export interface LogsResponse {
@@ -400,14 +401,29 @@ export interface TimePreset {
 
 // Logs
 export const logs = {
-  query: (params: LogsQueryParams = {}) => {
+  query: async (params: LogsQueryParams = {}) => {
     const searchParams = new URLSearchParams();
     if (params.timeRange) searchParams.set('timeRange', params.timeRange);
     if (params.category) searchParams.set('category', params.category);
     if (params.playerFilter) searchParams.set('playerFilter', params.playerFilter);
     if (params.customSince) searchParams.set('customSince', params.customSince);
     if (params.customUntil) searchParams.set('customUntil', params.customUntil);
-    return apiRequest<LogsResponse>(`/logs/query?${searchParams.toString()}`);
+
+    const token = localStorage.getItem('accessToken');
+    const response = await fetch(`${API_BASE}/logs/query?${searchParams.toString()}`, {
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      signal: params.signal,
+    });
+
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({ error: 'Request failed' }));
+      throw new Error(error.error || 'Request failed');
+    }
+
+    return response.json() as Promise<LogsResponse>;
   },
   presets: () => apiRequest<{ presets: TimePreset[] }>('/logs/presets'),
 };
@@ -446,10 +462,10 @@ export const sounds = {
     }),
   delete: (alias: string) =>
     apiRequest<{ success: boolean }>(`/sounds/${encodeURIComponent(alias)}`, { method: 'DELETE' }),
-  setVisibility: (alias: string, visibility: 'private' | 'shared' | 'public') =>
+  setVisibility: (alias: string, visibility: 'private' | 'shared' | 'public', removeFromPublicPlaylists?: boolean) =>
     apiRequest<{ success: boolean; visibility: string }>(`/sounds/${encodeURIComponent(alias)}/visibility`, {
       method: 'PATCH',
-      body: { visibility },
+      body: { visibility, removeFromPublicPlaylists },
     }),
 
   // Playlists
@@ -526,6 +542,14 @@ export const sounds = {
       method: 'PATCH',
       body: { originalName },
     }),
+  adminGetDeleteInfo: (soundFileId: number) =>
+    apiRequest<{
+      soundFileId: number;
+      originalName: string;
+      isDirectlyPublic: boolean;
+      affectedPlaylists: { id: number; name: string; isPublic: boolean; ownerName: string }[];
+      affectedUserCount: number;
+    }>(`/sounds/admin/public/${soundFileId}/delete-info`),
   adminDeletePublic: (soundFileId: number) =>
     apiRequest<{ success: boolean }>(`/sounds/admin/public/${soundFileId}`, { method: 'DELETE' }),
   adminSetVisibility: (soundFileId: number, isPublic: boolean) =>
@@ -611,13 +635,27 @@ export const sounds = {
 
   deleteTempFile: (tempId: string) =>
     apiRequest<{ success: boolean }>(`/sounds/temp/${tempId}`, { method: 'DELETE' }),
+
+  // Copy existing sound to temp for creating a new clip
+  copyToTemp: (alias: string) =>
+    apiRequest<TempUploadResponse>(`/sounds/copy-to-temp/${encodeURIComponent(alias)}`, {
+      method: 'POST',
+      body: {},
+    }),
+
+  // Copy public sound to temp for creating a clip
+  copyPublicToTemp: (soundFileId: number) =>
+    apiRequest<TempUploadResponse>(`/sounds/copy-public-to-temp/${soundFileId}`, {
+      method: 'POST',
+      body: {},
+    }),
 };
 
 // Sound types
 export interface UserSound {
   id: number;
   alias: string;
-  visibility: 'private' | 'shared' | 'public';
+  visibility: 'private' | 'public' | 'shared'; // 'shared' is legacy, treated as private
   createdAt: string;
   updatedAt?: string;
   soundFileId: number;
@@ -626,7 +664,10 @@ export interface UserSound {
   fileSize: number;
   durationSeconds?: number;
   isPublic?: boolean;
-  inPublicPlaylist?: boolean;  // True if this sound is in any public playlist
+  isOwner?: boolean;  // True if current user uploaded/created this sound
+  ownerName?: string;  // Display name of the user who uploaded this sound
+  publicPlaylists?: { id: number; name: string }[];  // List of public playlists this sound is in
+  privatePlaylists?: { id: number; name: string }[];  // List of user's private playlists this sound is in
 }
 
 export interface SoundsListResponse {
@@ -656,6 +697,7 @@ export interface PlaylistItem {
   orderNumber: number;
   addedAt: string;
   alias: string;
+  soundFileId: number;
   fileSize: number;
   durationSeconds?: number;
 }
@@ -671,7 +713,9 @@ export interface PublicSound {
   fileSize: number;
   durationSeconds?: number;
   addedByGuid: string;
+  addedByName: string;
   createdAt: string;
+  isDirectlyPublic: boolean;
 }
 
 export interface PublicLibraryResponse {

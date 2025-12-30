@@ -278,6 +278,14 @@ function et_InitGame(levelTime, randomSeed, restart)
     log("^2Server initializing...")
     log("^3ET:Legacy with Lua scripting")
 
+    -- Reset level time tracking for ETPanel on every map load/restart
+    -- The levelTime parameter here is the starting time for this map
+    -- We store this as the "map start time" so we can calculate elapsed time
+    mapStartLevelTime = levelTime
+    lastLevelTimeUpdate = levelTime
+    et.trap_Cvar_Set("etpanel_leveltime", "0")
+    log("^3[ETPanel] Level time reset (mapStartLevelTime=" .. tostring(levelTime) .. ", restart=" .. tostring(restart) .. ")")
+
     -- Handle notification tracking persistence
     -- Uses server PID to detect new sessions (server restart)
     local loaded = loadNotifiedPlayers()
@@ -579,15 +587,29 @@ function et_IntermissionReady()
 end
 
 -- Track level time for ETPanel (updated every second, not every frame)
-local lastLevelTimeUpdate = 0
+-- These need to be module-level so et_InitGame can reset them
+lastLevelTimeUpdate = 0
+mapStartLevelTime = 0  -- Track when the map started
+
+-- Called from et_ConsoleCommand when settimeleft is executed
+function resetLevelTimeTracking(newStartTime)
+    mapStartLevelTime = newStartTime
+    lastLevelTimeUpdate = newStartTime
+    et.trap_Cvar_Set("etpanel_leveltime", "0")
+    et.G_Print("[ETPanel] ^3Level time reset by settimeleft (new start: " .. tostring(newStartTime) .. ")\n")
+end
 
 function et_RunFrame(levelTime)
     -- Called every server frame (~50ms)
     -- Keep this lightweight!
 
+    -- Calculate elapsed time since map start
+    local elapsedTime = levelTime - mapStartLevelTime
+
     -- Update etpanel_leveltime CVAR once per second for panel to read
+    -- We store the ELAPSED time (time since map started), not the raw levelTime
     if levelTime - lastLevelTimeUpdate >= 1000 then
-        et.trap_Cvar_Set("etpanel_leveltime", tostring(levelTime))
+        et.trap_Cvar_Set("etpanel_leveltime", tostring(elapsedTime))
         lastLevelTimeUpdate = levelTime
     end
 
@@ -773,6 +795,15 @@ function et_ConsoleCommand()
 
     -- Debug: log what command we received
     et.G_Print(string.format("[DEBUG] et_ConsoleCommand: cmd='%s'\n", cmd))
+
+    -- Handle lua_resetleveltime - called by C code after settimeleft
+    if cmd == "lua_resetleveltime" then
+        local newStartTime = tonumber(et.trap_Cvar_Get("etpanel_leveltime_reset")) or 0
+        if newStartTime > 0 then
+            resetLevelTimeTracking(newStartTime)
+        end
+        return 1  -- We handled it
+    end
 
     if cmd == "lua_reload" then
         log("^3Reloading Lua scripts on next map...")

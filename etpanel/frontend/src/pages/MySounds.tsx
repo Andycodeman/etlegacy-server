@@ -1,9 +1,11 @@
 import { useState, useEffect, useMemo } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useNavigate } from 'react-router-dom';
 import { sounds } from '../api/client';
 import type { UserSound, PendingShare, TempUploadResponse } from '../api/client';
 import AudioPlayer from '../components/AudioPlayer';
 import SoundClipEditor from '../components/SoundClipEditor';
+import { renderETColors } from '../utils/etColors';
 
 function formatFileSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -34,30 +36,69 @@ function formatRelativeTime(dateString: string): string {
   return date.toLocaleDateString();
 }
 
-const visibilityColors = {
+const visibilityColors: Record<string, string> = {
   private: 'bg-gray-600 text-gray-200',
-  shared: 'bg-blue-600 text-blue-100',
   public: 'bg-green-600 text-green-100',
+  shared: 'bg-gray-600 text-gray-200', // Legacy - treat as private
 };
 
-const visibilityIcons = {
+const visibilityIcons: Record<string, string> = {
   private: '🔒',
-  shared: '👥',
   public: '🌐',
+  shared: '🔒', // Legacy - treat as private
 };
+
+type SortField = 'alias' | 'fileSize' | 'durationSeconds' | 'visibility' | 'isOwner' | 'publicPlaylistCount' | 'privatePlaylistCount' | 'createdAt';
+type SortDirection = 'asc' | 'desc';
+
+function SortableHeader({
+  label,
+  field,
+  currentSort,
+  currentDirection,
+  onSort,
+  className = ''
+}: {
+  label: string;
+  field: SortField;
+  currentSort: SortField;
+  currentDirection: SortDirection;
+  onSort: (field: SortField) => void;
+  className?: string;
+}) {
+  const isActive = currentSort === field;
+  return (
+    <th
+      className={`px-4 py-2 cursor-pointer hover:bg-gray-700/50 select-none transition-colors ${className}`}
+      onClick={() => onSort(field)}
+    >
+      <div className="flex items-center gap-1">
+        {label}
+        <span className={`text-xs ${isActive ? 'text-orange-400' : 'text-gray-500'}`}>
+          {isActive ? (currentDirection === 'asc' ? '▲' : '▼') : '⇅'}
+        </span>
+      </div>
+    </th>
+  );
+}
 
 export default function MySounds() {
   const queryClient = useQueryClient();
+  const navigate = useNavigate();
   const [editingAlias, setEditingAlias] = useState<string | null>(null);
   const [newAlias, setNewAlias] = useState('');
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
-  const [visibilityMenu, setVisibilityMenu] = useState<string | null>(null);
+  const [deleteWarningSound, setDeleteWarningSound] = useState<UserSound | null>(null);
+  const [visibilityWarning, setVisibilityWarning] = useState<{ sound: UserSound; newVisibility: 'private' | 'public' } | null>(null);
+  const [playlistPopover, setPlaylistPopover] = useState<{ alias: string; type: 'public' | 'private' } | null>(null);
   const [acceptModal, setAcceptModal] = useState<PendingShare | null>(null);
   const [acceptAlias, setAcceptAlias] = useState('');
   const [linkCodeInput, setLinkCodeInput] = useState('');
   const [linkError, setLinkError] = useState('');
   const [search, setSearch] = useState('');
   const [debouncedSearch, setDebouncedSearch] = useState('');
+  const [page, setPage] = useState(0);
+  const pageSize = 50;
 
   // Upload modal state
   const [uploadModal, setUploadModal] = useState(false);
@@ -72,11 +113,32 @@ export default function MySounds() {
   const [isSavingClip, setIsSavingClip] = useState(false);
   const [saveClipError, setSaveClipError] = useState('');
 
+  // State for creating clip from existing sound
+  const [copyingSound, setCopyingSound] = useState<string | null>(null);
+
+  // Sorting state
+  const [sortField, setSortField] = useState<SortField>('alias');
+  const [sortDirection, setSortDirection] = useState<SortDirection>('asc');
+
+  const handleSort = (field: SortField) => {
+    if (sortField === field) {
+      setSortDirection(sortDirection === 'asc' ? 'desc' : 'asc');
+    } else {
+      setSortField(field);
+      setSortDirection('asc');
+    }
+  };
+
   // Debounce search
   useEffect(() => {
     const timer = setTimeout(() => setDebouncedSearch(search), 300);
     return () => clearTimeout(timer);
   }, [search]);
+
+  // Reset page when search changes
+  useEffect(() => {
+    setPage(0);
+  }, [debouncedSearch]);
 
   // Check if user has linked GUID
   const { data: guidStatus, isLoading: guidLoading } = useQuery({
@@ -98,17 +160,55 @@ export default function MySounds() {
     enabled: guidStatus?.linked === true,
   });
 
-  // Filter sounds by search
+  // Filter and sort sounds
   const filteredSounds = useMemo(() => {
     if (!soundsData?.sounds) return [];
-    if (!debouncedSearch) return soundsData.sounds;
-    const searchLower = debouncedSearch.toLowerCase();
-    return soundsData.sounds.filter(
-      (s: UserSound) =>
-        s.alias.toLowerCase().includes(searchLower) ||
-        s.originalName.toLowerCase().includes(searchLower)
-    );
-  }, [soundsData?.sounds, debouncedSearch]);
+
+    // Filter by search
+    let result = soundsData.sounds;
+    if (debouncedSearch) {
+      const searchLower = debouncedSearch.toLowerCase();
+      result = result.filter(
+        (s: UserSound) =>
+          s.alias.toLowerCase().includes(searchLower) ||
+          s.originalName.toLowerCase().includes(searchLower)
+      );
+    }
+
+    // Sort
+    result = [...result].sort((a: UserSound, b: UserSound) => {
+      let comparison = 0;
+      switch (sortField) {
+        case 'alias':
+          comparison = a.alias.localeCompare(b.alias);
+          break;
+        case 'fileSize':
+          comparison = a.fileSize - b.fileSize;
+          break;
+        case 'durationSeconds':
+          comparison = (a.durationSeconds || 0) - (b.durationSeconds || 0);
+          break;
+        case 'visibility':
+          comparison = a.visibility.localeCompare(b.visibility);
+          break;
+        case 'isOwner':
+          comparison = (a.isOwner ? 1 : 0) - (b.isOwner ? 1 : 0);
+          break;
+        case 'publicPlaylistCount':
+          comparison = (a.publicPlaylists?.length || 0) - (b.publicPlaylists?.length || 0);
+          break;
+        case 'privatePlaylistCount':
+          comparison = (a.privatePlaylists?.length || 0) - (b.privatePlaylists?.length || 0);
+          break;
+        case 'createdAt':
+          comparison = new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
+          break;
+      }
+      return sortDirection === 'asc' ? comparison : -comparison;
+    });
+
+    return result;
+  }, [soundsData?.sounds, debouncedSearch, sortField, sortDirection]);
 
   // Mutations
   const renameMutation = useMutation({
@@ -125,21 +225,26 @@ export default function MySounds() {
     mutationFn: (alias: string) => sounds.delete(alias),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['mySounds'] });
+      queryClient.invalidateQueries({ queryKey: ['publicLibrary'] });
       setDeleteConfirm(null);
+      setDeleteWarningSound(null);
     },
     onError: (error) => {
       console.error('Delete failed:', error);
       alert('Failed to delete sound: ' + (error as Error).message);
       setDeleteConfirm(null);
+      setDeleteWarningSound(null);
     },
   });
 
   const visibilityMutation = useMutation({
-    mutationFn: ({ alias, visibility }: { alias: string; visibility: 'private' | 'shared' | 'public' }) =>
-      sounds.setVisibility(alias, visibility),
+    mutationFn: ({ alias, visibility, removeFromPublicPlaylists }: { alias: string; visibility: 'private' | 'public'; removeFromPublicPlaylists?: boolean }) =>
+      sounds.setVisibility(alias, visibility, removeFromPublicPlaylists),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['mySounds'] });
-      setVisibilityMenu(null);
+      queryClient.invalidateQueries({ queryKey: ['publicLibrary'] });
+      queryClient.invalidateQueries({ queryKey: ['playlists'] });
+      setVisibilityWarning(null);
     },
   });
 
@@ -153,6 +258,51 @@ export default function MySounds() {
       setAcceptAlias('');
     },
   });
+
+  // Handle delete with warning for sounds that have public visibility implications
+  const handleDeleteClick = (sound: UserSound) => {
+    const inPublicPlaylists = sound.publicPlaylists && sound.publicPlaylists.length > 0;
+    // Show warning if:
+    // 1. You own the sound AND it's set to public visibility (will remove from public library)
+    // 2. The sound is in any of your public playlists (will be removed from them)
+    const isOwnedAndPublic = sound.isOwner && sound.visibility === 'public';
+
+    if (isOwnedAndPublic || inPublicPlaylists) {
+      setDeleteWarningSound(sound);
+    } else {
+      setDeleteConfirm(sound.alias);
+    }
+  };
+
+  const confirmDeletePublic = () => {
+    if (deleteWarningSound) {
+      deleteMutation.mutate(deleteWarningSound.alias);
+    }
+  };
+
+  // Handle visibility change with warning when going from public to private
+  // or when the sound is in public playlists
+  const handleVisibilityChange = (sound: UserSound, newVisibility: 'private' | 'public') => {
+    const inPublicPlaylists = sound.publicPlaylists && sound.publicPlaylists.length > 0;
+    const isCurrentlyPublic = sound.visibility === 'public' || inPublicPlaylists;
+
+    if (isCurrentlyPublic && newVisibility === 'private') {
+      setVisibilityWarning({ sound, newVisibility });
+    } else {
+      visibilityMutation.mutate({ alias: sound.alias, visibility: newVisibility });
+    }
+  };
+
+  const confirmVisibilityChange = () => {
+    if (visibilityWarning) {
+      const hasPublicPlaylists = visibilityWarning.sound.publicPlaylists && visibilityWarning.sound.publicPlaylists.length > 0;
+      visibilityMutation.mutate({
+        alias: visibilityWarning.sound.alias,
+        visibility: visibilityWarning.newVisibility,
+        removeFromPublicPlaylists: hasPublicPlaylists
+      });
+    }
+  };
 
   const rejectShareMutation = useMutation({
     mutationFn: (shareId: number) => sounds.rejectShare(shareId),
@@ -263,6 +413,20 @@ export default function MySounds() {
     }
   };
 
+  // Create a new clip from an existing sound
+  const handleCreateClipFromSound = async (alias: string) => {
+    setCopyingSound(alias);
+    try {
+      const result = await sounds.copyToTemp(alias);
+      setTempUploadData(result);
+      setUploadModal(true);
+    } catch (err) {
+      alert('Failed to prepare sound for editing: ' + (err as Error).message);
+    } finally {
+      setCopyingSound(null);
+    }
+  };
+
   const startEdit = (sound: UserSound) => {
     setEditingAlias(sound.alias);
     setNewAlias(sound.alias);
@@ -357,7 +521,9 @@ export default function MySounds() {
   }
 
   const pendingShares = sharesData?.shares || [];
-  const userSounds = filteredSounds;
+  const totalSounds = filteredSounds.length;
+  const totalPages = Math.max(1, Math.ceil(totalSounds / pageSize));
+  const userSounds = filteredSounds.slice(page * pageSize, (page + 1) * pageSize);
 
   return (
     <div className="-m-4 md:-m-8">
@@ -389,10 +555,10 @@ export default function MySounds() {
       </div>
 
       {/* Content */}
-      <div className="p-4 md:p-8">
+      <div className="px-4 md:px-8 py-4 h-[calc(100vh-90px)] flex flex-col gap-4">
         {/* Pending Shares Section */}
         {pendingShares.length > 0 && (
-          <div className="bg-blue-900/30 border border-blue-600 rounded-lg p-4 mb-4">
+          <div className="bg-blue-900/30 border border-blue-600 rounded-lg p-4 flex-shrink-0">
             <h2 className="text-lg font-semibold text-blue-400 mb-3 flex items-center gap-2">
               <span>📨</span>
               Pending Shares ({pendingShares.length})
@@ -430,7 +596,7 @@ export default function MySounds() {
 
         {/* Sounds List */}
         {userSounds.length === 0 ? (
-          <div className="bg-gray-800 rounded-lg p-8 text-center">
+          <div className="bg-gray-800 rounded-lg p-8 text-center flex-1 flex flex-col items-center justify-center">
             <div className="text-4xl mb-4">🔇</div>
             <h2 className="text-xl font-semibold mb-2">
               {debouncedSearch ? 'No Matching Sounds' : 'No Sounds Yet'}
@@ -443,9 +609,9 @@ export default function MySounds() {
             </p>
           </div>
         ) : (
-          <div className="bg-gray-800 rounded-lg overflow-hidden">
+          <div className="bg-gray-800 rounded-lg flex-1 overflow-hidden flex flex-col">
             {/* Mobile: Card Layout */}
-            <div className="md:hidden divide-y divide-gray-700">
+            <div className="md:hidden divide-y divide-gray-700 overflow-y-auto flex-1">
               {userSounds.map((sound) => (
                 <div key={sound.id} className="p-4">
                   <div className="flex items-start justify-between gap-3">
@@ -484,54 +650,125 @@ export default function MySounds() {
                           </div>
                         )}
                       </div>
-                      <div className="text-sm text-gray-400 ml-8">
-                        {formatFileSize(sound.fileSize)} • {formatDuration(sound.durationSeconds)}
+                      <div className="text-sm text-gray-400 ml-8 flex items-center gap-2 flex-wrap">
+                        {formatFileSize(sound.fileSize)} • {formatDuration(sound.durationSeconds)} • {sound.isOwner ? <span className="text-green-400">You</span> : renderETColors(sound.ownerName || 'Unknown')}
+                        {/* Playlist counts for mobile */}
+                        {sound.publicPlaylists && sound.publicPlaylists.length > 0 && (
+                          <div className="relative inline-block">
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setPlaylistPopover(
+                                  playlistPopover?.alias === sound.alias && playlistPopover?.type === 'public'
+                                    ? null
+                                    : { alias: sound.alias, type: 'public' }
+                                );
+                              }}
+                              className="px-1.5 py-0.5 rounded-full text-xs font-medium bg-green-600 text-white hover:bg-green-500"
+                              title="Public playlists"
+                            >
+                              🌐 {sound.publicPlaylists.length}
+                            </button>
+                            {playlistPopover?.alias === sound.alias && playlistPopover?.type === 'public' && (
+                              <div className="absolute left-0 mt-1 bg-gray-700 border border-gray-600 rounded-lg shadow-lg z-20 min-w-[150px] py-1">
+                                <div className="px-3 py-1 text-xs text-gray-400 border-b border-gray-600">Public Playlists</div>
+                                {sound.publicPlaylists.map((pl) => (
+                                  <button
+                                    key={pl.id}
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      setPlaylistPopover(null);
+                                      navigate(`/sounds/playlists?id=${pl.id}`);
+                                    }}
+                                    className="block w-full px-3 py-1.5 text-left text-sm text-gray-200 hover:bg-gray-600"
+                                  >
+                                    {pl.name}
+                                  </button>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        )}
+                        {sound.privatePlaylists && sound.privatePlaylists.length > 0 && (
+                          <div className="relative inline-block">
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setPlaylistPopover(
+                                  playlistPopover?.alias === sound.alias && playlistPopover?.type === 'private'
+                                    ? null
+                                    : { alias: sound.alias, type: 'private' }
+                                );
+                              }}
+                              className="px-1.5 py-0.5 rounded-full text-xs font-medium bg-gray-600 text-white hover:bg-gray-500"
+                              title="Your private playlists"
+                            >
+                              🔒 {sound.privatePlaylists.length}
+                            </button>
+                            {playlistPopover?.alias === sound.alias && playlistPopover?.type === 'private' && (
+                              <div className="absolute left-0 mt-1 bg-gray-700 border border-gray-600 rounded-lg shadow-lg z-20 min-w-[150px] py-1">
+                                <div className="px-3 py-1 text-xs text-gray-400 border-b border-gray-600">Your Private Playlists</div>
+                                {sound.privatePlaylists.map((pl) => (
+                                  <button
+                                    key={pl.id}
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      setPlaylistPopover(null);
+                                      navigate(`/sounds/playlists?id=${pl.id}`);
+                                    }}
+                                    className="block w-full px-3 py-1.5 text-left text-sm text-gray-200 hover:bg-gray-600"
+                                  >
+                                    {pl.name}
+                                  </button>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        )}
                       </div>
                       <div className="text-xs text-gray-500 mt-1 ml-8">
                         Added {formatRelativeTime(sound.createdAt)}
                       </div>
                     </div>
                     <div className="flex items-center gap-2">
-                      {/* In Public Playlist Indicator */}
-                      {sound.inPublicPlaylist && (
-                        <span
-                          className="px-2 py-1 rounded text-xs font-medium bg-purple-600 cursor-help flex items-center gap-1"
-                          title="This sound is in a public playlist - visibility locked"
-                        >
-                          <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 20 20">
-                            <path fillRule="evenodd" d="M5 9V7a5 5 0 0110 0v2a2 2 0 012 2v5a2 2 0 01-2 2H5a2 2 0 01-2-2v-5a2 2 0 012-2zm8-2v2H7V7a3 3 0 016 0z" clipRule="evenodd" />
-                          </svg>
-                          In Public Playlist
-                        </span>
-                      )}
+                      {/* Visibility Toggle */}
+                      {(() => {
+                        const inPublicPlaylists = sound.publicPlaylists && sound.publicPlaylists.length > 0;
+                        const effectiveVisibility = inPublicPlaylists ? 'public' : sound.visibility;
+                        const newVisibility = effectiveVisibility === 'public' ? 'private' : 'public';
+                        return (
+                          <button
+                            onClick={() => sound.isOwner && handleVisibilityChange(sound, newVisibility)}
+                            className={`px-2 py-1 rounded text-xs font-medium ${visibilityColors[effectiveVisibility]} ${
+                              !sound.isOwner ? 'opacity-50 cursor-not-allowed' : 'hover:opacity-80'
+                            } transition-opacity`}
+                            title={
+                              !sound.isOwner
+                                ? 'Only the owner can change visibility'
+                                : `Click to make ${newVisibility}`
+                            }
+                          >
+                            {visibilityIcons[effectiveVisibility]} {effectiveVisibility}
+                          </button>
+                        );
+                      })()}
 
-                      {/* Visibility Badge */}
-                      <div className="relative">
-                        <button
-                          onClick={() => !sound.inPublicPlaylist && setVisibilityMenu(visibilityMenu === sound.alias ? null : sound.alias)}
-                          className={`px-2 py-1 rounded text-xs font-medium ${visibilityColors[sound.visibility]} ${
-                            sound.inPublicPlaylist ? 'opacity-50 cursor-not-allowed' : ''
-                          }`}
-                          title={sound.inPublicPlaylist ? 'Visibility locked - sound is in a public playlist' : 'Click to change visibility'}
-                        >
-                          {visibilityIcons[sound.visibility]} {sound.visibility}
-                        </button>
-                        {visibilityMenu === sound.alias && !sound.inPublicPlaylist && (
-                          <div className="absolute right-0 mt-1 bg-gray-700 border border-gray-600 rounded-lg shadow-lg z-10 overflow-hidden">
-                            {(['private', 'shared', 'public'] as const).map((v) => (
-                              <button
-                                key={v}
-                                onClick={() => visibilityMutation.mutate({ alias: sound.alias, visibility: v })}
-                                className={`block w-full px-4 py-2 text-left text-sm hover:bg-gray-600 ${
-                                  sound.visibility === v ? 'bg-gray-600' : ''
-                                }`}
-                              >
-                                {visibilityIcons[v]} {v}
-                              </button>
-                            ))}
-                          </div>
+                      {/* Create Clip Button */}
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleCreateClipFromSound(sound.alias);
+                        }}
+                        disabled={copyingSound === sound.alias}
+                        className="p-1.5 text-gray-400 hover:text-purple-400 hover:bg-gray-700 rounded transition-colors disabled:opacity-50"
+                        title="Create new clip from this sound"
+                      >
+                        {copyingSound === sound.alias ? (
+                          <span className="animate-spin inline-block">⏳</span>
+                        ) : (
+                          '✂️'
                         )}
-                      </div>
+                      </button>
 
                       {/* Delete Button */}
                       {deleteConfirm === sound.alias ? (
@@ -560,7 +797,7 @@ export default function MySounds() {
                         <button
                           onClick={(e) => {
                             e.stopPropagation();
-                            setDeleteConfirm(sound.alias);
+                            handleDeleteClick(sound);
                           }}
                           className="p-1.5 text-gray-400 hover:text-red-400 hover:bg-gray-700 rounded transition-colors"
                           title="Delete"
@@ -575,20 +812,25 @@ export default function MySounds() {
             </div>
 
             {/* Desktop: Table Layout */}
-            <div className="hidden md:block">
-              <table className="w-full">
-                <thead>
-                  <tr className="text-left text-gray-400 border-b border-gray-700 bg-gray-800/50">
-                    <th className="px-4 py-2 w-16">Play</th>
-                    <th className="px-4 py-2">Alias</th>
-                    <th className="px-4 py-2">Size</th>
-                    <th className="px-4 py-2">Duration</th>
-                    <th className="px-4 py-2">Visibility</th>
-                    <th className="px-4 py-2">Added</th>
-                    <th className="px-4 py-2 w-20">Actions</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-gray-700">
+            <div className="hidden md:flex md:flex-col md:flex-1 md:overflow-hidden">
+              {/* Scrollable Table with Sticky Header */}
+              <div className="flex-1 overflow-y-auto">
+                <table className="w-full">
+                  <thead className="sticky top-0 bg-gray-800 z-10">
+                    <tr className="text-left text-gray-400 border-b border-gray-700">
+                      <th className="px-4 py-2 w-16">Play</th>
+                      <SortableHeader label="Alias" field="alias" currentSort={sortField} currentDirection={sortDirection} onSort={handleSort} />
+                      <SortableHeader label="Size" field="fileSize" currentSort={sortField} currentDirection={sortDirection} onSort={handleSort} />
+                      <SortableHeader label="Duration" field="durationSeconds" currentSort={sortField} currentDirection={sortDirection} onSort={handleSort} />
+                      <SortableHeader label="Owner" field="isOwner" currentSort={sortField} currentDirection={sortDirection} onSort={handleSort} className="w-16" />
+                      <SortableHeader label="🌐" field="publicPlaylistCount" currentSort={sortField} currentDirection={sortDirection} onSort={handleSort} className="w-12 text-center" />
+                      <SortableHeader label="🔒" field="privatePlaylistCount" currentSort={sortField} currentDirection={sortDirection} onSort={handleSort} className="w-12 text-center" />
+                      <SortableHeader label="Visibility" field="visibility" currentSort={sortField} currentDirection={sortDirection} onSort={handleSort} />
+                      <SortableHeader label="Added" field="createdAt" currentSort={sortField} currentDirection={sortDirection} onSort={handleSort} />
+                      <th className="px-4 py-2 w-20">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-700">
                   {userSounds.map((sound) => (
                     <tr key={sound.id} className="hover:bg-gray-700/30">
                       <td className="px-4 py-2">
@@ -629,89 +871,212 @@ export default function MySounds() {
                       </td>
                       <td className="px-4 py-2 text-sm">{formatFileSize(sound.fileSize)}</td>
                       <td className="px-4 py-2 text-sm">{formatDuration(sound.durationSeconds)}</td>
-                      <td className="px-4 py-2">
-                        <div className="flex items-center gap-2">
-                          {sound.inPublicPlaylist && (
-                            <span
-                              className="p-1.5 rounded bg-purple-600 cursor-help"
-                              title="This sound is in a public playlist - visibility locked"
-                            >
-                              <svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 20 20">
-                                <path fillRule="evenodd" d="M5 9V7a5 5 0 0110 0v2a2 2 0 012 2v5a2 2 0 01-2 2H5a2 2 0 01-2-2v-5a2 2 0 012-2zm8-2v2H7V7a3 3 0 016 0z" clipRule="evenodd" />
-                              </svg>
-                            </span>
-                          )}
+                      <td className="px-4 py-2 text-sm">
+                        {sound.isOwner ? (
+                          <span className="text-green-400">You</span>
+                        ) : (
+                          renderETColors(sound.ownerName || 'Unknown')
+                        )}
+                      </td>
+                      {/* Public Playlists Count */}
+                      <td className="px-4 py-2 text-center relative">
+                        {sound.publicPlaylists && sound.publicPlaylists.length > 0 ? (
                           <div className="relative inline-block">
                             <button
-                              onClick={() => !sound.inPublicPlaylist && setVisibilityMenu(visibilityMenu === sound.alias ? null : sound.alias)}
-                              className={`px-2 py-1 rounded text-xs font-medium ${visibilityColors[sound.visibility]} ${
-                                sound.inPublicPlaylist ? 'opacity-50 cursor-not-allowed' : ''
-                              }`}
-                              title={sound.inPublicPlaylist ? 'Visibility locked - sound is in a public playlist' : 'Click to change visibility'}
+                              onClick={() => setPlaylistPopover(
+                                playlistPopover?.alias === sound.alias && playlistPopover?.type === 'public'
+                                  ? null
+                                  : { alias: sound.alias, type: 'public' }
+                              )}
+                              className="px-2 py-0.5 rounded-full text-xs font-medium bg-green-600 text-white hover:bg-green-500 cursor-pointer"
+                              title="Click to see public playlists"
                             >
-                              {visibilityIcons[sound.visibility]} {sound.visibility}
+                              {sound.publicPlaylists.length}
                             </button>
-                            {visibilityMenu === sound.alias && !sound.inPublicPlaylist && (
-                              <div className="absolute left-0 mt-1 bg-gray-700 border border-gray-600 rounded-lg shadow-lg z-10 overflow-hidden min-w-[120px]">
-                                {(['private', 'shared', 'public'] as const).map((v) => (
+                            {playlistPopover?.alias === sound.alias && playlistPopover?.type === 'public' && (
+                              <div className="absolute left-1/2 -translate-x-1/2 mt-1 bg-gray-700 border border-gray-600 rounded-lg shadow-lg z-20 min-w-[150px] py-1">
+                                <div className="px-3 py-1 text-xs text-gray-400 border-b border-gray-600">Public Playlists</div>
+                                {sound.publicPlaylists.map((pl) => (
                                   <button
-                                    key={v}
-                                    onClick={() => visibilityMutation.mutate({ alias: sound.alias, visibility: v })}
-                                    className={`block w-full px-4 py-2 text-left text-sm hover:bg-gray-600 ${
-                                      sound.visibility === v ? 'bg-gray-600' : ''
-                                    }`}
+                                    key={pl.id}
+                                    onClick={() => {
+                                      setPlaylistPopover(null);
+                                      navigate(`/sounds/playlists?id=${pl.id}`);
+                                    }}
+                                    className="block w-full px-3 py-1.5 text-left text-sm text-gray-200 hover:bg-gray-600"
                                   >
-                                    {visibilityIcons[v]} {v}
+                                    {pl.name}
                                   </button>
                                 ))}
                               </div>
                             )}
                           </div>
-                        </div>
+                        ) : (
+                          <span className="text-gray-600">–</span>
+                        )}
+                      </td>
+                      {/* Private Playlists Count */}
+                      <td className="px-4 py-2 text-center relative">
+                        {sound.privatePlaylists && sound.privatePlaylists.length > 0 ? (
+                          <div className="relative inline-block">
+                            <button
+                              onClick={() => setPlaylistPopover(
+                                playlistPopover?.alias === sound.alias && playlistPopover?.type === 'private'
+                                  ? null
+                                  : { alias: sound.alias, type: 'private' }
+                              )}
+                              className="px-2 py-0.5 rounded-full text-xs font-medium bg-gray-600 text-white hover:bg-gray-500 cursor-pointer"
+                              title="Click to see your private playlists"
+                            >
+                              {sound.privatePlaylists.length}
+                            </button>
+                            {playlistPopover?.alias === sound.alias && playlistPopover?.type === 'private' && (
+                              <div className="absolute left-1/2 -translate-x-1/2 mt-1 bg-gray-700 border border-gray-600 rounded-lg shadow-lg z-20 min-w-[150px] py-1">
+                                <div className="px-3 py-1 text-xs text-gray-400 border-b border-gray-600">Your Private Playlists</div>
+                                {sound.privatePlaylists.map((pl) => (
+                                  <button
+                                    key={pl.id}
+                                    onClick={() => {
+                                      setPlaylistPopover(null);
+                                      navigate(`/sounds/playlists?id=${pl.id}`);
+                                    }}
+                                    className="block w-full px-3 py-1.5 text-left text-sm text-gray-200 hover:bg-gray-600"
+                                  >
+                                    {pl.name}
+                                  </button>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        ) : (
+                          <span className="text-gray-600">–</span>
+                        )}
+                      </td>
+                      <td className="px-4 py-2">
+                        {(() => {
+                          const inPublicPlaylists = sound.publicPlaylists && sound.publicPlaylists.length > 0;
+                          const effectiveVisibility = inPublicPlaylists ? 'public' : sound.visibility;
+                          const newVisibility = effectiveVisibility === 'public' ? 'private' : 'public';
+                          return (
+                            <button
+                              onClick={() => sound.isOwner && handleVisibilityChange(sound, newVisibility)}
+                              className={`px-2 py-1 rounded text-xs font-medium ${visibilityColors[effectiveVisibility]} ${
+                                !sound.isOwner ? 'opacity-50 cursor-not-allowed' : 'hover:opacity-80'
+                              } transition-opacity`}
+                              title={
+                                !sound.isOwner
+                                  ? 'Only the owner can change visibility'
+                                  : `Click to make ${newVisibility}`
+                              }
+                            >
+                              {visibilityIcons[effectiveVisibility]} {effectiveVisibility}
+                            </button>
+                          );
+                        })()}
                       </td>
                       <td className="px-4 py-2 text-sm text-gray-400">
                         {formatRelativeTime(sound.createdAt)}
                       </td>
                       <td className="px-4 py-2">
-                        {deleteConfirm === sound.alias ? (
-                          <div className="flex gap-1">
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                deleteMutation.mutate(sound.alias);
-                              }}
-                              disabled={deleteMutation.isPending}
-                              className="px-2 py-1 bg-red-600 hover:bg-red-500 disabled:bg-red-800 rounded text-xs"
-                            >
-                              {deleteMutation.isPending ? '...' : 'Yes'}
-                            </button>
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                setDeleteConfirm(null);
-                              }}
-                              className="px-2 py-1 bg-gray-600 hover:bg-gray-500 rounded text-xs"
-                            >
-                              No
-                            </button>
-                          </div>
-                        ) : (
+                        <div className="flex items-center gap-1">
+                          {/* Create Clip Button */}
                           <button
                             onClick={(e) => {
                               e.stopPropagation();
-                              setDeleteConfirm(sound.alias);
+                              handleCreateClipFromSound(sound.alias);
                             }}
-                            className="p-1.5 text-gray-400 hover:text-red-400 hover:bg-gray-700 rounded transition-colors"
-                            title="Delete"
+                            disabled={copyingSound === sound.alias}
+                            className="p-1.5 text-gray-400 hover:text-purple-400 hover:bg-gray-700 rounded transition-colors disabled:opacity-50"
+                            title="Create new clip from this sound"
                           >
-                            🗑️
+                            {copyingSound === sound.alias ? (
+                              <span className="animate-spin inline-block">⏳</span>
+                            ) : (
+                              '✂️'
+                            )}
                           </button>
-                        )}
+
+                          {/* Delete Button */}
+                          {deleteConfirm === sound.alias ? (
+                            <div className="flex gap-1">
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  deleteMutation.mutate(sound.alias);
+                                }}
+                                disabled={deleteMutation.isPending}
+                                className="px-2 py-1 bg-red-600 hover:bg-red-500 disabled:bg-red-800 rounded text-xs"
+                              >
+                                {deleteMutation.isPending ? '...' : 'Yes'}
+                              </button>
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setDeleteConfirm(null);
+                                }}
+                                className="px-2 py-1 bg-gray-600 hover:bg-gray-500 rounded text-xs"
+                              >
+                                No
+                              </button>
+                            </div>
+                          ) : (
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleDeleteClick(sound);
+                              }}
+                              className="p-1.5 text-gray-400 hover:text-red-400 hover:bg-gray-700 rounded transition-colors"
+                              title="Delete"
+                            >
+                              🗑️
+                            </button>
+                          )}
+                        </div>
                       </td>
                     </tr>
                   ))}
-                </tbody>
-              </table>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            {/* Sticky Pagination Footer */}
+            <div className="flex-shrink-0 border-t border-gray-700 bg-gray-800 px-4 py-3 flex items-center justify-center gap-1">
+              <button
+                onClick={() => setPage(0)}
+                disabled={page === 0}
+                className="px-3 py-1.5 bg-gray-700 hover:bg-gray-600 disabled:bg-gray-800 disabled:text-gray-500 disabled:cursor-not-allowed rounded transition-colors"
+                title="First page"
+              >
+                «
+              </button>
+              <button
+                onClick={() => setPage((p) => Math.max(0, p - 1))}
+                disabled={page === 0}
+                className="px-3 py-1.5 bg-gray-700 hover:bg-gray-600 disabled:bg-gray-800 disabled:text-gray-500 disabled:cursor-not-allowed rounded transition-colors"
+                title="Previous page"
+              >
+                ‹
+              </button>
+              <span className="text-gray-400 px-4">
+                Page {page + 1} of {totalPages}
+              </span>
+              <button
+                onClick={() => setPage((p) => p + 1)}
+                disabled={page >= totalPages - 1}
+                className="px-3 py-1.5 bg-gray-700 hover:bg-gray-600 disabled:bg-gray-800 disabled:text-gray-500 disabled:cursor-not-allowed rounded transition-colors"
+                title="Next page"
+              >
+                ›
+              </button>
+              <button
+                onClick={() => setPage(totalPages - 1)}
+                disabled={page >= totalPages - 1}
+                className="px-3 py-1.5 bg-gray-700 hover:bg-gray-600 disabled:bg-gray-800 disabled:text-gray-500 disabled:cursor-not-allowed rounded transition-colors"
+                title="Last page"
+              >
+                »
+              </button>
             </div>
           </div>
         )}
@@ -863,6 +1228,114 @@ export default function MySounds() {
               </div>
             </div>
           )}
+        </div>
+      )}
+
+      {/* Delete Sound Warning Modal */}
+      {deleteWarningSound && (() => {
+        const inPublicPlaylists = deleteWarningSound.publicPlaylists && deleteWarningSound.publicPlaylists.length > 0;
+        const isOwnedAndPublic = deleteWarningSound.isOwner && deleteWarningSound.visibility === 'public';
+
+        return (
+          <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
+            <div className="bg-gray-800 rounded-lg p-6 max-w-md w-full">
+              <h3 className="text-lg font-semibold mb-4 text-orange-400">
+                {isOwnedAndPublic ? 'Delete Public Sound' : 'Delete Sound'}
+              </h3>
+              <p className="text-gray-300 mb-2">
+                You are about to delete{' '}
+                <span className="text-blue-400 font-medium">{deleteWarningSound.alias}</span>
+              </p>
+              <div className="bg-yellow-900/30 border border-yellow-600/50 rounded p-3 mb-4">
+                <p className="text-yellow-400 text-sm">⚠️ Deleting this sound will:</p>
+                <ul className="text-yellow-300 text-sm mt-2 space-y-1 ml-4 list-disc">
+                  <li>Remove it from your library</li>
+                  {isOwnedAndPublic && (
+                    <>
+                      <li>Remove it from the public library</li>
+                      <li>Other users who added it will keep their copies</li>
+                    </>
+                  )}
+                  {inPublicPlaylists && (
+                    <li>
+                      Remove it from {deleteWarningSound.publicPlaylists!.length} public playlist{deleteWarningSound.publicPlaylists!.length > 1 ? 's' : ''}:
+                      <ul className="mt-1 ml-4 list-none">
+                        {deleteWarningSound.publicPlaylists!.map((pl) => (
+                          <li key={pl.id} className="text-orange-300">• {pl.name}</li>
+                        ))}
+                      </ul>
+                    </li>
+                  )}
+                </ul>
+              </div>
+              <div className="flex justify-end gap-3">
+                <button
+                  onClick={() => setDeleteWarningSound(null)}
+                  className="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={confirmDeletePublic}
+                  disabled={deleteMutation.isPending}
+                  className="px-4 py-2 bg-red-600 hover:bg-red-500 disabled:bg-gray-600 disabled:cursor-not-allowed rounded font-medium transition-colors"
+                >
+                  {deleteMutation.isPending ? 'Deleting...' : 'Delete Anyway'}
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* Change Visibility Warning Modal (public -> private) */}
+      {visibilityWarning && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
+          <div className="bg-gray-800 rounded-lg p-6 max-w-md w-full">
+            <h3 className="text-lg font-semibold mb-4 text-orange-400">Make Sound Private</h3>
+            <p className="text-gray-300 mb-2">
+              You are about to make{' '}
+              <span className="text-blue-400 font-medium">{visibilityWarning.sound.alias}</span>{' '}
+              private.
+            </p>
+            <div className="bg-yellow-900/30 border border-yellow-600/50 rounded p-3 mb-4">
+              <p className="text-yellow-400 text-sm">
+                ⚠️ Making this sound private will:
+              </p>
+              <ul className="text-yellow-300 text-sm mt-2 space-y-1 ml-4 list-disc">
+                {visibilityWarning.sound.visibility === 'public' && (
+                  <li>Remove it from the public library</li>
+                )}
+                {visibilityWarning.sound.publicPlaylists && visibilityWarning.sound.publicPlaylists.length > 0 && (
+                  <li>
+                    Remove it from the following public playlist{visibilityWarning.sound.publicPlaylists.length > 1 ? 's' : ''}:
+                    <ul className="mt-1 ml-4 list-none">
+                      {visibilityWarning.sound.publicPlaylists.map((pl) => (
+                        <li key={pl.id} className="text-orange-300">• {pl.name}</li>
+                      ))}
+                    </ul>
+                  </li>
+                )}
+                <li>New users will no longer be able to find or add it</li>
+                <li>Users who already added it will keep their copies</li>
+              </ul>
+            </div>
+            <div className="flex justify-end gap-3">
+              <button
+                onClick={() => setVisibilityWarning(null)}
+                className="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={confirmVisibilityChange}
+                disabled={visibilityMutation.isPending}
+                className="px-4 py-2 bg-orange-600 hover:bg-orange-500 disabled:bg-gray-600 disabled:cursor-not-allowed rounded font-medium transition-colors"
+              >
+                {visibilityMutation.isPending ? 'Changing...' : 'Make Private'}
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>

@@ -51,7 +51,7 @@ async function start() {
 
     await fastify.register(multipart, {
       limits: {
-        fileSize: 2 * 1024 * 1024, // 2MB max
+        fileSize: 20 * 1024 * 1024, // 20MB max (for clip editor - final clips are limited to 30 seconds)
       },
     });
 

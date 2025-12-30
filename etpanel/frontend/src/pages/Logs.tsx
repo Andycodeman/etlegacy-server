@@ -1,7 +1,7 @@
-import { useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useState, useRef, useCallback } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { logs } from '../api/client';
-import type { LogEntry, ConnectionAttempt, LogsQueryParams } from '../api/client';
+import type { LogEntry, ConnectionAttempt } from '../api/client';
 
 type CategoryFilter = 'connections' | 'kills' | 'chat' | 'errors' | 'all';
 
@@ -109,13 +109,15 @@ function formatLocalTime(serverTimestamp: string): string {
 }
 
 export default function Logs() {
+  const queryClient = useQueryClient();
   const [timeRange, setTimeRange] = useState('1h');
   const [category, setCategory] = useState<CategoryFilter>('connections');
   const [playerFilter, setPlayerFilter] = useState('');
   const [searchInput, setSearchInput] = useState('');
   const [viewMode, setViewMode] = useState<'connections' | 'raw'>('connections');
+  const abortControllerRef = useRef<AbortController | null>(null);
 
-  const queryParams: LogsQueryParams = {
+  const queryParams = {
     timeRange,
     category,
     playerFilter: playerFilter || undefined,
@@ -123,10 +125,23 @@ export default function Logs() {
 
   const { data, isLoading, error, refetch, isFetching } = useQuery({
     queryKey: ['logs', queryParams],
-    queryFn: () => logs.query(queryParams),
+    queryFn: () => {
+      // Store abort controller so we can cancel
+      abortControllerRef.current = new AbortController();
+      return logs.query({ ...queryParams, signal: abortControllerRef.current.signal });
+    },
     staleTime: 30000, // 30 seconds
     refetchOnWindowFocus: false,
   });
+
+  const handleCancel = useCallback(() => {
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+      abortControllerRef.current = null;
+    }
+    // Also cancel the query
+    queryClient.cancelQueries({ queryKey: ['logs', queryParams] });
+  }, [queryClient, queryParams]);
 
   const handleSearch = (e: React.FormEvent) => {
     e.preventDefault();
@@ -158,7 +173,7 @@ export default function Logs() {
         </div>
         {data && (
           <div className="text-sm text-gray-400">
-            {data.filteredCount} of {data.totalLines} log entries
+            {data.filteredCount.toLocaleString()} of {data.totalLines.toLocaleString()} log entries
           </div>
         )}
       </div>
@@ -255,11 +270,18 @@ export default function Logs() {
 
       {/* Content */}
       <div className="flex-1 bg-gray-800 rounded-lg overflow-hidden min-h-0">
-        {isLoading ? (
+        {isLoading || isFetching ? (
           <div className="flex items-center justify-center h-full">
-            <div className="text-gray-400">
+            <div className="text-gray-400 text-center">
               <div className="animate-spin w-8 h-8 border-2 border-gray-600 border-t-orange-500 rounded-full mx-auto mb-4" />
-              <p>Fetching logs from server...</p>
+              <p className="mb-4">Fetching logs from server...</p>
+              <p className="text-sm text-gray-500 mb-4">This may take a while for large time ranges</p>
+              <button
+                onClick={handleCancel}
+                className="px-4 py-2 bg-red-600 hover:bg-red-500 text-white rounded-lg font-medium transition-colors"
+              >
+                Cancel
+              </button>
             </div>
           </div>
         ) : error ? (

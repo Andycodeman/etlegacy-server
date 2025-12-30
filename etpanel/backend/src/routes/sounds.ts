@@ -120,6 +120,8 @@ export const soundsRoutes: FastifyPluginAsync = async (fastify) => {
     }
 
     // Get sounds with a flag indicating if they're in any public playlist
+    // Also include isOwner to indicate if current user uploaded the sound
+    // And the list of public playlists and count of private playlists this sound is in
     const query = sql`
       SELECT
         us.id,
@@ -131,13 +133,26 @@ export const soundsRoutes: FastifyPluginAsync = async (fastify) => {
         sf.file_size as "fileSize",
         sf.duration_seconds as "durationSeconds",
         sf.is_public as "isPublic",
-        CASE WHEN EXISTS (
-          SELECT 1 FROM sound_playlist_items spi
-          JOIN sound_playlists sp ON sp.id = spi.playlist_id
-          WHERE spi.user_sound_id = us.id AND sp.is_public = true
-        ) THEN true ELSE false END as "inPublicPlaylist"
+        sf.added_by_guid as "addedByGuid",
+        CASE WHEN sf.added_by_guid = ${guid} THEN true ELSE false END as "isOwner",
+        COALESCE(ps.display_name, ps.name, 'Unknown') as "ownerName",
+        COALESCE(
+          (SELECT json_agg(json_build_object('id', sp.id, 'name', sp.name))
+           FROM sound_playlist_items spi
+           JOIN sound_playlists sp ON sp.id = spi.playlist_id
+           WHERE spi.user_sound_id = us.id AND sp.is_public = true),
+          '[]'::json
+        ) as "publicPlaylists",
+        COALESCE(
+          (SELECT json_agg(json_build_object('id', sp.id, 'name', sp.name))
+           FROM sound_playlist_items spi
+           JOIN sound_playlists sp ON sp.id = spi.playlist_id
+           WHERE spi.user_sound_id = us.id AND sp.is_public = false AND sp.guid = ${guid}),
+          '[]'::json
+        ) as "privatePlaylists"
       FROM user_sounds us
       INNER JOIN sound_files sf ON sf.id = us.sound_file_id
+      LEFT JOIN player_stats ps ON ps.guid = sf.added_by_guid
       WHERE us.guid = ${guid}
       ORDER BY us.alias ASC
     `;
@@ -271,8 +286,9 @@ export const soundsRoutes: FastifyPluginAsync = async (fastify) => {
   // Set sound visibility
   fastify.patch('/:alias/visibility', { preHandler: authenticate }, async (request, reply) => {
     const { alias } = request.params as { alias: string };
-    const body = visibilitySchema.safeParse(request.body);
-    if (!body.success) {
+    const body = request.body as { visibility?: string; removeFromPublicPlaylists?: boolean };
+
+    if (!body.visibility || !['private', 'public', 'shared'].includes(body.visibility)) {
       return reply.status(400).send({ error: 'Invalid visibility value' });
     }
 
@@ -281,9 +297,9 @@ export const soundsRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.status(400).send({ error: 'No GUID linked to account' });
     }
 
-    // Get sound file ID
+    // Get user_sound ID and sound file ID
     const [sound] = await db
-      .select({ soundFileId: schema.userSounds.soundFileId })
+      .select({ id: schema.userSounds.id, soundFileId: schema.userSounds.soundFileId })
       .from(schema.userSounds)
       .where(and(eq(schema.userSounds.guid, guid), eq(schema.userSounds.alias, alias)))
       .limit(1);
@@ -292,21 +308,41 @@ export const soundsRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.status(404).send({ error: 'Sound not found' });
     }
 
+    // If setting to private and removeFromPublicPlaylists is true, remove from public playlists
+    if (body.visibility === 'private' && body.removeFromPublicPlaylists) {
+      // Find all public playlists this sound is in
+      const publicPlaylistItems = await db
+        .select({ itemId: schema.soundPlaylistItems.id })
+        .from(schema.soundPlaylistItems)
+        .innerJoin(schema.soundPlaylists, eq(schema.soundPlaylistItems.playlistId, schema.soundPlaylists.id))
+        .where(and(
+          eq(schema.soundPlaylistItems.userSoundId, sound.id),
+          eq(schema.soundPlaylists.isPublic, true)
+        ));
+
+      // Remove from all public playlists
+      for (const item of publicPlaylistItems) {
+        await db
+          .delete(schema.soundPlaylistItems)
+          .where(eq(schema.soundPlaylistItems.id, item.itemId));
+      }
+    }
+
     // Update user_sounds visibility
     await db
       .update(schema.userSounds)
-      .set({ visibility: body.data.visibility, updatedAt: new Date() })
+      .set({ visibility: body.visibility as 'private' | 'public' | 'shared', updatedAt: new Date() })
       .where(and(eq(schema.userSounds.guid, guid), eq(schema.userSounds.alias, alias)));
 
     // If making public, update sound_files.is_public
-    if (body.data.visibility === 'public') {
+    if (body.visibility === 'public') {
       await db
         .update(schema.soundFiles)
         .set({ isPublic: true })
         .where(eq(schema.soundFiles.id, sound.soundFileId));
     }
 
-    return { success: true, visibility: body.data.visibility };
+    return { success: true, visibility: body.visibility };
   });
 
   // ============================================================================
@@ -855,6 +891,153 @@ export const soundsRoutes: FastifyPluginAsync = async (fastify) => {
     }
   });
 
+  // Copy existing sound to temp storage for re-editing/clipping
+  fastify.post('/copy-to-temp/:alias', { preHandler: authenticate }, async (request, reply) => {
+    const { alias } = request.params as { alias: string };
+    const guid = await getUserGuid(request.user.userId);
+    if (!guid) {
+      return reply.status(400).send({ error: 'No GUID linked to account. Use /etman register in-game.' });
+    }
+
+    // Get the user's sound
+    const [sound] = await db
+      .select({
+        filePath: schema.soundFiles.filePath,
+        originalName: schema.soundFiles.originalName,
+        fileSize: schema.soundFiles.fileSize,
+      })
+      .from(schema.userSounds)
+      .innerJoin(schema.soundFiles, eq(schema.userSounds.soundFileId, schema.soundFiles.id))
+      .where(and(eq(schema.userSounds.guid, guid), eq(schema.userSounds.alias, alias)))
+      .limit(1);
+
+    if (!sound) {
+      return reply.status(404).send({ error: 'Sound not found' });
+    }
+
+    // Check file exists
+    const sourcePath = sound.filePath.startsWith('/') ? sound.filePath : join(SOUNDS_DIR, sound.filePath);
+    if (!existsSync(sourcePath)) {
+      return reply.status(404).send({ error: 'Sound file not found on disk' });
+    }
+
+    // Ensure temp directory exists
+    ensureTempDir();
+
+    // Generate temp file ID and copy file
+    const tempId = randomUUID();
+    const tempFilePath = join(SOUNDS_TEMP_DIR, `${tempId}.mp3`);
+
+    try {
+      // Copy the file to temp storage
+      const { copyFileSync } = await import('fs');
+      copyFileSync(sourcePath, tempFilePath);
+
+      // Get accurate duration using ffprobe
+      let durationSeconds: number;
+      try {
+        durationSeconds = await getAudioDuration(tempFilePath);
+      } catch (err) {
+        // Clean up and report error
+        unlinkSync(tempFilePath);
+        fastify.log.error({ err }, 'Failed to get audio duration');
+        return reply.status(400).send({ error: 'Could not read audio file.' });
+      }
+
+      return {
+        success: true,
+        tempId,
+        durationSeconds,
+        fileSize: statSync(tempFilePath).size,
+        originalName: sound.originalName,
+        maxClipDuration: MAX_CLIP_DURATION_SECONDS,
+      };
+    } catch (err) {
+      fastify.log.error({ err }, 'Error copying sound to temp');
+      // Clean up if partial file was created
+      if (existsSync(tempFilePath)) {
+        unlinkSync(tempFilePath);
+      }
+      return reply.status(500).send({ error: 'Failed to copy sound file' });
+    }
+  });
+
+  // Copy public sound to temp storage for clipping
+  fastify.post('/copy-public-to-temp/:soundFileId', { preHandler: authenticate }, async (request, reply) => {
+    const { soundFileId } = request.params as { soundFileId: string };
+    const fileId = parseInt(soundFileId, 10);
+
+    const guid = await getUserGuid(request.user.userId);
+    if (!guid) {
+      return reply.status(400).send({ error: 'No GUID linked to account. Use /etman register in-game.' });
+    }
+
+    // Get the public sound file - allow if directly public OR in a public playlist
+    const query = sql`
+      SELECT DISTINCT sf.file_path as "filePath", sf.original_name as "originalName", sf.file_size as "fileSize"
+      FROM sound_files sf
+      LEFT JOIN user_sounds us ON us.sound_file_id = sf.id
+      LEFT JOIN sound_playlist_items spi ON spi.user_sound_id = us.id
+      LEFT JOIN sound_playlists sp ON sp.id = spi.playlist_id
+      WHERE sf.id = ${fileId}
+        AND (sf.is_public = true OR sp.is_public = true OR us.visibility = 'public')
+      LIMIT 1
+    `;
+
+    const result = await db.execute(query);
+    const sound = result.rows[0] as { filePath: string; originalName: string; fileSize: number } | undefined;
+
+    if (!sound) {
+      return reply.status(404).send({ error: 'Public sound not found' });
+    }
+
+    // Check file exists
+    const sourcePath = sound.filePath.startsWith('/') ? sound.filePath : join(SOUNDS_DIR, sound.filePath);
+    if (!existsSync(sourcePath)) {
+      return reply.status(404).send({ error: 'Sound file not found on disk' });
+    }
+
+    // Ensure temp directory exists
+    ensureTempDir();
+
+    // Generate temp file ID and copy file
+    const tempId = randomUUID();
+    const tempFilePath = join(SOUNDS_TEMP_DIR, `${tempId}.mp3`);
+
+    try {
+      // Copy the file to temp storage
+      const { copyFileSync } = await import('fs');
+      copyFileSync(sourcePath, tempFilePath);
+
+      // Get accurate duration using ffprobe
+      let durationSeconds: number;
+      try {
+        durationSeconds = await getAudioDuration(tempFilePath);
+      } catch (err) {
+        // Clean up and report error
+        unlinkSync(tempFilePath);
+        fastify.log.error({ err }, 'Failed to get audio duration');
+        return reply.status(400).send({ error: 'Could not read audio file.' });
+      }
+
+      return {
+        success: true,
+        tempId,
+        durationSeconds,
+        fileSize: statSync(tempFilePath).size,
+        originalName: sound.originalName,
+        maxClipDuration: MAX_CLIP_DURATION_SECONDS,
+      };
+    } catch (err) {
+      fastify.log.error({ err }, 'Error copying public sound to temp');
+      // Clean up if partial file was created
+      if (existsSync(tempFilePath)) {
+        unlinkSync(tempFilePath);
+      }
+      return reply.status(500).send({ error: 'Failed to copy sound file' });
+    }
+  });
+
   // Delete temp file (cleanup)
   fastify.delete('/temp/:tempId', { preHandler: authenticate }, async (request, reply) => {
     const { tempId } = request.params as { tempId: string };
@@ -888,20 +1071,25 @@ export const soundsRoutes: FastifyPluginAsync = async (fastify) => {
     // Use raw SQL to get DISTINCT sounds that are either:
     // 1. Marked as public in sound_files (isPublic = true), OR
     // 2. Part of a public playlist (via user_sounds -> sound_playlist_items -> sound_playlists where isPublic = true)
-    const searchCondition = search ? `AND sf.original_name ILIKE '%${search.replace(/'/g, "''")}%'` : '';
+    // Show alias from user_sounds when available, fallback to original_name
+    const searchCondition = search ? `AND (us.alias ILIKE '%${search.replace(/'/g, "''")}%' OR sf.original_name ILIKE '%${search.replace(/'/g, "''")}%')` : '';
 
     const query = sql`
       SELECT DISTINCT ON (sf.id)
         sf.id as "soundFileId",
-        sf.original_name as "originalName",
+        COALESCE(us.alias, sf.original_name) as "originalName",
         sf.file_size as "fileSize",
         sf.duration_seconds as "durationSeconds",
         sf.added_by_guid as "addedByGuid",
-        sf.created_at as "createdAt"
+        sf.created_at as "createdAt",
+        COALESCE(ps.display_name, ps.name, u.display_name, 'Unknown') as "addedByName",
+        sf.is_public as "isDirectlyPublic"
       FROM sound_files sf
       LEFT JOIN user_sounds us ON us.sound_file_id = sf.id
       LEFT JOIN sound_playlist_items spi ON spi.user_sound_id = us.id
       LEFT JOIN sound_playlists sp ON sp.id = spi.playlist_id
+      LEFT JOIN player_stats ps ON ps.guid = sf.added_by_guid
+      LEFT JOIN users u ON u.guid = sf.added_by_guid
       WHERE (sf.is_public = true OR sp.is_public = true)
       ${sql.raw(searchCondition)}
       ORDER BY sf.id, sf.created_at DESC
@@ -1025,8 +1213,9 @@ export const soundsRoutes: FastifyPluginAsync = async (fastify) => {
         sp.guid as "ownerGuid",
         (SELECT COUNT(*) FROM sound_playlist_items WHERE playlist_id = sp.id) as "soundCount",
         CASE WHEN sp.guid = ${guid} THEN true ELSE false END as "isOwner",
-        COALESCE(u.display_name, 'Unknown') as "ownerName"
+        COALESCE(ps.display_name, ps.name, u.display_name, 'Unknown') as "ownerName"
       FROM sound_playlists sp
+      LEFT JOIN player_stats ps ON ps.guid = sp.guid
       LEFT JOIN users u ON u.guid = sp.guid
       WHERE sp.guid = ${guid} OR sp.is_public = true
       ORDER BY
@@ -1141,6 +1330,7 @@ export const soundsRoutes: FastifyPluginAsync = async (fastify) => {
         orderNumber: schema.soundPlaylistItems.orderNumber,
         addedAt: schema.soundPlaylistItems.addedAt,
         alias: schema.userSounds.alias,
+        soundFileId: schema.soundFiles.id,
         fileSize: schema.soundFiles.fileSize,
         durationSeconds: schema.soundFiles.durationSeconds,
       })
@@ -1708,38 +1898,99 @@ export const soundsRoutes: FastifyPluginAsync = async (fastify) => {
     return { success: true, originalName: newName };
   });
 
-  // Admin: Delete a public sound file
-  fastify.delete('/admin/public/:soundFileId', { preHandler: requireAdmin }, async (request, reply) => {
+  // Admin: Get info about a public sound before deleting (shows affected playlists)
+  fastify.get('/admin/public/:soundFileId/delete-info', { preHandler: requireAdmin }, async (request, reply) => {
     const { soundFileId } = request.params as { soundFileId: string };
     const fileId = parseInt(soundFileId, 10);
 
-    // Check sound exists and is public
-    const [existing] = await db
-      .select({ id: schema.soundFiles.id, filePath: schema.soundFiles.filePath })
-      .from(schema.soundFiles)
-      .where(and(eq(schema.soundFiles.id, fileId), eq(schema.soundFiles.isPublic, true)))
-      .limit(1);
+    // Check sound exists and is publicly accessible (directly or via playlist)
+    const existsQuery = sql`
+      SELECT DISTINCT sf.id, sf.original_name as "originalName", sf.is_public as "isDirectlyPublic"
+      FROM sound_files sf
+      LEFT JOIN user_sounds us ON us.sound_file_id = sf.id
+      LEFT JOIN sound_playlist_items spi ON spi.user_sound_id = us.id
+      LEFT JOIN sound_playlists sp ON sp.id = spi.playlist_id
+      WHERE sf.id = ${fileId}
+        AND (sf.is_public = true OR sp.is_public = true)
+      LIMIT 1
+    `;
+    const existsResult = await db.execute(existsQuery);
+    const existing = existsResult.rows[0] as { id: number; originalName: string; isDirectlyPublic: boolean } | undefined;
 
     if (!existing) {
       return reply.status(404).send({ error: 'Public sound not found' });
     }
 
-    // Delete pending shares first
-    await db
-      .delete(schema.soundShares)
-      .where(eq(schema.soundShares.soundFileId, fileId));
+    // Find all playlists this sound is in
+    const playlistsQuery = sql`
+      SELECT DISTINCT sp.id, sp.name, sp.is_public as "isPublic", u.display_name as "ownerName"
+      FROM sound_playlists sp
+      INNER JOIN sound_playlist_items spi ON spi.playlist_id = sp.id
+      INNER JOIN user_sounds us ON us.id = spi.user_sound_id
+      LEFT JOIN users u ON u.guid = sp.guid
+      WHERE us.sound_file_id = ${fileId}
+    `;
+    const playlistsResult = await db.execute(playlistsQuery);
+    const playlists = playlistsResult.rows as { id: number; name: string; isPublic: boolean; ownerName: string }[];
 
-    // Delete all user_sounds references (cascades to playlist items)
-    await db
-      .delete(schema.userSounds)
-      .where(eq(schema.userSounds.soundFileId, fileId));
+    // Count users who have this sound
+    const usersQuery = sql`
+      SELECT COUNT(DISTINCT guid) as count FROM user_sounds WHERE sound_file_id = ${fileId}
+    `;
+    const usersResult = await db.execute(usersQuery);
+    const userCount = Number((usersResult.rows[0] as { count: string }).count);
 
-    // Delete the sound file record (the actual file stays on disk for now)
+    return {
+      soundFileId: fileId,
+      originalName: existing.originalName,
+      isDirectlyPublic: existing.isDirectlyPublic,
+      affectedPlaylists: playlists,
+      affectedUserCount: userCount,
+    };
+  });
+
+  // Admin: Remove a sound from the public library
+  // This does NOT delete the sound - it just makes it non-public
+  // All users who have it in their library keep it
+  fastify.delete('/admin/public/:soundFileId', { preHandler: requireAdmin }, async (request, reply) => {
+    const { soundFileId } = request.params as { soundFileId: string };
+    const fileId = parseInt(soundFileId, 10);
+
+    // Check sound exists and is publicly accessible (directly or via playlist)
+    const existsQuery = sql`
+      SELECT DISTINCT sf.id, sf.is_public as "isDirectlyPublic"
+      FROM sound_files sf
+      LEFT JOIN user_sounds us ON us.sound_file_id = sf.id
+      LEFT JOIN sound_playlist_items spi ON spi.user_sound_id = us.id
+      LEFT JOIN sound_playlists sp ON sp.id = spi.playlist_id
+      WHERE sf.id = ${fileId}
+        AND (sf.is_public = true OR sp.is_public = true)
+      LIMIT 1
+    `;
+    const existsResult = await db.execute(existsQuery);
+    const existing = existsResult.rows[0] as { id: number; isDirectlyPublic: boolean } | undefined;
+
+    if (!existing) {
+      return reply.status(404).send({ error: 'Public sound not found' });
+    }
+
+    // Set the sound to non-public (removes from public library)
+    // Users who already have it in their library keep their user_sounds references
     await db
-      .delete(schema.soundFiles)
+      .update(schema.soundFiles)
+      .set({ isPublic: false })
       .where(eq(schema.soundFiles.id, fileId));
 
-    return { success: true };
+    // Also set any user_sounds visibility to 'private' if it was 'public'
+    await db
+      .update(schema.userSounds)
+      .set({ visibility: 'private', updatedAt: new Date() })
+      .where(and(
+        eq(schema.userSounds.soundFileId, fileId),
+        eq(schema.userSounds.visibility, 'public')
+      ));
+
+    return { success: true, message: 'Sound removed from public library. All users who had it keep their copies.' };
   });
 
   // Admin: Set a sound's public status

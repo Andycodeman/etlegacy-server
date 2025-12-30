@@ -2523,23 +2523,22 @@ void Svcmd_Qsay_f(void)
 }
 
 /**
- * @brief Svcmd_SetTimeLeft - Set remaining map time in seconds
+ * @brief Svcmd_SetTimeLeft - Set map timelimit directly in seconds
  * Usage: settimeleft <seconds>
- * Calculates and sets timelimit so that remaining time equals specified value
+ * Sets the timelimit CVAR to the exact value specified (converted to minutes)
+ * Also resets the level start time so the countdown starts fresh
  */
 static void Svcmd_SetTimeLeft(void)
 {
 	char arg[16];
 	int  desiredSeconds;
-	int  elapsedMs;
-	int  newTimelimitMs;
 	float newTimelimitMin;
 	extern vmCvar_t g_timelimit;
 
 	if (trap_Argc() < 2)
 	{
 		G_Printf("Usage: settimeleft <seconds>\n");
-		G_Printf("Example: settimeleft 60 (1 minute remaining)\n");
+		G_Printf("Example: settimeleft 300 (5 minutes)\n");
 		return;
 	}
 
@@ -2551,28 +2550,27 @@ static void Svcmd_SetTimeLeft(void)
 		desiredSeconds = 5; // Minimum 5 seconds
 	}
 
-	// Calculate elapsed time since map start (use timeCurrent for accuracy)
-	elapsedMs = level.timeCurrent - level.startTime;
+	// Convert seconds to minutes for timelimit
+	newTimelimitMin = (float)desiredSeconds / 60.0f;
 
-	// New timelimit = elapsed + desired remaining
-	newTimelimitMs = elapsedMs + (desiredSeconds * 1000);
-	newTimelimitMin = (float)newTimelimitMs / 60000.0f;
-
-	// Set the timelimit cvar and update the vmCvar
+	// Set the timelimit cvar
 	trap_Cvar_Set("timelimit", va("%.2f", newTimelimitMin));
 	trap_Cvar_Update(&g_timelimit);
 
-	G_Printf("[ETMan] Time remaining set to %d:%02d\n",
+	// Reset the level start time to NOW so the timer starts fresh
+	level.startTime = level.time;
+	trap_SetConfigstring(CS_LEVEL_START_TIME, va("%i", level.startTime));
+
+	// Signal to Lua to reset its level time tracking
+	// Set CVAR first, then call Lua command to process it
+	trap_Cvar_Set("etpanel_leveltime_reset", va("%i", level.time));
+	trap_SendConsoleCommand(EXEC_APPEND, "lua_resetleveltime\n");
+
+	G_Printf("[ETMan] Timelimit set to %d:%02d\n",
 		desiredSeconds / 60, desiredSeconds % 60);
-	G_Printf("[ETMan] DEBUG: elapsedMs=%d, desiredSec=%d, newTimelimitMin=%.2f\n",
-		elapsedMs, desiredSeconds, newTimelimitMin);
-	G_Printf("[ETMan] DEBUG: g_timelimit.value=%.2f, threshold=%d ms\n",
-		g_timelimit.value, (int)(g_timelimit.value * 60000));
-	G_Printf("[ETMan] DEBUG: level.timeCurrent=%d, level.startTime=%d, diff=%d\n",
-		level.timeCurrent, level.startTime, level.timeCurrent - level.startTime);
 
 	// Notify all players
-	trap_SendServerCommand(-1, va("cp \"^3Time remaining: ^7%d:%02d\"",
+	trap_SendServerCommand(-1, va("cp \"^3Timelimit set to ^7%d:%02d\"",
 		desiredSeconds / 60, desiredSeconds % 60));
 }
 

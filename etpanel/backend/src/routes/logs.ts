@@ -311,7 +311,7 @@ export const logsRoutes: FastifyPluginAsync = async (fastify) => {
         : [];
 
       return {
-        logs: parsedLogs.slice(-500), // Limit to 500 most recent
+        logs: parsedLogs, // Return ALL logs, no limit
         connectionAttempts,
         totalLines: lines.length,
         filteredCount: parsedLogs.length,

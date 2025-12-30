@@ -993,6 +993,37 @@ export const adminRoutes: FastifyPluginAsync = async (fastify) => {
         break;
       }
 
+      case 'timeleft': {
+        if (!args) {
+          rconResponse = 'Usage: !timeleft <mm:ss> or !timeleft <minutes>';
+          rconSuccess = false;
+        } else {
+          // Parse mm:ss or just minutes
+          let totalSeconds = 0;
+          if (args.includes(':')) {
+            // Format: mm:ss (e.g., "5:00" or "10:30")
+            const [mins, secs] = args.split(':').map(s => parseInt(s.trim()));
+            totalSeconds = (mins || 0) * 60 + (secs || 0);
+          } else {
+            // Plain number = minutes (e.g., "5" = 5 minutes)
+            const val = parseInt(args.trim());
+            totalSeconds = val * 60;
+          }
+
+          if (totalSeconds < 5) totalSeconds = 5; // Minimum 5 seconds
+
+          // Use the settimeleft server command
+          const result = await sendRcon(`settimeleft ${totalSeconds}`);
+          const mins = Math.floor(totalSeconds / 60);
+          const secs = totalSeconds % 60;
+          rconResponse = result.success
+            ? `Set time remaining to ${mins}:${secs.toString().padStart(2, '0')}`
+            : (result.error || 'Failed to set time');
+          rconSuccess = result.success;
+        }
+        break;
+      }
+
       // Commands that need the full admin system (DB access, complex logic)
       case 'stats':
       case 'finger':

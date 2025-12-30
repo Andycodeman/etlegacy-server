@@ -16,7 +16,7 @@ function formatTime(seconds: number): string {
 
 // Common admin commands with descriptions
 const ADMIN_COMMANDS = [
-  { command: 'vstr nextmap', label: 'Next Map', description: 'Switch to next map in rotation', icon: '⏭️' },
+  { command: 'rotate', label: 'Next Map', description: 'Switch to next map in rotation', icon: '⏭️' },
   { command: 'map_restart', label: 'Restart Map', description: 'Restart current map', icon: '🔄' },
   { command: 'reset_match', label: 'Reset Match', description: 'Reset match scores', icon: '🔁' },
   { command: 'shuffle', label: 'Shuffle Teams', description: 'Shuffle players between teams', icon: '🔀' },

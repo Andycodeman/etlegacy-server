@@ -87,9 +87,10 @@ export default function SoundClipEditor({
   const minZoom = 1;
   const maxZoom = 20; // 20x zoom for precise selection
 
-  // Form state
+  // Form state - add "_clip" suffix to suggest this is a new sound
+  const baseAlias = originalName.replace(/\.mp3$/i, '').replace(/[^a-zA-Z0-9_]/g, '_');
   const [alias, setAlias] = useState(
-    originalName.replace(/\.mp3$/i, '').replace(/[^a-zA-Z0-9_]/g, '_').substring(0, 32)
+    baseAlias.substring(0, 27) + '_clip' // Leave room for "_clip" suffix within 32 char limit
   );
   const [isPublic, setIsPublic] = useState(false);
   const [validationError, setValidationError] = useState('');

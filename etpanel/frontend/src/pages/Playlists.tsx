@@ -1,8 +1,10 @@
 import { useState, useEffect, useMemo } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { sounds } from '../api/client';
 import type { Playlist, PlaylistItem, UserSound } from '../api/client';
 import AudioPlayer from '../components/AudioPlayer';
+import { renderETColors } from '../utils/etColors';
 
 function formatFileSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -19,11 +21,14 @@ function formatDuration(seconds?: number): string {
 
 export default function Playlists() {
   const queryClient = useQueryClient();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [selectedPlaylist, setSelectedPlaylist] = useState<{ name: string; id: number; isOwner: boolean } | null>(null);
   const [createModal, setCreateModal] = useState(false);
   const [newPlaylistName, setNewPlaylistName] = useState('');
   const [newPlaylistDesc, setNewPlaylistDesc] = useState('');
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
+  const [deleteWarningPlaylist, setDeleteWarningPlaylist] = useState<Playlist | null>(null);
+  const [visibilityWarning, setVisibilityWarning] = useState<Playlist | null>(null);
   const [addSoundModal, setAddSoundModal] = useState(false);
   const [draggedItem, setDraggedItem] = useState<number | null>(null);
   const [dragOverItem, setDragOverItem] = useState<number | null>(null);
@@ -49,6 +54,21 @@ export default function Playlists() {
     enabled: guidStatus?.linked === true,
   });
 
+  // Auto-select playlist from URL query parameter
+  const urlPlaylistId = searchParams.get('id');
+  useEffect(() => {
+    if (urlPlaylistId && playlistsData?.playlists && !playlistsLoading) {
+      const playlistId = parseInt(urlPlaylistId, 10);
+      const playlist = playlistsData.playlists.find((p: Playlist) => p.id === playlistId);
+      if (playlist) {
+        setSelectedPlaylist({ name: playlist.name, id: playlist.id, isOwner: playlist.isOwner ?? false });
+        // Clear the URL param after selecting
+        searchParams.delete('id');
+        setSearchParams(searchParams, { replace: true });
+      }
+    }
+  }, [urlPlaylistId, playlistsData?.playlists, playlistsLoading, searchParams, setSearchParams]);
+
   // Fetch selected playlist details
   const { data: playlistDetail, isLoading: detailLoading } = useQuery({
     queryKey: ['playlist', selectedPlaylist?.id],
@@ -63,14 +83,20 @@ export default function Playlists() {
     enabled: addSoundModal && guidStatus?.linked === true,
   });
 
-  // Filter playlists by search
-  const filteredPlaylists = useMemo(() => {
-    if (!playlistsData?.playlists) return [];
-    if (!debouncedSearch) return playlistsData.playlists;
-    const searchLower = debouncedSearch.toLowerCase();
-    return playlistsData.playlists.filter(
-      (p: Playlist) => p.name.toLowerCase().includes(searchLower)
-    );
+  // Filter and split playlists into personal and public (from others)
+  const { myPlaylists, publicPlaylists } = useMemo(() => {
+    if (!playlistsData?.playlists) return { myPlaylists: [], publicPlaylists: [] };
+
+    let playlists = playlistsData.playlists;
+    if (debouncedSearch) {
+      const searchLower = debouncedSearch.toLowerCase();
+      playlists = playlists.filter((p: Playlist) => p.name.toLowerCase().includes(searchLower));
+    }
+
+    const mine = playlists.filter((p: Playlist) => p.isOwner !== false);
+    const others = playlists.filter((p: Playlist) => p.isOwner === false);
+
+    return { myPlaylists: mine, publicPlaylists: others };
   }, [playlistsData?.playlists, debouncedSearch]);
 
   // Mutations
@@ -195,7 +221,70 @@ export default function Playlists() {
     );
   }
 
-  const playlists = filteredPlaylists;
+  // Helper to render a playlist item
+  const renderPlaylistItem = (playlist: Playlist) => (
+    <div
+      key={playlist.id}
+      className={`p-3 cursor-pointer transition-colors ${
+        selectedPlaylist?.id === playlist.id
+          ? 'bg-gray-700'
+          : 'hover:bg-gray-700/50'
+      }`}
+      onClick={() => setSelectedPlaylist({
+        name: playlist.name,
+        id: playlist.id,
+        isOwner: playlist.isOwner !== false
+      })}
+    >
+      <div className="flex items-center justify-between">
+        <div className="flex-1 min-w-0">
+          <div className="font-medium truncate flex items-center gap-2">
+            {playlist.isPublic && <span title="Public">🌐</span>}
+            {playlist.name}
+          </div>
+          <div className="text-sm text-gray-400">
+            {playlist.soundCount || 0} sound{(playlist.soundCount || 0) !== 1 ? 's' : ''}
+            {playlist.isOwner === false && playlist.ownerName && (
+              <span className="ml-2">by {renderETColors(playlist.ownerName)}</span>
+            )}
+          </div>
+        </div>
+        {playlist.isOwner !== false && (
+          deleteConfirm === playlist.name ? (
+            <div className="flex gap-1" onClick={(e) => e.stopPropagation()}>
+              <button
+                onClick={() => deleteMutation.mutate(playlist.name)}
+                className="px-2 py-1 bg-red-600 hover:bg-red-500 rounded text-xs"
+              >
+                Yes
+              </button>
+              <button
+                onClick={() => setDeleteConfirm(null)}
+                className="px-2 py-1 bg-gray-600 hover:bg-gray-500 rounded text-xs"
+              >
+                No
+              </button>
+            </div>
+          ) : (
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                if (playlist.isPublic) {
+                  setDeleteWarningPlaylist(playlist);
+                } else {
+                  setDeleteConfirm(playlist.name);
+                }
+              }}
+              className="p-1.5 text-gray-400 hover:text-red-400 hover:bg-gray-600 rounded transition-colors"
+              title="Delete"
+            >
+              🗑️
+            </button>
+          )
+        )}
+      </div>
+    </div>
+  );
 
   return (
     <div className="-m-4 md:-m-8">
@@ -205,7 +294,7 @@ export default function Playlists() {
           <div className="flex items-center gap-4">
             <h1 className="text-xl md:text-2xl font-bold">Playlists</h1>
             <span className="text-sm text-gray-400">
-              {playlists.length}{debouncedSearch ? ` of ${playlistsData?.playlists?.length || 0}` : ''} playlist{playlists.length !== 1 ? 's' : ''}
+              {myPlaylists.length + publicPlaylists.length}{debouncedSearch ? ` of ${playlistsData?.playlists?.length || 0}` : ''} playlist{(myPlaylists.length + publicPlaylists.length) !== 1 ? 's' : ''}
             </span>
           </div>
           <div className="flex gap-3">
@@ -227,92 +316,51 @@ export default function Playlists() {
       </div>
 
       {/* Content */}
-      <div className="p-4 md:p-8">
-        <div className="flex flex-col lg:flex-row gap-6">
-          {/* Playlist List */}
-          <div className="lg:w-1/3">
-            <div className="bg-gray-800 rounded-lg overflow-hidden">
-              <div className="p-4 border-b border-gray-700">
-                <h2 className="font-semibold">Playlists</h2>
-                <p className="text-xs text-gray-500 mt-1">Your playlists & public playlists from others</p>
+      <div className="px-4 md:px-8 py-4 h-[calc(100vh-90px)]">
+        <div className="flex flex-col lg:flex-row gap-4 h-full">
+          {/* Playlist Lists - Two stacked cards, sticky */}
+          <div className="lg:w-1/3 flex flex-col gap-4 lg:sticky lg:top-0 lg:self-start h-full">
+            {/* My Playlists Card */}
+            <div className="bg-gray-800 rounded-lg overflow-hidden h-[calc(50%-8px)] min-h-[200px] flex flex-col">
+              <div className="p-3 border-b border-gray-700 flex-shrink-0">
+                <h2 className="font-semibold">📁 My Playlists</h2>
               </div>
-              {playlists.length === 0 ? (
-                <div className="p-6 text-center text-gray-400">
-                  <div className="text-3xl mb-2">📁</div>
-                  <p>{debouncedSearch ? 'No matching playlists' : 'No playlists yet'}</p>
-                  {!debouncedSearch && <p className="text-sm mt-1">Create one to organize your sounds!</p>}
+              {myPlaylists.length === 0 ? (
+                <div className="p-4 text-center text-gray-400 flex-1 flex flex-col justify-center">
+                  <div className="text-2xl mb-2">📁</div>
+                  <p className="text-sm">{debouncedSearch ? 'No matching playlists' : 'No playlists yet'}</p>
+                  {!debouncedSearch && <p className="text-xs mt-1">Create one to organize your sounds!</p>}
                 </div>
               ) : (
-                <div className="divide-y divide-gray-700">
-                  {playlists.map((playlist: Playlist) => (
-                    <div
-                      key={playlist.id}
-                      className={`p-4 cursor-pointer transition-colors ${
-                        selectedPlaylist?.id === playlist.id
-                          ? 'bg-gray-700'
-                          : 'hover:bg-gray-700/50'
-                      }`}
-                      onClick={() => setSelectedPlaylist({
-                        name: playlist.name,
-                        id: playlist.id,
-                        isOwner: playlist.isOwner !== false
-                      })}
-                    >
-                      <div className="flex items-center justify-between">
-                        <div className="flex-1 min-w-0">
-                          <div className="font-medium truncate flex items-center gap-2">
-                            {playlist.isPublic && <span title="Public">🌐</span>}
-                            {playlist.isOwner === false && <span title="Not yours" className="text-xs text-gray-500">👤</span>}
-                            {playlist.name}
-                          </div>
-                          <div className="text-sm text-gray-400">
-                            {playlist.soundCount || 0} sound{(playlist.soundCount || 0) !== 1 ? 's' : ''}
-                            {playlist.isOwner === false && playlist.ownerName && (
-                              <span className="ml-2 text-gray-500">by {playlist.ownerName}</span>
-                            )}
-                          </div>
-                        </div>
-                        {playlist.isOwner !== false && (
-                          deleteConfirm === playlist.name ? (
-                            <div className="flex gap-1" onClick={(e) => e.stopPropagation()}>
-                              <button
-                                onClick={() => deleteMutation.mutate(playlist.name)}
-                                className="px-2 py-1 bg-red-600 hover:bg-red-500 rounded text-xs"
-                              >
-                                Yes
-                              </button>
-                              <button
-                                onClick={() => setDeleteConfirm(null)}
-                                className="px-2 py-1 bg-gray-600 hover:bg-gray-500 rounded text-xs"
-                              >
-                                No
-                              </button>
-                            </div>
-                          ) : (
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                setDeleteConfirm(playlist.name);
-                              }}
-                              className="p-1.5 text-gray-400 hover:text-red-400 hover:bg-gray-600 rounded transition-colors"
-                              title="Delete"
-                            >
-                              🗑️
-                            </button>
-                          )
-                        )}
-                      </div>
-                    </div>
-                  ))}
+                <div className="divide-y divide-gray-700 overflow-y-auto flex-1">
+                  {myPlaylists.map((playlist: Playlist) => renderPlaylistItem(playlist))}
+                </div>
+              )}
+            </div>
+
+            {/* Public Playlists Card */}
+            <div className="bg-gray-800 rounded-lg overflow-hidden h-[calc(50%-8px)] min-h-[200px] flex flex-col">
+              <div className="p-3 border-b border-gray-700 flex-shrink-0">
+                <h2 className="font-semibold">🌐 Public Playlists</h2>
+                <p className="text-xs text-gray-500">From other players</p>
+              </div>
+              {publicPlaylists.length === 0 ? (
+                <div className="p-4 text-center text-gray-400 flex-1 flex flex-col justify-center">
+                  <div className="text-2xl mb-2">🌐</div>
+                  <p className="text-sm">{debouncedSearch ? 'No matching playlists' : 'No public playlists'}</p>
+                </div>
+              ) : (
+                <div className="divide-y divide-gray-700 overflow-y-auto flex-1">
+                  {publicPlaylists.map((playlist: Playlist) => renderPlaylistItem(playlist))}
                 </div>
               )}
             </div>
           </div>
 
           {/* Playlist Detail */}
-          <div className="lg:w-2/3">
+          <div className="lg:w-2/3 h-full">
             {!selectedPlaylist ? (
-              <div className="bg-gray-800 rounded-lg p-8 text-center">
+              <div className="bg-gray-800 rounded-lg p-8 text-center h-full flex flex-col items-center justify-center">
                 <div className="text-4xl mb-4">📋</div>
                 <h2 className="text-xl font-semibold mb-2">Select a Playlist</h2>
                 <p className="text-gray-400">
@@ -324,8 +372,8 @@ export default function Playlists() {
                 <div className="text-gray-400">Loading playlist...</div>
               </div>
             ) : playlistDetail ? (
-              <div className="bg-gray-800 rounded-lg overflow-hidden">
-                <div className="p-4 border-b border-gray-700 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div className="bg-gray-800 rounded-lg overflow-hidden h-full flex flex-col">
+                <div className="p-4 border-b border-gray-700 flex flex-col sm:flex-row sm:items-center justify-between gap-3 flex-shrink-0">
                   <div>
                     <h2 className="font-semibold text-lg flex items-center gap-2">
                       {playlistDetail.playlist.name}
@@ -343,10 +391,18 @@ export default function Playlists() {
                   {selectedPlaylist.isOwner && (
                     <div className="flex items-center gap-2">
                       <button
-                        onClick={() => visibilityMutation.mutate({
-                          playlistName: selectedPlaylist.name,
-                          isPublic: !playlistDetail.playlist.isPublic
-                        })}
+                        onClick={() => {
+                          if (playlistDetail.playlist.isPublic) {
+                            // Show warning when making private
+                            setVisibilityWarning(playlistDetail.playlist);
+                          } else {
+                            // No warning needed when making public
+                            visibilityMutation.mutate({
+                              playlistName: selectedPlaylist.name,
+                              isPublic: true
+                            });
+                          }
+                        }}
                         disabled={visibilityMutation.isPending}
                         className={`px-3 py-1.5 rounded text-sm font-medium transition-colors flex items-center gap-2 ${
                           playlistDetail.playlist.isPublic
@@ -371,12 +427,12 @@ export default function Playlists() {
                 </div>
 
                 {playlistDetail.items.length === 0 ? (
-                  <div className="p-6 text-center text-gray-400">
+                  <div className="p-6 text-center text-gray-400 flex-1 flex flex-col justify-center">
                     <p>This playlist is empty</p>
                     {selectedPlaylist.isOwner && <p className="text-sm mt-1">Add some sounds to get started!</p>}
                   </div>
                 ) : (
-                  <div className="divide-y divide-gray-700">
+                  <div className="divide-y divide-gray-700 overflow-y-auto flex-1">
                     {playlistDetail.items.map((item: PlaylistItem, index: number) => (
                       <div
                         key={item.id}
@@ -396,7 +452,10 @@ export default function Playlists() {
                         <div className="w-8 text-center text-gray-500 text-sm">
                           {item.orderNumber}
                         </div>
-                        <AudioPlayer alias={item.alias} />
+                        <AudioPlayer
+                          alias={selectedPlaylist.isOwner ? item.alias : undefined}
+                          soundFileId={selectedPlaylist.isOwner ? undefined : item.soundFileId}
+                        />
                         <div className="flex-1 min-w-0">
                           <div className="font-medium truncate">{item.alias}</div>
                           <div className="text-sm text-gray-400">
@@ -532,6 +591,83 @@ export default function Playlists() {
                 className="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded transition-colors"
               >
                 Done
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Visibility Warning Modal - Public to Private */}
+      {visibilityWarning && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
+          <div className="bg-gray-800 rounded-lg p-6 max-w-md w-full">
+            <h3 className="text-lg font-semibold mb-4 text-yellow-400">⚠️ Make Playlist Private?</h3>
+            <p className="text-gray-300 mb-4">
+              This playlist is currently <span className="text-green-400 font-medium">public</span> and visible to other players.
+            </p>
+            <p className="text-gray-300 mb-4">
+              Making it private will:
+            </p>
+            <ul className="list-disc list-inside text-gray-400 mb-4 space-y-1">
+              <li>Remove it from the public playlists list</li>
+              <li>Other players will no longer be able to see or play from it</li>
+              <li>The sounds will remain in your library</li>
+            </ul>
+            <div className="flex justify-end gap-3">
+              <button
+                onClick={() => setVisibilityWarning(null)}
+                className="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => {
+                  visibilityMutation.mutate({
+                    playlistName: visibilityWarning.name,
+                    isPublic: false
+                  });
+                  setVisibilityWarning(null);
+                }}
+                className="px-4 py-2 bg-yellow-600 hover:bg-yellow-500 rounded font-medium transition-colors"
+              >
+                Make Private
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Delete Public Playlist Warning Modal */}
+      {deleteWarningPlaylist && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
+          <div className="bg-gray-800 rounded-lg p-6 max-w-md w-full">
+            <h3 className="text-lg font-semibold mb-4 text-red-400">⚠️ Delete Public Playlist?</h3>
+            <p className="text-gray-300 mb-4">
+              The playlist "<span className="font-medium">{deleteWarningPlaylist.name}</span>" is currently <span className="text-green-400 font-medium">public</span> and visible to other players.
+            </p>
+            <p className="text-gray-300 mb-4">
+              Deleting it will:
+            </p>
+            <ul className="list-disc list-inside text-gray-400 mb-4 space-y-1">
+              <li>Remove it from the public playlists list</li>
+              <li>Other players will no longer be able to see or play from it</li>
+              <li>The sounds will remain in your library</li>
+            </ul>
+            <div className="flex justify-end gap-3">
+              <button
+                onClick={() => setDeleteWarningPlaylist(null)}
+                className="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => {
+                  deleteMutation.mutate(deleteWarningPlaylist.name);
+                  setDeleteWarningPlaylist(null);
+                }}
+                className="px-4 py-2 bg-red-600 hover:bg-red-500 rounded font-medium transition-colors"
+              >
+                Delete Playlist
               </button>
             </div>
           </div>

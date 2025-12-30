@@ -68,6 +68,7 @@ INSERT INTO admin_commands (name, description, usage, default_level) VALUES
     ('gib', 'Gib player (kill)', '!gib <player>', 4),
     ('setlevel', 'Set player admin level', '!setlevel <player> <level>', 4),
     ('shuffle', 'Shuffle teams', '!shuffle', 4),
+    ('timeleft', 'Set remaining map time', '!timeleft <mm:ss> or <seconds>', 4),
 
     -- Level 5 (Owner) commands
     ('rcon', 'Execute rcon command', '!rcon <command>', 5),

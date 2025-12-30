@@ -153,7 +153,6 @@ export const serverAdminRoutes: FastifyPluginAsync = async (fastify) => {
   // Get extended game info (admin only)
   fastify.get('/game-info', { preHandler: requireAdmin }, async () => {
     // Get various game state CVARs
-    // etpanel_leveltime is set by our Lua script with the actual level time (resets on map_restart)
     const cvars = ['timelimit', 'g_gamestate', 'g_currentRound', 'g_axisscore', 'g_alliedscore', 'etpanel_leveltime'];
     const results: Record<string, string> = {};
 
@@ -161,21 +160,26 @@ export const serverAdminRoutes: FastifyPluginAsync = async (fastify) => {
       const result = await sendRcon(cvar);
       if (result.success) {
         // Parse response like: "timelimit" is: "30"^7 default: "0"
+        // or just: "timelimit" is:"30"
         const match = result.response.match(/"([^"]+)" is:\s*"([^"]*)"/);
         if (match) {
-          results[match[1]] = match[2];
+          // Strip ET color codes (^0-^9, ^a-^z) from values
+          results[match[1]] = match[2].replace(/\^[0-9a-zA-Z]/g, '');
         }
       }
     }
 
     // Get level time from our Lua-set CVAR (in milliseconds)
-    let levelTime = parseInt(results['etpanel_leveltime']) || undefined;
+    const levelTimeStr = results['etpanel_leveltime'];
+    let levelTime = levelTimeStr ? parseInt(levelTimeStr) : undefined;
 
-    // Fallback: if Lua CVAR not set yet, try to get from status (less accurate but better than nothing)
-    if (levelTime === undefined) {
+    // If Lua CVAR not set, try to get server time from "status" command output
+    // The status command shows: "server time           : 123456"
+    if (levelTime === undefined || levelTime === 0) {
       const statusResult = await sendRcon('status');
       if (statusResult.success) {
-        const serverTimeMatch = statusResult.response.match(/server time\s*:\s*(\d+)/);
+        // Parse: "server time           : 123456"
+        const serverTimeMatch = statusResult.response.match(/server time\s*:\s*(\d+)/i);
         if (serverTimeMatch) {
           levelTime = parseInt(serverTimeMatch[1]);
         }
@@ -185,7 +189,7 @@ export const serverAdminRoutes: FastifyPluginAsync = async (fastify) => {
     let timeRemaining: number | undefined;
     const timelimit = parseInt(results['timelimit']) || 0;
 
-    if (timelimit > 0 && levelTime !== undefined) {
+    if (timelimit > 0 && levelTime !== undefined && levelTime > 0) {
       // timelimit is in minutes, levelTime is in milliseconds
       const timelimitMs = timelimit * 60 * 1000;
       const remainingMs = timelimitMs - levelTime;

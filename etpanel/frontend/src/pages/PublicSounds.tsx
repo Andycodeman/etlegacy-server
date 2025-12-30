@@ -1,8 +1,43 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { sounds, auth } from '../api/client';
-import type { PublicSound } from '../api/client';
+import type { PublicSound, Playlist } from '../api/client';
 import AudioPlayer from '../components/AudioPlayer';
+import { renderETColors, stripColors } from '../utils/etColors';
+
+type SortField = 'originalName' | 'fileSize' | 'durationSeconds' | 'addedByName' | 'createdAt';
+type SortDirection = 'asc' | 'desc';
+
+function SortableHeader({
+  label,
+  field,
+  currentSort,
+  currentDirection,
+  onSort,
+  className = ''
+}: {
+  label: string;
+  field: SortField;
+  currentSort: SortField;
+  currentDirection: SortDirection;
+  onSort: (field: SortField) => void;
+  className?: string;
+}) {
+  const isActive = currentSort === field;
+  return (
+    <th
+      className={`px-4 py-3 cursor-pointer hover:bg-gray-700/50 select-none transition-colors ${className}`}
+      onClick={() => onSort(field)}
+    >
+      <div className="flex items-center gap-1">
+        {label}
+        <span className={`text-xs ${isActive ? 'text-orange-400' : 'text-gray-500'}`}>
+          {isActive ? (currentDirection === 'asc' ? '▲' : '▼') : '⇅'}
+        </span>
+      </div>
+    </th>
+  );
+}
 
 function formatFileSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -45,6 +80,27 @@ export default function PublicSounds() {
   const [editName, setEditName] = useState('');
   const [editError, setEditError] = useState('');
   const [deleteConfirm, setDeleteConfirm] = useState<PublicSound | null>(null);
+  const [deleteInfo, setDeleteInfo] = useState<{
+    soundFileId: number;
+    originalName: string;
+    isDirectlyPublic: boolean;
+    affectedPlaylists: { id: number; name: string; isPublic: boolean; ownerName: string }[];
+    affectedUserCount: number;
+  } | null>(null);
+  const [loadingDeleteInfo, setLoadingDeleteInfo] = useState(false);
+
+  // Sorting state
+  const [sortField, setSortField] = useState<SortField>('createdAt');
+  const [sortDirection, setSortDirection] = useState<SortDirection>('desc');
+
+  const handleSort = (field: SortField) => {
+    if (sortField === field) {
+      setSortDirection(sortDirection === 'asc' ? 'desc' : 'asc');
+    } else {
+      setSortField(field);
+      setSortDirection('asc');
+    }
+  };
 
   // Proper debounce with useEffect
   useEffect(() => {
@@ -67,6 +123,19 @@ export default function PublicSounds() {
     queryKey: ['me'],
     queryFn: auth.me,
   });
+
+  // Fetch user's sounds to check which public sounds are already added
+  const { data: mySoundsData } = useQuery({
+    queryKey: ['mySounds'],
+    queryFn: sounds.list,
+    enabled: guidStatus?.linked === true,
+  });
+
+  // Build a set of soundFileIds the user already has
+  const ownedSoundFileIds = useMemo(() => {
+    if (!mySoundsData?.sounds) return new Set<number>();
+    return new Set(mySoundsData.sounds.map((s: { soundFileId: number }) => s.soundFileId));
+  }, [mySoundsData?.sounds]);
   const isAdmin = user?.role === 'admin';
 
   // Fetch public library
@@ -74,6 +143,33 @@ export default function PublicSounds() {
     queryKey: ['publicLibrary', page, debouncedSearch],
     queryFn: () => sounds.publicLibrary(page, debouncedSearch || undefined),
   });
+
+  // Sort sounds client-side
+  const sortedSounds = useMemo(() => {
+    if (!libraryData?.sounds) return [];
+
+    return [...libraryData.sounds].sort((a: PublicSound, b: PublicSound) => {
+      let comparison = 0;
+      switch (sortField) {
+        case 'originalName':
+          comparison = a.originalName.localeCompare(b.originalName);
+          break;
+        case 'fileSize':
+          comparison = a.fileSize - b.fileSize;
+          break;
+        case 'durationSeconds':
+          comparison = (a.durationSeconds || 0) - (b.durationSeconds || 0);
+          break;
+        case 'addedByName':
+          comparison = stripColors(a.addedByName).localeCompare(stripColors(b.addedByName));
+          break;
+        case 'createdAt':
+          comparison = new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
+          break;
+      }
+      return sortDirection === 'asc' ? comparison : -comparison;
+    });
+  }, [libraryData?.sounds, sortField, sortDirection]);
 
   // Fetch user's playlists for the "add to playlist" dropdown
   const { data: playlistsData } = useQuery({
@@ -128,16 +224,37 @@ export default function PublicSounds() {
     },
   });
 
-  // Admin: Delete mutation
+  // Admin: Remove from public mutation
   const deleteMutation = useMutation({
     mutationFn: (soundFileId: number) => sounds.adminDeletePublic(soundFileId),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['publicLibrary'] });
+      queryClient.invalidateQueries({ queryKey: ['playlists'] });
       setDeleteConfirm(null);
-      setSuccessMessage('Sound deleted from public library!');
-      setTimeout(() => setSuccessMessage(''), 3000);
+      setDeleteInfo(null);
+      setSuccessMessage('Sound removed from public library (users keep their copies)');
+      setTimeout(() => setSuccessMessage(''), 4000);
     },
   });
+
+  // Fetch delete info when opening delete confirmation
+  const handleDeleteClick = async (sound: PublicSound) => {
+    setDeleteConfirm(sound);
+    setLoadingDeleteInfo(true);
+    try {
+      const info = await sounds.adminGetDeleteInfo(sound.soundFileId);
+      setDeleteInfo(info);
+    } catch (err) {
+      console.error('Failed to get delete info:', err);
+    } finally {
+      setLoadingDeleteInfo(false);
+    }
+  };
+
+  const cancelDelete = () => {
+    setDeleteConfirm(null);
+    setDeleteInfo(null);
+  };
 
   const startEdit = (sound: PublicSound) => {
     setEditingSoundId(sound.soundFileId);
@@ -180,7 +297,8 @@ export default function PublicSounds() {
   }
 
   const isLinked = guidStatus?.linked === true;
-  const playlists = playlistsData?.playlists || [];
+  // Only show user's own playlists in the "add to playlist" dropdown
+  const playlists = (playlistsData?.playlists || []).filter((pl: Playlist) => pl.isOwner);
 
   return (
     <div className="-m-4 md:-m-8">
@@ -222,13 +340,13 @@ export default function PublicSounds() {
       </div>
 
       {/* Content */}
-      <div className="p-4 md:p-8">
+      <div className="px-4 md:px-8 py-4 h-[calc(100vh-90px)]">
       {libraryLoading ? (
-        <div className="flex items-center justify-center h-64">
+        <div className="flex items-center justify-center h-full">
           <div className="text-gray-400">Loading public sounds...</div>
         </div>
       ) : libraryData?.sounds.length === 0 ? (
-        <div className="bg-gray-800 rounded-lg p-8 text-center">
+        <div className="bg-gray-800 rounded-lg p-8 text-center h-full flex flex-col items-center justify-center">
           <div className="text-4xl mb-4">🔇</div>
           <h2 className="text-xl font-semibold mb-2">No Public Sounds</h2>
           <p className="text-gray-400">
@@ -238,12 +356,12 @@ export default function PublicSounds() {
           </p>
         </div>
       ) : (
-        <>
+        <div className="bg-gray-800 rounded-lg overflow-hidden h-full flex flex-col">
           {/* Sound Table */}
-          <div className="bg-gray-800 rounded-lg overflow-hidden">
+          <div className="flex-1 overflow-hidden flex flex-col">
             {/* Mobile: Card Layout */}
-            <div className="md:hidden divide-y divide-gray-700">
-              {libraryData?.sounds.map((sound: PublicSound) => (
+            <div className="md:hidden divide-y divide-gray-700 overflow-y-auto flex-1">
+              {sortedSounds.map((sound: PublicSound) => (
                 <div key={sound.soundFileId} className="p-3">
                   <div className="flex items-center gap-3">
                     <AudioPlayer soundFileId={sound.soundFileId} />
@@ -276,24 +394,35 @@ export default function PublicSounds() {
                         </div>
                       )}
                       <div className="text-sm text-gray-400">
-                        {formatFileSize(sound.fileSize)} • {formatDuration(sound.durationSeconds)} • {formatRelativeTime(sound.createdAt)}
+                        {formatFileSize(sound.fileSize)} • {formatDuration(sound.durationSeconds)} • {renderETColors(sound.addedByName)} • {formatRelativeTime(sound.createdAt)}
                       </div>
                     </div>
                     <div className="flex items-center gap-2 flex-shrink-0">
                       {isLinked && (
-                        <button
-                          onClick={() => openAddModal(sound)}
-                          className="p-1.5 bg-blue-600 hover:bg-blue-500 rounded transition-colors"
-                          title="Add to my library"
-                        >
-                          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-                          </svg>
-                        </button>
+                        ownedSoundFileIds.has(sound.soundFileId) ? (
+                          <span
+                            className="p-1.5 bg-green-700/50 rounded text-green-400"
+                            title="Already in your library"
+                          >
+                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                            </svg>
+                          </span>
+                        ) : (
+                          <button
+                            onClick={() => openAddModal(sound)}
+                            className="p-1.5 bg-blue-600 hover:bg-blue-500 rounded transition-colors"
+                            title="Add to my library"
+                          >
+                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+                            </svg>
+                          </button>
+                        )
                       )}
                       {isAdmin && (
                         <button
-                          onClick={() => setDeleteConfirm(sound)}
+                          onClick={() => handleDeleteClick(sound)}
                           className="p-1.5 text-gray-400 hover:text-red-400 transition-colors"
                           title="Delete"
                         >
@@ -309,20 +438,23 @@ export default function PublicSounds() {
             </div>
 
             {/* Desktop: Table Layout */}
-            <div className="hidden md:block overflow-x-auto">
-              <table className="w-full">
-                <thead>
-                  <tr className="text-left text-gray-400 border-b border-gray-700 bg-gray-800/50">
-                    <th className="px-4 py-3 w-16">Play</th>
-                    <th className="px-4 py-3">Alias</th>
-                    <th className="px-4 py-3 w-24">Size</th>
-                    <th className="px-4 py-3 w-20">Duration</th>
-                    <th className="px-4 py-3 w-28">Added</th>
-                    {(isLinked || isAdmin) && <th className="px-4 py-3 w-32">Actions</th>}
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-gray-700">
-                  {libraryData?.sounds.map((sound: PublicSound) => (
+            <div className="hidden md:flex md:flex-col md:flex-1 md:overflow-hidden">
+              {/* Scrollable Table with Sticky Header */}
+              <div className="flex-1 overflow-y-auto">
+                <table className="w-full">
+                  <thead className="sticky top-0 bg-gray-800 z-10">
+                    <tr className="text-left text-gray-400 border-b border-gray-700">
+                      <th className="px-4 py-3 w-16">Play</th>
+                      <SortableHeader label="Alias" field="originalName" currentSort={sortField} currentDirection={sortDirection} onSort={handleSort} />
+                      <SortableHeader label="Size" field="fileSize" currentSort={sortField} currentDirection={sortDirection} onSort={handleSort} />
+                      <SortableHeader label="Duration" field="durationSeconds" currentSort={sortField} currentDirection={sortDirection} onSort={handleSort} />
+                      <SortableHeader label="Added By" field="addedByName" currentSort={sortField} currentDirection={sortDirection} onSort={handleSort} />
+                      <SortableHeader label="Added" field="createdAt" currentSort={sortField} currentDirection={sortDirection} onSort={handleSort} />
+                      {(isLinked || isAdmin) && <th className="px-4 py-3 w-28">Actions</th>}
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-700">
+                  {sortedSounds.map((sound: PublicSound) => (
                     <tr key={sound.soundFileId} className="hover:bg-gray-700/30">
                       <td className="px-4 py-2">
                         <AudioPlayer soundFileId={sound.soundFileId} />
@@ -363,6 +495,9 @@ export default function PublicSounds() {
                       <td className="px-4 py-2 text-sm text-gray-400">
                         {formatDuration(sound.durationSeconds)}
                       </td>
+                      <td className="px-4 py-2 text-sm">
+                        {renderETColors(sound.addedByName)}
+                      </td>
                       <td className="px-4 py-2 text-sm text-gray-400">
                         {formatRelativeTime(sound.createdAt)}
                       </td>
@@ -370,19 +505,30 @@ export default function PublicSounds() {
                         <td className="px-4 py-2">
                           <div className="flex items-center gap-2">
                             {isLinked && (
-                              <button
-                                onClick={() => openAddModal(sound)}
-                                className="p-1.5 bg-blue-600 hover:bg-blue-500 rounded transition-colors"
-                                title="Add to my library"
-                              >
-                                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-                                </svg>
-                              </button>
+                              ownedSoundFileIds.has(sound.soundFileId) ? (
+                                <span
+                                  className="p-1.5 bg-green-700/50 rounded text-green-400"
+                                  title="Already in your library"
+                                >
+                                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                                  </svg>
+                                </span>
+                              ) : (
+                                <button
+                                  onClick={() => openAddModal(sound)}
+                                  className="p-1.5 bg-blue-600 hover:bg-blue-500 rounded transition-colors"
+                                  title="Add to my library"
+                                >
+                                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+                                  </svg>
+                                </button>
+                              )
                             )}
                             {isAdmin && (
                               <button
-                                onClick={() => setDeleteConfirm(sound)}
+                                onClick={() => handleDeleteClick(sound)}
                                 className="p-1 text-gray-400 hover:text-red-400 transition-colors"
                                 title="Delete"
                               >
@@ -396,34 +542,51 @@ export default function PublicSounds() {
                       )}
                     </tr>
                   ))}
-                </tbody>
-              </table>
+                  </tbody>
+                </table>
+              </div>
             </div>
           </div>
 
-          {/* Pagination */}
-          {(libraryData?.totalPages || 0) > 1 && (
-            <div className="flex items-center justify-center gap-2">
-              <button
-                onClick={() => setPage((p) => Math.max(0, p - 1))}
-                disabled={page === 0}
-                className="px-4 py-2 bg-gray-700 hover:bg-gray-600 disabled:bg-gray-800 disabled:text-gray-500 disabled:cursor-not-allowed rounded transition-colors"
-              >
-                Previous
-              </button>
-              <span className="text-gray-400 px-4">
-                Page {page + 1} of {libraryData?.totalPages || 1}
-              </span>
-              <button
-                onClick={() => setPage((p) => p + 1)}
-                disabled={page >= (libraryData?.totalPages || 1) - 1}
-                className="px-4 py-2 bg-gray-700 hover:bg-gray-600 disabled:bg-gray-800 disabled:text-gray-500 disabled:cursor-not-allowed rounded transition-colors"
-              >
-                Next
-              </button>
-            </div>
-          )}
-        </>
+          {/* Sticky Pagination Footer */}
+          <div className="flex-shrink-0 border-t border-gray-700 bg-gray-800 px-4 py-3 flex items-center justify-center gap-1">
+            <button
+              onClick={() => setPage(0)}
+              disabled={page === 0}
+              className="px-3 py-1.5 bg-gray-700 hover:bg-gray-600 disabled:bg-gray-800 disabled:text-gray-500 disabled:cursor-not-allowed rounded transition-colors"
+              title="First page"
+            >
+              «
+            </button>
+            <button
+              onClick={() => setPage((p) => Math.max(0, p - 1))}
+              disabled={page === 0}
+              className="px-3 py-1.5 bg-gray-700 hover:bg-gray-600 disabled:bg-gray-800 disabled:text-gray-500 disabled:cursor-not-allowed rounded transition-colors"
+              title="Previous page"
+            >
+              ‹
+            </button>
+            <span className="text-gray-400 px-4">
+              Page {page + 1} of {libraryData?.totalPages || 1}
+            </span>
+            <button
+              onClick={() => setPage((p) => p + 1)}
+              disabled={page >= (libraryData?.totalPages || 1) - 1}
+              className="px-3 py-1.5 bg-gray-700 hover:bg-gray-600 disabled:bg-gray-800 disabled:text-gray-500 disabled:cursor-not-allowed rounded transition-colors"
+              title="Next page"
+            >
+              ›
+            </button>
+            <button
+              onClick={() => setPage((libraryData?.totalPages || 1) - 1)}
+              disabled={page >= (libraryData?.totalPages || 1) - 1}
+              className="px-3 py-1.5 bg-gray-700 hover:bg-gray-600 disabled:bg-gray-800 disabled:text-gray-500 disabled:cursor-not-allowed rounded transition-colors"
+              title="Last page"
+            >
+              »
+            </button>
+          </div>
+        </div>
       )}
       </div>
 
@@ -499,34 +662,73 @@ export default function PublicSounds() {
         </div>
       )}
 
-      {/* Admin: Delete Confirmation Modal */}
+      {/* Admin: Remove from Public Library Confirmation Modal */}
       {deleteConfirm && (
         <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
-          <div className="bg-gray-800 rounded-lg p-6 max-w-md w-full">
-            <h3 className="text-lg font-semibold mb-4 text-red-400">Delete Sound</h3>
+          <div className="bg-gray-800 rounded-lg p-6 max-w-lg w-full">
+            <h3 className="text-lg font-semibold mb-4 text-orange-400">Remove from Public Library</h3>
             <p className="text-gray-300 mb-2">
-              Are you sure you want to delete{' '}
+              Are you sure you want to remove{' '}
               <span className="text-blue-400 font-medium">
                 {deleteConfirm.originalName.replace(/\.mp3$/i, '')}
               </span>{' '}
               from the public library?
             </p>
-            <p className="text-yellow-400 text-sm mb-4">
-              This will also remove it from all users who added it to their libraries.
-            </p>
+
+            {loadingDeleteInfo ? (
+              <div className="text-gray-400 text-sm mb-4">Loading info...</div>
+            ) : deleteInfo && (
+              <div className="mb-4 space-y-2">
+                <p className="text-green-400 text-sm">
+                  ✓ Users who already added this sound will keep it in their libraries.
+                </p>
+
+                {deleteInfo.affectedUserCount > 0 && (
+                  <p className="text-gray-400 text-sm">
+                    ℹ️ Currently in <span className="font-bold text-gray-300">{deleteInfo.affectedUserCount}</span> user{deleteInfo.affectedUserCount !== 1 ? 's\'' : '\'s'} libraries.
+                  </p>
+                )}
+
+                {deleteInfo.affectedPlaylists.length > 0 && (
+                  <div className="text-sm">
+                    <p className="text-gray-400 mb-1">
+                      ℹ️ This sound is in {deleteInfo.affectedPlaylists.length} playlist{deleteInfo.affectedPlaylists.length !== 1 ? 's' : ''}:
+                    </p>
+                    <ul className="bg-gray-900 rounded p-2 max-h-32 overflow-y-auto space-y-1">
+                      {deleteInfo.affectedPlaylists.map((pl) => (
+                        <li key={pl.id} className="text-gray-300 flex items-center gap-2">
+                          <span className={pl.isPublic ? 'text-green-400' : 'text-gray-500'}>
+                            {pl.isPublic ? '🌐' : '🔒'}
+                          </span>
+                          <span>{pl.name}</span>
+                          <span className="text-gray-500 text-xs">by {pl.ownerName || 'Unknown'}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+
+                {!deleteInfo.isDirectlyPublic && (
+                  <p className="text-orange-400 text-sm">
+                    ℹ️ This sound is only visible here because it's in a public playlist.
+                  </p>
+                )}
+              </div>
+            )}
+
             <div className="flex justify-end gap-3">
               <button
-                onClick={() => setDeleteConfirm(null)}
+                onClick={cancelDelete}
                 className="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded transition-colors"
               >
                 Cancel
               </button>
               <button
                 onClick={() => deleteMutation.mutate(deleteConfirm.soundFileId)}
-                disabled={deleteMutation.isPending}
-                className="px-4 py-2 bg-red-600 hover:bg-red-500 disabled:bg-gray-600 disabled:cursor-not-allowed rounded font-medium transition-colors"
+                disabled={deleteMutation.isPending || loadingDeleteInfo}
+                className="px-4 py-2 bg-orange-600 hover:bg-orange-500 disabled:bg-gray-600 disabled:cursor-not-allowed rounded font-medium transition-colors"
               >
-                {deleteMutation.isPending ? 'Deleting...' : 'Delete'}
+                {deleteMutation.isPending ? 'Removing...' : 'Remove from Public'}
               </button>
             </div>
           </div>
