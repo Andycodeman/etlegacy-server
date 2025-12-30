@@ -18,7 +18,7 @@ const TIME_PRESETS: Record<string, string> = {
 
 const logsQuerySchema = z.object({
   timeRange: z.string().default('1h'),
-  category: z.enum(['connections', 'kills', 'chat', 'errors', 'all']).default('all'),
+  category: z.enum(['connections', 'kills', 'chat', 'errors', 'gameplay', 'all']).default('all'),
   playerFilter: z.string().optional(),
   customSince: z.string().optional(), // ISO date string
   customUntil: z.string().optional(), // ISO date string
@@ -27,12 +27,31 @@ const logsQuerySchema = z.object({
 interface ParsedLogEntry {
   timestamp: string;
   raw: string;
-  category: 'connection' | 'disconnect' | 'kill' | 'chat' | 'error' | 'system' | 'other';
+  category: 'connection' | 'disconnect' | 'kill' | 'chat' | 'error' | 'system' | 'gameplay' | 'other';
   playerName?: string;
   playerIp?: string;
   clientVersion?: string;
   status?: string;
   details?: Record<string, string>;
+}
+
+// Gameplay event types for the gameplay tab
+type GameplayEventType =
+  | 'kill' | 'death' | 'suicide' | 'teamkill'
+  | 'rocket_mode' | 'panzerfest'
+  | 'voice' | 'spawn' | 'revive'
+  | 'objective' | 'flag';
+
+interface GameplayEvent {
+  timestamp: string;
+  type: GameplayEventType;
+  player: string;
+  target?: string;
+  weapon?: string;
+  rocketMode?: string;
+  voiceCommand?: string;
+  objective?: string;
+  details?: string;
 }
 
 interface ConnectionAttempt {
@@ -43,10 +62,12 @@ interface ConnectionAttempt {
   status: 'joined' | 'downloading' | 'checksum_error' | 'disconnected' | 'pending';
   downloadFile?: string;
   checksumError?: string;
+  disconnectTime?: string;
+  clientSlot?: string;
 }
 
 // Parse ET:Legacy logs and categorize them
-function parseLogLine(line: string): ParsedLogEntry | null {
+function parseLogLine(line: string, includeBotsForGameplay = false): ParsedLogEntry | null {
   // Extract timestamp from journalctl format: "Dec 20 04:15:10"
   const timestampMatch = line.match(/^(\w{3}\s+\d+\s+\d+:\d+:\d+)/);
   if (!timestampMatch) return null;
@@ -54,12 +75,133 @@ function parseLogLine(line: string): ParsedLogEntry | null {
   const timestamp = timestampMatch[1];
   const raw = line;
 
-  // Skip bot entries
-  if (line.includes('OMNIBOT') || line.includes('localhost') || line.includes('[BOT]')) {
+  // Check if this is a bot-related line
+  const isBot = line.includes('[BOT]');
+
+  // Skip OMNIBOT system messages and localhost always
+  if (line.includes('OMNIBOT') || line.includes('localhost')) {
     return null;
   }
 
   const lower = line.toLowerCase();
+
+  // === GAMEPLAY EVENTS (parsed before general categories) ===
+
+  // Rocket mode changes - [RocketMode] PlayerName switched to MODE rockets
+  if (line.includes('[RocketMode]')) {
+    const match = line.match(/\[RocketMode\]\s+(.+?)\s+switched to\s+(.+?)\s+rockets/);
+    if (match) {
+      return {
+        timestamp,
+        raw,
+        category: 'gameplay',
+        playerName: match[1],
+        details: { eventType: 'rocket_mode', rocketMode: match[2] },
+      };
+    }
+  }
+
+  // PANZERFEST trigger
+  if (line.includes('PANZERFEST:')) {
+    const match = line.match(/PANZERFEST:\s+(.+?)\s+triggered/);
+    if (match) {
+      return {
+        timestamp,
+        raw,
+        category: 'gameplay',
+        playerName: match[1],
+        details: { eventType: 'panzerfest' },
+      };
+    }
+  }
+
+  // Voice commands - voice: PlayerName Command
+  if (line.includes('voice:')) {
+    const match = line.match(/voice:\s+(.+?)\s+(\w+)$/);
+    if (match && !isBot) {
+      return {
+        timestamp,
+        raw,
+        category: 'gameplay',
+        playerName: match[1],
+        details: { eventType: 'voice', voiceCommand: match[2] },
+      };
+    }
+  }
+
+  // Player entered the game (spawn)
+  if (line.includes('entered the game')) {
+    const match = line.match(/print\s+"(.+?)\s+entered the game/);
+    if (match && !isBot) {
+      return {
+        timestamp,
+        raw,
+        category: 'gameplay',
+        playerName: match[1],
+        details: { eventType: 'spawn' },
+      };
+    }
+  }
+
+  // ETMan player joined notification
+  if (line.includes('[ETMan] Player joined:')) {
+    const match = line.match(/\[ETMan\]\s+Player joined:\s+(.+?)\s+-\s+(.+)/);
+    if (match) {
+      return {
+        timestamp,
+        raw,
+        category: 'gameplay',
+        playerName: match[1],
+        details: { eventType: 'spawn', map: match[2] },
+      };
+    }
+  }
+
+  // Kill events - for gameplay, we want more detail
+  // Format: Kill: attackerId victimId weaponId: AttackerName killed VictimName by MOD_WEAPON
+  if (line.includes('Kill:')) {
+    const match = line.match(/Kill:\s+(\d+)\s+(\d+)\s+(\d+):\s+(.+?)\s+killed\s+(.+?)\s+by\s+(\w+)/);
+    if (match) {
+      const attackerId = match[1];
+      const victimId = match[2];
+      const attacker = match[4];
+      const victim = match[5];
+      const weapon = match[6];
+
+      // Skip if both are bots (unless we want bots)
+      if (!includeBotsForGameplay && attacker.includes('[BOT]') && victim.includes('[BOT]')) {
+        return null;
+      }
+
+      // Determine kill type
+      let eventType: string = 'kill';
+      if (attackerId === victimId || attacker === victim) {
+        eventType = 'suicide';
+      } else if (attacker === '<world>') {
+        eventType = 'death'; // Environmental death
+      }
+
+      // For gameplay category, return as gameplay
+      return {
+        timestamp,
+        raw,
+        category: 'gameplay',
+        playerName: attacker,
+        details: {
+          eventType,
+          target: victim,
+          weapon: weapon.replace('MOD_', ''),
+        },
+      };
+    }
+  }
+
+  // Skip remaining bot entries for non-gameplay
+  if (isBot) {
+    return null;
+  }
+
+  // === CONNECTION EVENTS ===
 
   // Connection entries
   if (line.includes('Userinfo:') && line.includes('\\name\\')) {
@@ -77,9 +219,15 @@ function parseLogLine(line: string): ParsedLogEntry | null {
     };
   }
 
-  // Disconnections
+  // Disconnections - extract client slot to help match with player
   if (line.includes('ClientDisconnect:')) {
-    return { timestamp, raw, category: 'disconnect' };
+    const slotMatch = line.match(/ClientDisconnect:\s+(\d+)/);
+    return {
+      timestamp,
+      raw,
+      category: 'disconnect',
+      details: slotMatch ? { clientSlot: slotMatch[1] } : undefined,
+    };
   }
 
   // Team joins (successful connection)
@@ -118,12 +266,6 @@ function parseLogLine(line: string): ParsedLogEntry | null {
     };
   }
 
-  // Kills
-  if (lower.includes('killed') || lower.includes('was killed') ||
-      lower.includes('headshot') || lower.includes('was gibbed')) {
-    return { timestamp, raw, category: 'kill' };
-  }
-
   // Chat
   if (lower.includes('say:') || lower.includes('sayteam:')) {
     const chatMatch = line.match(/say(?:team)?:\s*(.+)/i);
@@ -144,51 +286,101 @@ function parseLogLine(line: string): ParsedLogEntry | null {
 }
 
 // Group connection-related logs into connection attempts
+// Only creates a new "connection" when:
+// 1. First time seeing this player in the time range
+// 2. Player reconnected after a disconnect
+// 3. Player reconnected after a map change (InitGame)
 function groupConnectionAttempts(logs: ParsedLogEntry[]): ConnectionAttempt[] {
-  const attempts: Map<string, ConnectionAttempt> = new Map();
+  const attempts: ConnectionAttempt[] = [];
+  // Track active sessions by player name - value is index into attempts array
+  const activeSessions: Map<string, number> = new Map();
+  // Track client slot to player name mapping for disconnect tracking
+  const slotToPlayer: Map<string, string> = new Map();
 
   for (const log of logs) {
+    // Handle disconnects - find player by slot and mark their session
+    if (log.category === 'disconnect') {
+      const clientSlot = log.details?.clientSlot;
+      if (clientSlot) {
+        const playerName = slotToPlayer.get(clientSlot);
+        if (playerName) {
+          const sessionIdx = activeSessions.get(playerName);
+          if (sessionIdx !== undefined) {
+            attempts[sessionIdx].disconnectTime = log.timestamp;
+            attempts[sessionIdx].status = 'disconnected';
+          }
+          // Clear the slot and session
+          slotToPlayer.delete(clientSlot);
+          activeSessions.delete(playerName);
+        }
+      }
+      continue;
+    }
+
     if (log.category !== 'connection' && log.category !== 'error') continue;
 
     if (log.playerName) {
-      const key = `${log.playerName}_${log.timestamp}`;
-      const existing = attempts.get(key);
+      const existingIdx = activeSessions.get(log.playerName);
 
-      if (existing) {
-        // Update existing attempt
-        if (log.playerIp) existing.ip = log.playerIp;
-        if (log.clientVersion) existing.version = log.clientVersion;
+      // Check if this is a download redirect - always starts a new connection attempt
+      const isDownloadRedirect = log.status === 'downloading';
+
+      // Check if this is the first Userinfo (has protocol field = initial connect)
+      const isInitialConnect = log.raw.includes('\\protocol\\');
+
+      // Extract client slot from ClientUserinfoChanged lines
+      const slotMatch = log.raw.match(/ClientUserinfoChanged:\s+(\d+)/);
+      const clientSlot = slotMatch?.[1];
+
+      if (existingIdx !== undefined && !isInitialConnect) {
+        // Update existing session
+        const existing = attempts[existingIdx];
+        if (log.playerIp && !existing.ip) existing.ip = log.playerIp;
+        if (log.clientVersion && !existing.version) existing.version = log.clientVersion;
         if (log.status === 'joined') existing.status = 'joined';
-        if (log.status === 'downloading') {
+        if (isDownloadRedirect) {
           existing.status = 'downloading';
           existing.downloadFile = log.details?.downloadFile;
         }
+        // Update slot mapping
+        if (clientSlot) {
+          existing.clientSlot = clientSlot;
+          slotToPlayer.set(clientSlot, log.playerName);
+        }
       } else {
-        attempts.set(key, {
+        // New connection attempt - either first time or initial connect packet
+        const newAttempt: ConnectionAttempt = {
           name: log.playerName,
           timestamp: log.timestamp,
           ip: log.playerIp,
           version: log.clientVersion,
           status: (log.status as ConnectionAttempt['status']) || 'pending',
-        });
+          clientSlot,
+        };
+        if (isDownloadRedirect) {
+          newAttempt.downloadFile = log.details?.downloadFile;
+        }
+        attempts.push(newAttempt);
+        activeSessions.set(log.playerName, attempts.length - 1);
+        if (clientSlot) {
+          slotToPlayer.set(clientSlot, log.playerName);
+        }
       }
     }
 
-    // Associate checksum errors with recent attempts
+    // Associate checksum errors with most recent attempt
     if (log.category === 'error' && log.status === 'checksum_error') {
-      // Find most recent pending attempt
-      for (const [, attempt] of attempts) {
-        if (attempt.status === 'pending') {
-          attempt.status = 'checksum_error';
-          attempt.checksumError = log.raw;
+      if (attempts.length > 0) {
+        const lastAttempt = attempts[attempts.length - 1];
+        if (lastAttempt.status === 'pending' || lastAttempt.status === 'downloading') {
+          lastAttempt.status = 'checksum_error';
+          lastAttempt.checksumError = log.raw;
         }
       }
     }
   }
 
-  return Array.from(attempts.values()).sort((a, b) =>
-    a.timestamp.localeCompare(b.timestamp)
-  );
+  return attempts.sort((a, b) => a.timestamp.localeCompare(b.timestamp));
 }
 
 // Execute journalctl command to get logs
@@ -275,7 +467,7 @@ export const logsRoutes: FastifyPluginAsync = async (fastify) => {
 
       // Parse all log lines
       let parsedLogs = lines
-        .map(parseLogLine)
+        .map((line) => parseLogLine(line))
         .filter((log): log is ParsedLogEntry => log !== null);
 
       // Apply category filter
@@ -285,11 +477,15 @@ export const logsRoutes: FastifyPluginAsync = async (fastify) => {
             case 'connections':
               return log.category === 'connection' || log.category === 'disconnect';
             case 'kills':
-              return log.category === 'kill';
+              // For kills tab, filter gameplay events that are kill-related
+              return log.category === 'gameplay' &&
+                ['kill', 'death', 'suicide', 'teamkill'].includes(log.details?.eventType || '');
             case 'chat':
               return log.category === 'chat';
             case 'errors':
               return log.category === 'error';
+            case 'gameplay':
+              return log.category === 'gameplay';
             default:
               return true;
           }

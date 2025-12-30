@@ -65,6 +65,34 @@ async function refreshToken(): Promise<boolean> {
   }
 }
 
+// Helper for handling 401 with token refresh for custom fetch calls
+async function handleUnauthorized<T>(
+  makeRequest: () => Promise<Response>,
+  parseResponse: (res: Response) => Promise<T>
+): Promise<T> {
+  let response = await makeRequest();
+
+  if (response.status === 401) {
+    const refreshed = await refreshToken();
+    if (refreshed) {
+      // Retry the request with new token
+      response = await makeRequest();
+    } else {
+      localStorage.removeItem('accessToken');
+      localStorage.removeItem('refreshToken');
+      window.location.href = '/login';
+      throw new Error('Session expired');
+    }
+  }
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ error: 'Request failed' }));
+    throw new Error(error.error || 'Request failed');
+  }
+
+  return parseResponse(response);
+}
+
 // Auth
 export const auth = {
   login: (email: string, password: string) =>
@@ -358,7 +386,7 @@ export interface GameInfo {
 export interface LogEntry {
   timestamp: string;
   raw: string;
-  category: 'connection' | 'disconnect' | 'kill' | 'chat' | 'error' | 'system' | 'other';
+  category: 'connection' | 'disconnect' | 'kill' | 'chat' | 'error' | 'system' | 'gameplay' | 'other';
   playerName?: string;
   playerIp?: string;
   clientVersion?: string;
@@ -374,11 +402,13 @@ export interface ConnectionAttempt {
   status: 'joined' | 'downloading' | 'checksum_error' | 'disconnected' | 'pending';
   downloadFile?: string;
   checksumError?: string;
+  disconnectTime?: string;
+  clientSlot?: string;
 }
 
 export interface LogsQueryParams {
   timeRange?: string;
-  category?: 'connections' | 'kills' | 'chat' | 'errors' | 'all';
+  category?: 'connections' | 'kills' | 'chat' | 'errors' | 'gameplay' | 'all';
   playerFilter?: string;
   customSince?: string;
   customUntil?: string;
@@ -401,7 +431,7 @@ export interface TimePreset {
 
 // Logs
 export const logs = {
-  query: async (params: LogsQueryParams = {}) => {
+  query: async (params: LogsQueryParams = {}): Promise<LogsResponse> => {
     const searchParams = new URLSearchParams();
     if (params.timeRange) searchParams.set('timeRange', params.timeRange);
     if (params.category) searchParams.set('category', params.category);
@@ -409,21 +439,18 @@ export const logs = {
     if (params.customSince) searchParams.set('customSince', params.customSince);
     if (params.customUntil) searchParams.set('customUntil', params.customUntil);
 
-    const token = localStorage.getItem('accessToken');
-    const response = await fetch(`${API_BASE}/logs/query?${searchParams.toString()}`, {
-      headers: {
-        'Content-Type': 'application/json',
-        ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      },
-      signal: params.signal,
-    });
+    const makeRequest = () => {
+      const token = localStorage.getItem('accessToken');
+      return fetch(`${API_BASE}/logs/query?${searchParams.toString()}`, {
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        signal: params.signal,
+      });
+    };
 
-    if (!response.ok) {
-      const error = await response.json().catch(() => ({ error: 'Request failed' }));
-      throw new Error(error.error || 'Request failed');
-    }
-
-    return response.json() as Promise<LogsResponse>;
+    return handleUnauthorized(makeRequest, (res) => res.json());
   },
   presets: () => apiRequest<{ presets: TimePreset[] }>('/logs/presets'),
 };
@@ -560,28 +587,24 @@ export const sounds = {
 
   // Upload operations
   uploadFile: async (file: File, alias: string): Promise<UploadResponse> => {
-    const token = localStorage.getItem('accessToken');
-    if (!token) throw new Error('Not authenticated');
-
     const formData = new FormData();
     // Alias must come before file for multipart parsing
     formData.append('alias', alias);
     formData.append('file', file);
 
-    const response = await fetch(`${API_BASE}/sounds/upload`, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${token}`,
-      },
-      body: formData,
-    });
+    const makeRequest = () => {
+      const token = localStorage.getItem('accessToken');
+      if (!token) throw new Error('Not authenticated');
+      return fetch(`${API_BASE}/sounds/upload`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+        body: formData,
+      });
+    };
 
-    if (!response.ok) {
-      const error = await response.json().catch(() => ({ error: 'Upload failed' }));
-      throw new Error(error.error || 'Upload failed');
-    }
-
-    return response.json();
+    return handleUnauthorized(makeRequest, (res) => res.json());
   },
 
   importFromUrl: (url: string, alias: string) =>
@@ -592,26 +615,22 @@ export const sounds = {
 
   // Temp upload operations (for clip editor)
   uploadFileToTemp: async (file: File): Promise<TempUploadResponse> => {
-    const token = localStorage.getItem('accessToken');
-    if (!token) throw new Error('Not authenticated');
-
     const formData = new FormData();
     formData.append('file', file);
 
-    const response = await fetch(`${API_BASE}/sounds/upload-temp`, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${token}`,
-      },
-      body: formData,
-    });
+    const makeRequest = () => {
+      const token = localStorage.getItem('accessToken');
+      if (!token) throw new Error('Not authenticated');
+      return fetch(`${API_BASE}/sounds/upload-temp`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+        body: formData,
+      });
+    };
 
-    if (!response.ok) {
-      const error = await response.json().catch(() => ({ error: 'Upload failed' }));
-      throw new Error(error.error || 'Upload failed');
-    }
-
-    return response.json();
+    return handleUnauthorized(makeRequest, (res) => res.json());
   },
 
   importFromUrlToTemp: (url: string) =>
