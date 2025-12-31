@@ -184,6 +184,9 @@ static struct
 	// Keepalive
 	int                lastKeepaliveTime;  // cg.time of last keepalive sent
 
+	// Auto-reconnect
+	int                lastReconnectAttempt;  // cg.time of last reconnect attempt
+
 	// Rate limiting (client-side tracking to show feedback)
 	// Note: These are accessed from audio callback thread, so use volatile
 	volatile int       txLimitMinute;      // Which minute we're tracking (time(NULL) / 60)
@@ -1142,6 +1145,20 @@ void Voice_Frame(void)
 
 	if (!voice.initialized || voice.state == VOICE_STATE_DISABLED)
 	{
+		return;
+	}
+
+	// Auto-reconnect if not connected (try every 5 seconds)
+	if (!voice.connected)
+	{
+		if (cg.time - voice.lastReconnectAttempt > 5000)
+		{
+			voice.lastReconnectAttempt = cg.time;
+			CG_Printf("^3Voice: Attempting to reconnect...\n");
+			Voice_AutoConnect();
+		}
+		// Still process ETMan frame even when disconnected (for UI updates)
+		ETMan_Frame();
 		return;
 	}
 
