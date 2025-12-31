@@ -582,6 +582,69 @@ export const adminCommandLogRelations = relations(adminCommandLog, ({ one }) => 
 }));
 
 // ============================================================================
+// Dynamic Sound Menus (Per-Player Custom Menus)
+// ============================================================================
+
+// User's custom sound menus (root level categories)
+export const userSoundMenus = pgTable(
+  'user_sound_menus',
+  {
+    id: serial('id').primaryKey(),
+    userGuid: varchar('user_guid', { length: 32 }).notNull(), // Owner's ET GUID
+    menuName: varchar('menu_name', { length: 32 }).notNull(), // Display name: "Taunts", "Music", etc.
+    menuPosition: integer('menu_position').notNull().default(0), // 1-9 position in root menu
+    playlistId: integer('playlist_id').references(() => soundPlaylists.id, { onDelete: 'set null' }), // If set, expand this playlist's sounds
+    createdAt: timestamp('created_at').defaultNow().notNull(),
+    updatedAt: timestamp('updated_at').defaultNow().notNull(),
+  },
+  (table) => ({
+    guidPositionIdx: uniqueIndex('user_sound_menus_guid_position_idx').on(table.userGuid, table.menuPosition),
+    guidIdx: index('user_sound_menus_guid_idx').on(table.userGuid),
+  })
+);
+
+// Individual sound items in a menu (only used if playlist_id is NULL)
+export const userSoundMenuItems = pgTable(
+  'user_sound_menu_items',
+  {
+    id: serial('id').primaryKey(),
+    menuId: integer('menu_id')
+      .references(() => userSoundMenus.id, { onDelete: 'cascade' })
+      .notNull(),
+    soundId: integer('sound_id')
+      .references(() => userSounds.id, { onDelete: 'cascade' })
+      .notNull(),
+    itemPosition: integer('item_position').notNull(), // 1-9 position in submenu
+    displayName: varchar('display_name', { length: 32 }), // Override name (NULL = use sound name)
+    createdAt: timestamp('created_at').defaultNow().notNull(),
+  },
+  (table) => ({
+    menuPositionIdx: uniqueIndex('user_sound_menu_items_menu_position_idx').on(table.menuId, table.itemPosition),
+    menuIdx: index('user_sound_menu_items_menu_idx').on(table.menuId),
+  })
+);
+
+// Sound Menu Relations
+export const userSoundMenusRelations = relations(userSoundMenus, ({ one, many }) => ({
+  playlist: one(soundPlaylists, {
+    fields: [userSoundMenus.playlistId],
+    references: [soundPlaylists.id],
+  }),
+  items: many(userSoundMenuItems),
+}));
+
+export const userSoundMenuItemsRelations = relations(userSoundMenuItems, ({ one }) => ({
+  menu: one(userSoundMenus, {
+    fields: [userSoundMenuItems.menuId],
+    references: [userSoundMenus.id],
+  }),
+  sound: one(userSounds, {
+    fields: [userSoundMenuItems.soundId],
+    references: [userSounds.id],
+  }),
+}));
+
+// ============================================================================
 // Type exports
 // ============================================================================
 
@@ -617,6 +680,12 @@ export type SoundShare = typeof soundShares.$inferSelect;
 export type NewSoundShare = typeof soundShares.$inferInsert;
 export type VerificationCode = typeof verificationCodes.$inferSelect;
 export type NewVerificationCode = typeof verificationCodes.$inferInsert;
+
+// Sound menu types
+export type UserSoundMenu = typeof userSoundMenus.$inferSelect;
+export type NewUserSoundMenu = typeof userSoundMenus.$inferInsert;
+export type UserSoundMenuItem = typeof userSoundMenuItems.$inferSelect;
+export type NewUserSoundMenuItem = typeof userSoundMenuItems.$inferInsert;
 
 // Admin system types
 export type AdminLevel = typeof adminLevels.$inferSelect;

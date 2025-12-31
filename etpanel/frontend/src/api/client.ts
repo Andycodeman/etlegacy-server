@@ -508,6 +508,11 @@ export const sounds = {
     }),
   deletePlaylist: (name: string) =>
     apiRequest<{ success: boolean }>(`/sounds/playlists/${encodeURIComponent(name)}`, { method: 'DELETE' }),
+  renamePlaylist: (name: string, newName: string) =>
+    apiRequest<{ success: boolean; newName: string }>(`/sounds/playlists/${encodeURIComponent(name)}/rename`, {
+      method: 'PATCH',
+      body: { newName },
+    }),
   addToPlaylist: (playlistName: string, soundAlias: string) =>
     apiRequest<{ success: boolean }>(`/sounds/playlists/${encodeURIComponent(playlistName)}/sounds`, {
       method: 'POST',
@@ -668,6 +673,59 @@ export const sounds = {
       method: 'POST',
       body: {},
     }),
+
+  // ============================================================================
+  // Sound Menus (Dynamic Per-Player Menus)
+  // ============================================================================
+
+  // List user's menus
+  listMenus: () => apiRequest<SoundMenusResponse>('/sounds/menus'),
+
+  // Get a specific menu with its items
+  getMenu: (menuId: number) => apiRequest<SoundMenuDetailResponse>(`/sounds/menus/${menuId}`),
+
+  // Create a new menu
+  createMenu: (menuName: string, menuPosition: number, playlistId?: number | null) =>
+    apiRequest<{ success: boolean; menu: SoundMenu }>('/sounds/menus', {
+      method: 'POST',
+      body: { menuName, menuPosition, playlistId },
+    }),
+
+  // Update a menu
+  updateMenu: (menuId: number, updates: { menuName?: string; menuPosition?: number; playlistId?: number | null }) =>
+    apiRequest<{ success: boolean; menu: SoundMenu }>(`/sounds/menus/${menuId}`, {
+      method: 'PUT',
+      body: updates,
+    }),
+
+  // Delete a menu
+  deleteMenu: (menuId: number) =>
+    apiRequest<{ success: boolean }>(`/sounds/menus/${menuId}`, { method: 'DELETE' }),
+
+  // Add item to a manual menu
+  addMenuItem: (menuId: number, soundAlias: string, itemPosition: number, displayName?: string | null) =>
+    apiRequest<{ success: boolean; item: SoundMenuItem }>(`/sounds/menus/${menuId}/items`, {
+      method: 'POST',
+      body: { soundAlias, itemPosition, displayName },
+    }),
+
+  // Update a menu item
+  updateMenuItem: (menuId: number, itemId: number, updates: { itemPosition?: number; displayName?: string | null }) =>
+    apiRequest<{ success: boolean; item: SoundMenuItem }>(`/sounds/menus/${menuId}/items/${itemId}`, {
+      method: 'PUT',
+      body: updates,
+    }),
+
+  // Remove item from menu
+  removeMenuItem: (menuId: number, itemId: number) =>
+    apiRequest<{ success: boolean }>(`/sounds/menus/${menuId}/items/${itemId}`, { method: 'DELETE' }),
+
+  // Reorder menu items
+  reorderMenuItems: (menuId: number, itemIds: number[]) =>
+    apiRequest<{ success: boolean }>(`/sounds/menus/${menuId}/reorder`, {
+      method: 'PUT',
+      body: { itemIds },
+    }),
 };
 
 // Sound types
@@ -798,6 +856,45 @@ export interface SaveClipResponse {
   fileSize: number;
   durationSeconds: number;
   isPublic: boolean;
+}
+
+// Sound Menu types
+export interface SoundMenu {
+  id: number;
+  menuName: string;
+  menuPosition: number;
+  playlistId: number | null;
+  playlistName?: string | null;
+  itemCount: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface SoundMenusResponse {
+  menus: SoundMenu[];
+}
+
+export interface SoundMenuItem {
+  id: number;
+  itemPosition: number;
+  displayName: string;
+  soundAlias: string;
+  soundFileId: number;
+  durationSeconds?: number;
+  isFromPlaylist: boolean;
+}
+
+export interface SoundMenuDetailResponse {
+  menu: {
+    id: number;
+    menuName: string;
+    menuPosition: number;
+    playlistId: number | null;
+    createdAt: string;
+    updatedAt: string;
+  };
+  items: SoundMenuItem[];
+  isPlaylistBacked: boolean;
 }
 
 // Browser types

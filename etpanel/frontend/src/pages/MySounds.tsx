@@ -1,10 +1,11 @@
 import { useState, useEffect, useMemo } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { sounds } from '../api/client';
 import type { UserSound, PendingShare, TempUploadResponse } from '../api/client';
 import AudioPlayer from '../components/AudioPlayer';
 import SoundClipEditor from '../components/SoundClipEditor';
+import SoundMenuEditor from '../components/SoundMenuEditor';
 import { renderETColors } from '../utils/etColors';
 
 function formatFileSize(bytes: number): string {
@@ -82,9 +83,24 @@ function SortableHeader({
   );
 }
 
+type TabType = 'library' | 'menus';
+
 export default function MySounds() {
   const queryClient = useQueryClient();
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
+
+  // Tab state - default to 'library', can be set via URL param
+  const [activeTab, setActiveTab] = useState<TabType>(() => {
+    const tab = searchParams.get('tab');
+    return tab === 'menus' ? 'menus' : 'library';
+  });
+
+  const handleTabChange = (tab: TabType) => {
+    setActiveTab(tab);
+    setSearchParams(tab === 'library' ? {} : { tab });
+  };
+
   const [editingAlias, setEditingAlias] = useState<string | null>(null);
   const [newAlias, setNewAlias] = useState('');
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
@@ -112,6 +128,7 @@ export default function MySounds() {
   const [tempUploadData, setTempUploadData] = useState<TempUploadResponse | null>(null);
   const [isSavingClip, setIsSavingClip] = useState(false);
   const [saveClipError, setSaveClipError] = useState('');
+  const [isReclip, setIsReclip] = useState(false); // True when re-clipping an existing sound
 
   // State for creating clip from existing sound
   const [copyingSound, setCopyingSound] = useState<string | null>(null);
@@ -338,6 +355,7 @@ export default function MySounds() {
     setTempUploadData(null);
     setIsSavingClip(false);
     setSaveClipError('');
+    setIsReclip(false);
   };
 
   // Upload to temp storage and switch to clip editor
@@ -399,8 +417,9 @@ export default function MySounds() {
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
-      if (!file.name.toLowerCase().endsWith('.mp3')) {
-        setUploadError('Only MP3 files are allowed');
+      const ext = file.name.toLowerCase();
+      if (!ext.endsWith('.mp3') && !ext.endsWith('.wav')) {
+        setUploadError('Only MP3 and WAV files are allowed');
         return;
       }
       // Allow up to 20MB for editing (will be clipped to 30 seconds)
@@ -419,6 +438,7 @@ export default function MySounds() {
     try {
       const result = await sounds.copyToTemp(alias);
       setTempUploadData(result);
+      setIsReclip(true); // Mark as re-clip for _clip suffix
       setUploadModal(true);
     } catch (err) {
       alert('Failed to prepare sound for editing: ' + (err as Error).message);
@@ -459,7 +479,9 @@ export default function MySounds() {
 
   const openAcceptModal = (share: PendingShare) => {
     setAcceptModal(share);
-    setAcceptAlias(share.suggestedAlias || share.originalName.replace(/\.mp3$/i, ''));
+    // Normalize: remove extension, replace spaces with underscores, strip invalid chars
+    const rawName = share.suggestedAlias || share.originalName.replace(/\.(mp3|wav)$/i, '');
+    setAcceptAlias(rawName.replace(/\s+/g, '_').replace(/[^a-zA-Z0-9_-]/g, ''));
   };
 
   if (guidLoading) {
@@ -528,34 +550,70 @@ export default function MySounds() {
   return (
     <div className="-m-4 md:-m-8">
       {/* Sticky Header */}
-      <div className="sticky -top-4 md:-top-8 z-10 bg-gray-900 px-4 md:px-8 pt-4 pb-4 border-b border-gray-700">
-        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+      <div className="sticky -top-4 md:-top-8 z-10 bg-gray-900 px-4 md:px-8 pt-4 pb-2 border-b border-gray-700">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-3">
           <div className="flex items-center gap-4">
             <h1 className="text-xl md:text-2xl font-bold">My Sounds</h1>
-            <span className="text-sm text-gray-400">
-              {userSounds.length}{debouncedSearch ? ` of ${soundsData?.sounds?.length || 0}` : ''} sound{userSounds.length !== 1 ? 's' : ''}
-            </span>
+            {activeTab === 'library' && (
+              <span className="text-sm text-gray-400">
+                {userSounds.length}{debouncedSearch ? ` of ${soundsData?.sounds?.length || 0}` : ''} sound{userSounds.length !== 1 ? 's' : ''}
+              </span>
+            )}
           </div>
-          <div className="flex gap-3">
-            <input
-              type="text"
-              placeholder="Search sounds..."
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              className="w-full sm:w-48 bg-gray-700 border border-gray-600 rounded px-4 py-2 text-white placeholder-gray-400 focus:outline-none focus:border-blue-500"
-            />
-            <button
-              onClick={() => setUploadModal(true)}
-              className="px-4 py-2 bg-orange-600 hover:bg-orange-500 rounded font-medium transition-colors flex items-center gap-2 whitespace-nowrap"
-            >
-              <span>+</span> Add Sound
-            </button>
-          </div>
+          {activeTab === 'library' && (
+            <div className="flex gap-3">
+              <input
+                type="text"
+                placeholder="Search sounds..."
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                className="w-full sm:w-48 bg-gray-700 border border-gray-600 rounded px-4 py-2 text-white placeholder-gray-400 focus:outline-none focus:border-blue-500"
+              />
+              <button
+                onClick={() => setUploadModal(true)}
+                className="px-4 py-2 bg-orange-600 hover:bg-orange-500 rounded font-medium transition-colors flex items-center gap-2 whitespace-nowrap"
+              >
+                <span>+</span> Add Sound
+              </button>
+            </div>
+          )}
+        </div>
+
+        {/* Tabs */}
+        <div className="flex gap-1">
+          <button
+            onClick={() => handleTabChange('library')}
+            className={`px-4 py-2 rounded-t-lg font-medium transition-colors ${
+              activeTab === 'library'
+                ? 'bg-gray-800 text-white border-b-2 border-orange-500'
+                : 'bg-gray-800/50 text-gray-400 hover:text-white hover:bg-gray-800'
+            }`}
+          >
+            Sound Library
+          </button>
+          <button
+            onClick={() => handleTabChange('menus')}
+            className={`px-4 py-2 rounded-t-lg font-medium transition-colors ${
+              activeTab === 'menus'
+                ? 'bg-gray-800 text-white border-b-2 border-orange-500'
+                : 'bg-gray-800/50 text-gray-400 hover:text-white hover:bg-gray-800'
+            }`}
+          >
+            Sound Menus
+          </button>
         </div>
       </div>
 
       {/* Content */}
-      <div className="px-4 md:px-8 py-4 h-[calc(100vh-90px)] flex flex-col gap-4">
+      <div className="px-4 md:px-8 py-4 h-[calc(100vh-130px)] flex flex-col gap-4">
+        {/* Sound Menus Tab */}
+        {activeTab === 'menus' && (
+          <SoundMenuEditor userSounds={soundsData?.sounds || []} />
+        )}
+
+        {/* Library Tab Content */}
+        {activeTab === 'library' && (
+          <>
         {/* Pending Shares Section */}
         {pendingShares.length > 0 && (
           <div className="bg-blue-900/30 border border-blue-600 rounded-lg p-4 flex-shrink-0">
@@ -625,7 +683,7 @@ export default function MySounds() {
                               type="text"
                               value={newAlias}
                               onChange={(e) => {
-                                setNewAlias(e.target.value.replace(/[^a-zA-Z0-9_-]/g, ''));
+                                setNewAlias(e.target.value.replace(/[^a-zA-Z0-9_]/g, ''));
                                 setRenameError(null);
                               }}
                               onKeyDown={(e) => {
@@ -846,7 +904,7 @@ export default function MySounds() {
                               type="text"
                               value={newAlias}
                               onChange={(e) => {
-                                setNewAlias(e.target.value.replace(/[^a-zA-Z0-9_-]/g, ''));
+                                setNewAlias(e.target.value.replace(/[^a-zA-Z0-9_]/g, ''));
                                 setRenameError(null);
                               }}
                               onKeyDown={(e) => {
@@ -1083,6 +1141,8 @@ export default function MySounds() {
             </div>
           </div>
         )}
+        </>
+        )}
       </div>
 
       {/* Accept Share Modal */}
@@ -1096,7 +1156,7 @@ export default function MySounds() {
             <input
               type="text"
               value={acceptAlias}
-              onChange={(e) => setAcceptAlias(e.target.value.replace(/[^a-zA-Z0-9_]/g, ''))}
+              onChange={(e) => setAcceptAlias(e.target.value.replace(/[^a-zA-Z0-9_-]/g, ''))}
               placeholder="Sound alias"
               className="w-full bg-gray-700 border border-gray-600 rounded px-4 py-2 text-white placeholder-gray-400 focus:outline-none focus:border-blue-500 mb-4"
             />
@@ -1143,6 +1203,8 @@ export default function MySounds() {
                 onCancel={resetUploadModal}
                 isSaving={isSavingClip}
                 saveError={saveClipError}
+                isReclip={isReclip}
+                existingAliases={soundsData?.sounds?.map((s: UserSound) => s.alias) || []}
               />
             </div>
           ) : (
@@ -1174,10 +1236,10 @@ export default function MySounds() {
                 {/* File Upload */}
                 {uploadMode === 'file' && (
                   <div>
-                    <label className="block text-sm text-gray-400 mb-1">MP3 File (max 20MB)</label>
+                    <label className="block text-sm text-gray-400 mb-1">Audio File (MP3 or WAV, max 20MB)</label>
                     <input
                       type="file"
-                      accept=".mp3,audio/mpeg"
+                      accept=".mp3,.wav,audio/mpeg,audio/wav,audio/wave"
                       onChange={handleFileSelect}
                       className="w-full bg-gray-700 border border-gray-600 rounded px-4 py-2 text-white file:mr-4 file:py-1 file:px-4 file:rounded file:border-0 file:bg-orange-600 file:text-white file:cursor-pointer hover:file:bg-orange-500"
                     />
@@ -1195,7 +1257,7 @@ export default function MySounds() {
                 {/* URL Input */}
                 {uploadMode === 'url' && (
                   <div>
-                    <label className="block text-sm text-gray-400 mb-1">MP3 URL</label>
+                    <label className="block text-sm text-gray-400 mb-1">Audio URL (MP3 or WAV)</label>
                     <input
                       type="url"
                       value={uploadUrl}
@@ -1204,7 +1266,7 @@ export default function MySounds() {
                       className="w-full bg-gray-700 border border-gray-600 rounded px-4 py-2 text-white placeholder-gray-400 focus:outline-none focus:border-blue-500"
                     />
                     <p className="text-xs text-gray-500 mt-2">
-                      The server will download the MP3 and you can select a 30-second clip
+                      The server will download the audio and you can select a 30-second clip
                     </p>
                   </div>
                 )}

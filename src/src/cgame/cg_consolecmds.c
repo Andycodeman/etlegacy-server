@@ -3485,6 +3485,9 @@ static consoleCommand_t commands[] =
 	{ "voiceunmute",            Voice_Cmd_VoiceUnmute_f   },
 	{ "voicestatus",            Voice_Cmd_VoiceStatus_f   },
 	{ "etman",                  ETMan_Cmd_f               },
+	{ "soundmenu",              CG_SoundMenu_f            },
+	{ "+soundmenu",             CG_SoundMenuDown_f        },
+	{ "-soundmenu",             CG_SoundMenuUp_f          },
 #endif
 
 	{ NULL,                     NULL                      }

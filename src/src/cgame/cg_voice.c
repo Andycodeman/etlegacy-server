@@ -865,8 +865,8 @@ static void Voice_ProcessIncoming(void)
 
 		relay = (voiceRelayHeader_t *)buffer;
 
-		/* Check for ETMan response packets (0x20-0x24, 0x31) */
-		if ((buffer[0] >= 0x20 && buffer[0] <= 0x24) || buffer[0] == 0x31)
+		/* Check for ETMan response packets (0x20-0x24, 0x31, 0x34) */
+		if ((buffer[0] >= 0x20 && buffer[0] <= 0x24) || buffer[0] == 0x31 || buffer[0] == 0x34)
 		{
 			ETMan_HandleResponse(buffer, received);
 			continue;

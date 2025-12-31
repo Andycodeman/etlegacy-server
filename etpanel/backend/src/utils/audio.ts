@@ -82,8 +82,8 @@ export async function generateWaveformPeaks(filePath: string, numPeaks: number =
 
 /**
  * Clip audio file to specified start/end times
- * Converts to 48kHz mono to match etman-server's Opus encoder expectations
- * This avoids runtime resampling which degrades quality
+ * Preserves format: WAV stays WAV (lossless), MP3 stays MP3
+ * Both are converted to 44.1kHz mono to match etman-server's Opus encoder
  */
 export async function clipAndConvertAudio(
   inputPath: string,
@@ -101,18 +101,25 @@ export async function clipAndConvertAudio(
   }
 
   try {
+    // Detect if output is WAV or MP3 based on extension
+    const isWav = outputPath.toLowerCase().endsWith('.wav');
+
     // Use ffmpeg to clip and convert
     // -ss: start time (with millisecond precision)
     // -to: end time (with millisecond precision)
-    // -ar 48000: convert to 48kHz to match etman-server Opus encoder
-    //            (avoids low-quality linear interpolation resampling at runtime)
     // -ac 1: mono (required for ET)
-    // -b:a 192k: high bitrate for quality
-    // -af aresample=resampler=soxr: use high-quality SoX resampler
-    await execAsync(
-      `ffmpeg -y -i "${inputPath}" -ss ${startTime.toFixed(3)} -to ${endTime.toFixed(3)} -af "aresample=resampler=soxr:precision=28" -ar 48000 -ac 1 -b:a 192k "${outputPath}"`,
-      { timeout: 60000 } // 60 second timeout
-    );
+    let command: string;
+    if (isWav) {
+      // WAV output: 16-bit PCM, keep original sample rate (don't upsample low-quality sources)
+      // The etman-server will resample to 44.1kHz at playback time anyway
+      command = `ffmpeg -y -i "${inputPath}" -ss ${startTime.toFixed(3)} -to ${endTime.toFixed(3)} -ac 1 -c:a pcm_s16le "${outputPath}"`;
+    } else {
+      // MP3 output: 128kbps at 44.1kHz
+      // -af aresample=resampler=soxr: use high-quality SoX resampler
+      command = `ffmpeg -y -i "${inputPath}" -ss ${startTime.toFixed(3)} -to ${endTime.toFixed(3)} -af "aresample=resampler=soxr:precision=28" -ar 44100 -ac 1 -b:a 128k "${outputPath}"`;
+    }
+
+    await execAsync(command, { timeout: 60000 });
 
     // Get the resulting file info
     const duration = await getAudioDuration(outputPath);
@@ -152,8 +159,9 @@ export async function cleanupTempFiles(): Promise<{ deleted: number; errors: num
     const files = readdirSync(SOUNDS_TEMP_DIR);
 
     for (const file of files) {
-      // Skip non-mp3 files and hidden files
-      if (!file.endsWith('.mp3') || file.startsWith('.')) {
+      // Skip non-audio files and hidden files
+      const isAudio = file.endsWith('.mp3') || file.endsWith('.wav');
+      if (!isAudio || file.startsWith('.')) {
         continue;
       }
 
@@ -182,19 +190,35 @@ export async function cleanupTempFiles(): Promise<{ deleted: number; errors: num
 }
 
 /**
- * Delete a specific temp file
+ * Delete a specific temp file (checks both .mp3 and .wav extensions)
  */
 export function deleteTempFile(tempId: string): boolean {
-  const filePath = join(SOUNDS_TEMP_DIR, `${tempId}.mp3`);
-  try {
-    if (existsSync(filePath)) {
-      unlinkSync(filePath);
-      return true;
+  // Try both extensions
+  for (const ext of ['.mp3', '.wav']) {
+    const filePath = join(SOUNDS_TEMP_DIR, `${tempId}${ext}`);
+    try {
+      if (existsSync(filePath)) {
+        unlinkSync(filePath);
+        return true;
+      }
+    } catch (err) {
+      console.error(`Error deleting temp file ${tempId}${ext}:`, err);
     }
-  } catch (err) {
-    console.error(`Error deleting temp file ${tempId}:`, err);
   }
   return false;
+}
+
+/**
+ * Get the file extension of a temp file (checks which exists)
+ */
+export function getTempFileExtension(tempId: string): string | null {
+  for (const ext of ['.mp3', '.wav']) {
+    const filePath = join(SOUNDS_TEMP_DIR, `${tempId}${ext}`);
+    if (existsSync(filePath)) {
+      return ext;
+    }
+  }
+  return null;
 }
 
 /**

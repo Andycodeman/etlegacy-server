@@ -258,7 +258,7 @@ export default function PublicSounds() {
 
   const startEdit = (sound: PublicSound) => {
     setEditingSoundId(sound.soundFileId);
-    setEditName(sound.originalName.replace(/\.mp3$/i, ''));
+    setEditName(sound.originalName.replace(/\.(mp3|wav)$/i, ''));
     setEditError('');
   };
 
@@ -268,7 +268,7 @@ export default function PublicSounds() {
       setEditError('');
       return;
     }
-    const cleanOriginal = originalName.replace(/\.mp3$/i, '');
+    const cleanOriginal = originalName.replace(/\.(mp3|wav)$/i, '');
     if (editName === cleanOriginal) {
       setEditingSoundId(null);
       setEditError('');
@@ -284,7 +284,7 @@ export default function PublicSounds() {
 
   const openAddModal = (sound: PublicSound) => {
     setAddModal(sound);
-    setCustomAlias(sound.originalName.replace(/\.mp3$/i, '').replace(/[^a-zA-Z0-9_]/g, '_'));
+    setCustomAlias(sound.originalName.replace(/\.(mp3|wav)$/i, '').replace(/\s+/g, '_').replace(/[^a-zA-Z0-9_-]/g, ''));
     setSelectedPlaylist('');
   };
 
@@ -391,7 +391,7 @@ export default function PublicSounds() {
                           className={`font-medium truncate ${isAdmin ? 'cursor-pointer hover:text-blue-400' : ''}`}
                           onClick={() => isAdmin && startEdit(sound)}
                         >
-                          {sound.originalName.replace(/\.mp3$/i, '')}
+                          {sound.originalName.replace(/\.(mp3|wav)$/i, '')}
                         </div>
                       )}
                       <div className="text-sm text-gray-400">
@@ -488,7 +488,7 @@ export default function PublicSounds() {
                             onClick={() => isAdmin && startEdit(sound)}
                             title={isAdmin ? 'Click to rename' : undefined}
                           >
-                            {sound.originalName.replace(/\.mp3$/i, '')}
+                            {sound.originalName.replace(/\.(mp3|wav)$/i, '')}
                           </span>
                         )}
                       </td>
@@ -607,7 +607,7 @@ export default function PublicSounds() {
                 <input
                   type="text"
                   value={customAlias}
-                  onChange={(e) => setCustomAlias(e.target.value.replace(/[^a-zA-Z0-9_]/g, ''))}
+                  onChange={(e) => setCustomAlias(e.target.value.replace(/[^a-zA-Z0-9_-]/g, ''))}
                   placeholder="sound_alias"
                   className="w-full bg-gray-700 border border-gray-600 rounded px-4 py-2 text-white placeholder-gray-400 focus:outline-none focus:border-blue-500"
                 />
@@ -673,7 +673,7 @@ export default function PublicSounds() {
             <p className="text-gray-300 mb-2">
               Are you sure you want to remove{' '}
               <span className="text-blue-400 font-medium">
-                {deleteConfirm.originalName.replace(/\.mp3$/i, '')}
+                {deleteConfirm.originalName.replace(/\.(mp3|wav)$/i, '')}
               </span>{' '}
               from the public library?
             </p>

@@ -22,6 +22,13 @@
       "when": 1766864609965,
       "tag": "0002_bitter_otto_octavius",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1767169619939,
+      "tag": "0003_add_sound_menus",
+      "breakpoints": true
     }
   ]
 }

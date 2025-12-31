@@ -11,6 +11,8 @@ interface SoundClipEditorProps {
   onCancel: () => void;
   isSaving: boolean;
   saveError?: string;
+  isReclip?: boolean; // True when creating a new clip from an existing sound
+  existingAliases?: string[]; // List of user's existing aliases for auto-increment
 }
 
 // Format time with hundredths precision
@@ -64,6 +66,8 @@ export default function SoundClipEditor({
   onCancel,
   isSaving,
   saveError,
+  isReclip = false,
+  existingAliases = [],
 }: SoundClipEditorProps) {
   const audioRef = useRef<HTMLAudioElement>(null);
   const timelineRef = useRef<HTMLDivElement>(null);
@@ -87,11 +91,43 @@ export default function SoundClipEditor({
   const minZoom = 1;
   const maxZoom = 20; // 20x zoom for precise selection
 
-  // Form state - add "_clip" suffix to suggest this is a new sound
-  const baseAlias = originalName.replace(/\.mp3$/i, '').replace(/[^a-zA-Z0-9_]/g, '_');
-  const [alias, setAlias] = useState(
-    baseAlias.substring(0, 27) + '_clip' // Leave room for "_clip" suffix within 32 char limit
-  );
+  // Form state - generate unique alias from filename
+  // Normalize: remove extension, replace spaces with underscores, strip other invalid chars
+  const baseAlias = originalName
+    .replace(/\.(mp3|wav)$/i, '')
+    .replace(/\s+/g, '_')
+    .replace(/[^a-zA-Z0-9_-]/g, '');
+
+  // Generate initial alias: add _clip suffix only for re-clips, auto-increment if exists
+  const generateUniqueAlias = () => {
+    let candidate = isReclip
+      ? baseAlias.substring(0, 27) + '_clip'
+      : baseAlias.substring(0, 32);
+
+    // Check if alias exists and auto-increment
+    const aliasSet = new Set(existingAliases.map(a => a.toLowerCase()));
+    if (!aliasSet.has(candidate.toLowerCase())) {
+      return candidate;
+    }
+
+    // Try incrementing: alias_1, alias_2, etc.
+    let counter = 1;
+    const maxBase = isReclip ? 25 : 29; // Leave room for _N suffix
+    const truncatedBase = isReclip
+      ? baseAlias.substring(0, maxBase) + '_clip'
+      : baseAlias.substring(0, maxBase);
+
+    while (counter < 100) {
+      candidate = `${truncatedBase}_${counter}`;
+      if (!aliasSet.has(candidate.toLowerCase())) {
+        return candidate;
+      }
+      counter++;
+    }
+    return candidate; // Give up after 100 tries
+  };
+
+  const [alias, setAlias] = useState(generateUniqueAlias);
   const [isPublic, setIsPublic] = useState(false);
   const [validationError, setValidationError] = useState('');
 
@@ -410,8 +446,8 @@ export default function SoundClipEditor({
 
   // Validate and save
   const handleSave = async () => {
-    if (!alias || !/^[a-zA-Z0-9_]+$/.test(alias)) {
-      setValidationError('Alias can only contain letters, numbers, and underscores');
+    if (!alias || !/^[a-zA-Z0-9_-]+$/.test(alias)) {
+      setValidationError('Alias can only contain letters, numbers, underscores, and dashes');
       return;
     }
     if (alias.length > 32) {
@@ -744,13 +780,13 @@ export default function SoundClipEditor({
             <input
               type="text"
               value={alias}
-              onChange={(e) => setAlias(e.target.value.replace(/[^a-zA-Z0-9_]/g, ''))}
+              onChange={(e) => setAlias(e.target.value.replace(/[^a-zA-Z0-9_-]/g, ''))}
               placeholder="my_sound"
               maxLength={32}
               className="w-full bg-gray-700 border border-gray-600 rounded px-4 py-2 text-white placeholder-gray-400 focus:outline-none focus:border-orange-500"
             />
             <p className="text-xs text-gray-500 mt-1">
-              Only letters, numbers, and underscores
+              Only letters, numbers, underscores, and dashes
             </p>
           </div>
 

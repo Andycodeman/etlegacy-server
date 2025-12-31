@@ -804,6 +804,30 @@ void sendResponseToClient(uint32_t clientId, uint8_t respType, const char *messa
 }
 
 /*
+ * Send binary response packet to a specific client
+ * Called by sound_manager.c for menu data
+ */
+void sendBinaryToClient(uint32_t clientId, uint8_t respType, const uint8_t *data, int dataLen) {
+    ClientInfo *client = findClientById(clientId);
+    if (!client) {
+        return;
+    }
+
+    uint8_t packet[2048];
+    if (dataLen > 2046) dataLen = 2046;
+
+    packet[0] = respType;
+    memcpy(packet + 1, data, dataLen);
+
+    int packetLen = 1 + dataLen;
+
+    sendto(g_socket, (char *)packet, packetLen, 0,
+           (struct sockaddr *)&client->addr, sizeof(client->addr));
+
+    printf("[SOUND] Binary response to client %u: type=0x%02x len=%d\n", clientId, respType, dataLen);
+}
+
+/*
  * Broadcast Opus audio packet to all connected clients
  * Called by sound_manager.c for sound playback
  */
@@ -915,12 +939,12 @@ static void processSoundPlayback(void) {
 }
 
 /*
- * Check if packet is a sound command (0x10-0x26 range)
+ * Check if packet is a sound command (0x10-0x33 range)
  */
 static bool isSoundCommand(uint8_t type) {
-    /* Sound commands: 0x10-0x27, plus account registration 0x30 */
+    /* Sound commands: 0x10-0x27, account registration 0x30-0x31, menus 0x32-0x33 */
     return (type >= VOICE_CMD_SOUND_ADD && type <= VOICE_CMD_PLAYLIST_PUBLIC_SHOW) ||
-           type == VOICE_CMD_ACCOUNT_REGISTER;
+           (type >= VOICE_CMD_ACCOUNT_REGISTER && type <= VOICE_CMD_MENU_PLAY);
 }
 
 /*

@@ -1806,3 +1806,139 @@ bool DB_ExecuteRaw(const char *query) {
     PQclear(res);
     return success;
 }
+
+
+/*
+ * Dynamic sound menu operations
+ */
+
+bool DB_GetUserMenus(const char *guid, DBMenuResult *outResult) {
+    if (!outResult) return false;
+    memset(outResult, 0, sizeof(*outResult));
+
+    if (!DB_IsConnected()) {
+        setError("Not connected to database");
+        return false;
+    }
+
+    /* Get menus with items from BOTH manual items AND playlist-backed menus */
+    const char *params[1] = { guid };
+    PGresult *res = PQexecParams(g_db.conn,
+        "SELECT menu_position, menu_name, is_playlist, item_position, item_name, sound_alias FROM ("
+        "  /* Manual menu items */"
+        "  SELECT m.menu_position, m.menu_name, false as is_playlist, "
+        "         mi.item_position, COALESCE(mi.display_name, us.alias) as item_name, us.alias as sound_alias "
+        "  FROM user_sound_menus m "
+        "  JOIN user_sound_menu_items mi ON mi.menu_id = m.id "
+        "  JOIN user_sounds us ON us.id = mi.sound_id "
+        "  WHERE m.user_guid = $1 AND m.playlist_id IS NULL "
+        "  UNION ALL "
+        "  /* Playlist-backed menu items */"
+        "  SELECT m.menu_position, m.menu_name, true as is_playlist, "
+        "         pi.order_number as item_position, us.alias as item_name, us.alias as sound_alias "
+        "  FROM user_sound_menus m "
+        "  JOIN sound_playlists p ON p.id = m.playlist_id "
+        "  JOIN sound_playlist_items pi ON pi.playlist_id = p.id "
+        "  JOIN user_sounds us ON us.id = pi.user_sound_id "
+        "  WHERE m.user_guid = $1 AND m.playlist_id IS NOT NULL "
+        "  UNION ALL "
+        "  /* Menus with no items (empty manual menus) */"
+        "  SELECT m.menu_position, m.menu_name, (m.playlist_id IS NOT NULL) as is_playlist, "
+        "         NULL::int as item_position, NULL as item_name, NULL as sound_alias "
+        "  FROM user_sound_menus m "
+        "  LEFT JOIN user_sound_menu_items mi ON mi.menu_id = m.id "
+        "  LEFT JOIN sound_playlist_items pi ON pi.playlist_id = m.playlist_id "
+        "  WHERE m.user_guid = $1 AND mi.id IS NULL AND pi.id IS NULL "
+        ") combined "
+        "ORDER BY menu_position, item_position NULLS LAST",
+        1, NULL, params, NULL, NULL, 0);
+
+    if (!checkResult(res, PGRES_TUPLES_OK)) {
+        return false;
+    }
+
+    int rows = PQntuples(res);
+    int currentMenuPos = -1;
+    int menuIdx = -1;
+
+    for (int i = 0; i < rows && outResult->count < DB_MAX_MENUS; i++) {
+        int menuPos = atoi(PQgetvalue(res, i, 0));
+
+        if (menuPos != currentMenuPos) {
+            /* New menu */
+            menuIdx = outResult->count++;
+            currentMenuPos = menuPos;
+
+            DBMenu *menu = &outResult->menus[menuIdx];
+            menu->position = menuPos;
+            strncpy(menu->name, PQgetvalue(res, i, 1), sizeof(menu->name) - 1);
+            menu->isPlaylist = (PQgetvalue(res, i, 2)[0] == 't');
+            menu->itemCount = 0;
+        }
+
+        /* Add item if present (LEFT JOIN may have NULL items) */
+        if (!PQgetisnull(res, i, 3) && menuIdx >= 0) {
+            DBMenu *menu = &outResult->menus[menuIdx];
+            if (menu->itemCount < DB_MAX_MENU_ITEMS) {
+                DBMenuItem *item = &menu->items[menu->itemCount++];
+                item->position = atoi(PQgetvalue(res, i, 3));
+                strncpy(item->name, PQgetvalue(res, i, 4), sizeof(item->name) - 1);
+                strncpy(item->soundAlias, PQgetvalue(res, i, 5), sizeof(item->soundAlias) - 1);
+            }
+        }
+    }
+
+    PQclear(res);
+    return true;
+}
+
+bool DB_GetMenuItemSound(const char *guid, int menuPos, int itemPos,
+                         char *outFilePath, int outLen) {
+    if (outFilePath && outLen > 0) outFilePath[0] = '\0';
+
+    if (!DB_IsConnected()) {
+        setError("Not connected to database");
+        return false;
+    }
+
+    char menuPosStr[8], itemPosStr[8];
+    snprintf(menuPosStr, sizeof(menuPosStr), "%d", menuPos);
+    snprintf(itemPosStr, sizeof(itemPosStr), "%d", itemPos);
+
+    const char *params[3] = { guid, menuPosStr, itemPosStr };
+    PGresult *res = PQexecParams(g_db.conn,
+        "SELECT file_path FROM ("
+        "  /* Manual menu items */"
+        "  SELECT sf.file_path, mi.item_position "
+        "  FROM user_sound_menu_items mi "
+        "  JOIN user_sound_menus m ON m.id = mi.menu_id "
+        "  JOIN user_sounds us ON us.id = mi.sound_id "
+        "  JOIN sound_files sf ON sf.id = us.sound_file_id "
+        "  WHERE m.user_guid = $1 AND m.menu_position = $2 AND m.playlist_id IS NULL "
+        "  UNION ALL "
+        "  /* Playlist-backed menu items */"
+        "  SELECT sf.file_path, pi.order_number as item_position "
+        "  FROM user_sound_menus m "
+        "  JOIN sound_playlist_items pi ON pi.playlist_id = m.playlist_id "
+        "  JOIN user_sounds us ON us.id = pi.user_sound_id "
+        "  JOIN sound_files sf ON sf.id = us.sound_file_id "
+        "  WHERE m.user_guid = $1 AND m.menu_position = $2 AND m.playlist_id IS NOT NULL "
+        ") combined WHERE item_position = $3",
+        3, NULL, params, NULL, NULL, 0);
+
+    if (!checkResult(res, PGRES_TUPLES_OK)) {
+        return false;
+    }
+
+    if (PQntuples(res) == 0) {
+        PQclear(res);
+        setError("Menu item not found");
+        return false;
+    }
+
+    strncpy(outFilePath, PQgetvalue(res, 0, 0), outLen - 1);
+    outFilePath[outLen - 1] = '\0';
+
+    PQclear(res);
+    return true;
+}

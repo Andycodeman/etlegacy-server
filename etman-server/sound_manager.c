@@ -130,6 +130,8 @@ static bool SoundMgr_PlaySoundByPath(uint32_t clientId, const char *guid,
                                      const char *name, const char *filepath);
 extern void sendResponseToClient(uint32_t clientId, uint8_t respType,
                                  const char *message);
+extern void sendBinaryToClient(uint32_t clientId, uint8_t respType,
+                               const uint8_t *data, int dataLen);
 extern void broadcastOpusPacket(uint8_t fromClient, uint8_t channel,
                                 uint32_t sequence, const uint8_t *opus, int opusLen);
 extern void resetSoundPlaybackTiming(void);
@@ -1544,6 +1546,120 @@ void SoundMgr_HandlePacket(uint32_t clientId, struct sockaddr_in *clientAddr,
             break;
         }
 
+        case VOICE_CMD_MENU_GET: {
+            /* Get user's sound menus */
+            if (!g_soundMgr.dbMode) {
+                sendResponseToClient(clientId, VOICE_RESP_ERROR, "Menus require database mode");
+                break;
+            }
+
+            char guid[SOUND_GUID_LEN + 1];
+            if (!getGuidByClientId(clientId, guid, sizeof(guid))) {
+                sendResponseToClient(clientId, VOICE_RESP_ERROR, "Not authenticated");
+                break;
+            }
+
+            /* Use HEAP to avoid stack overflow - DBMenuResult is ~6KB */
+            DBMenuResult *menus = malloc(sizeof(DBMenuResult));
+            if (!menus) {
+                sendResponseToClient(clientId, VOICE_RESP_ERROR, "Memory allocation failed");
+                break;
+            }
+
+            if (!DB_GetUserMenus(guid, menus)) {
+                sendResponseToClient(clientId, VOICE_RESP_ERROR, "Failed to get menus");
+                free(menus);
+                break;
+            }
+
+            /* Build binary response for client:
+             * [menuCount:1]
+             * per menu: [position:1][nameLen:1][name][itemCount:1]
+             * per item: [position:1][nameLen:1][name][aliasLen:1][alias]
+             */
+            uint8_t response[2048];
+            int offset = 0;
+
+            if (menus->count == 0) {
+                /* Send NO_MENUS marker */
+                memcpy(response, "NO_MENUS", 8);
+                sendBinaryToClient(clientId, VOICE_RESP_MENU_DATA, response, 8);
+                free(menus);
+                break;
+            }
+
+            response[offset++] = (uint8_t)menus->count;
+
+            for (int m = 0; m < menus->count && offset < 2000; m++) {
+                DBMenu *menu = &menus->menus[m];
+                int nameLen = strlen(menu->name);
+
+                response[offset++] = (uint8_t)menu->position;
+                response[offset++] = (uint8_t)nameLen;
+                memcpy(response + offset, menu->name, nameLen);
+                offset += nameLen;
+                response[offset++] = (uint8_t)menu->itemCount;
+
+                for (int i = 0; i < menu->itemCount && offset < 2000; i++) {
+                    DBMenuItem *item = &menu->items[i];
+                    int itemNameLen = strlen(item->name);
+                    int aliasLen = strlen(item->soundAlias);
+
+                    response[offset++] = (uint8_t)item->position;
+                    response[offset++] = (uint8_t)itemNameLen;
+                    memcpy(response + offset, item->name, itemNameLen);
+                    offset += itemNameLen;
+                    response[offset++] = (uint8_t)aliasLen;
+                    memcpy(response + offset, item->soundAlias, aliasLen);
+                    offset += aliasLen;
+                }
+            }
+
+            printf("[MENU] Sending %d menus (%d bytes) to client %u\n",
+                   menus->count, offset, clientId);
+            sendBinaryToClient(clientId, VOICE_RESP_MENU_DATA, response, offset);
+            free(menus);
+            break;
+        }
+
+        case VOICE_CMD_MENU_PLAY: {
+            /* Play sound from menu position */
+            if (!g_soundMgr.dbMode) {
+                sendResponseToClient(clientId, VOICE_RESP_ERROR, "Menus require database mode");
+                break;
+            }
+
+            if (payloadLen < 2) {
+                sendResponseToClient(clientId, VOICE_RESP_ERROR, "Invalid menu play request");
+                break;
+            }
+
+            char guid[SOUND_GUID_LEN + 1];
+            if (!getGuidByClientId(clientId, guid, sizeof(guid))) {
+                sendResponseToClient(clientId, VOICE_RESP_ERROR, "Not authenticated");
+                break;
+            }
+
+            int menuPos = payload[0];
+            int itemPos = payload[1];
+
+            char filePath[512];
+            if (!DB_GetMenuItemSound(guid, menuPos, itemPos, filePath, sizeof(filePath))) {
+                sendResponseToClient(clientId, VOICE_RESP_ERROR, "Sound not found in menu");
+                break;
+            }
+
+            /* Play the sound file using existing function */
+            if (SoundMgr_PlaySoundByPath(clientId, guid, "menu", filePath)) {
+                char msg[128];
+                snprintf(msg, sizeof(msg), "Playing menu %d item %d", menuPos, itemPos);
+                sendResponseToClient(clientId, VOICE_RESP_SUCCESS, msg);
+            } else {
+                sendResponseToClient(clientId, VOICE_RESP_ERROR, "Failed to play sound");
+            }
+            break;
+        }
+
         default:
             sendResponseToClient(clientId, VOICE_RESP_ERROR, "Unknown command");
             break;
@@ -2431,7 +2547,166 @@ static void generateUUID(char *out, size_t outLen) {
     uuid_unparse_lower(uuid, out);
 }
 
+/*
+ * Decode WAV file to PCM
+ */
+static bool decodeWAV(const char *filepath, int16_t **outPcm, int *outSamples) {
+    FILE *f = fopen(filepath, "rb");
+    if (!f) {
+        printf("SoundMgr: WAV - Cannot open file: %s\n", filepath);
+        return false;
+    }
+
+    /* Read RIFF header (12 bytes) */
+    uint8_t riffHeader[12];
+    if (fread(riffHeader, 1, 12, f) != 12) {
+        fclose(f);
+        printf("SoundMgr: WAV - Header too short\n");
+        return false;
+    }
+
+    /* Verify RIFF/WAVE */
+    if (memcmp(riffHeader, "RIFF", 4) != 0 || memcmp(riffHeader + 8, "WAVE", 4) != 0) {
+        fclose(f);
+        printf("SoundMgr: WAV - Invalid RIFF/WAVE header\n");
+        return false;
+    }
+
+    /* Parse chunks to find fmt and data */
+    uint16_t audioFormat = 0;
+    uint16_t numChannels = 0;
+    uint32_t sampleRate = 0;
+    uint16_t bitsPerSample = 0;
+    uint32_t dataSize = 0;
+    long dataOffset = 0;
+
+    uint8_t chunkHeader[8];
+    while (fread(chunkHeader, 1, 8, f) == 8) {
+        uint32_t chunkSize = chunkHeader[4] | (chunkHeader[5] << 8) |
+                            (chunkHeader[6] << 16) | (chunkHeader[7] << 24);
+
+        if (memcmp(chunkHeader, "fmt ", 4) == 0) {
+            /* Format chunk */
+            uint8_t fmtData[16];
+            if (fread(fmtData, 1, 16, f) != 16) {
+                fclose(f);
+                return false;
+            }
+            audioFormat = fmtData[0] | (fmtData[1] << 8);
+            numChannels = fmtData[2] | (fmtData[3] << 8);
+            sampleRate = fmtData[4] | (fmtData[5] << 8) | (fmtData[6] << 16) | (fmtData[7] << 24);
+            bitsPerSample = fmtData[14] | (fmtData[15] << 8);
+
+            /* Skip rest of fmt chunk if larger than 16 */
+            if (chunkSize > 16) {
+                fseek(f, chunkSize - 16, SEEK_CUR);
+            }
+        } else if (memcmp(chunkHeader, "data", 4) == 0) {
+            /* Data chunk found */
+            dataSize = chunkSize;
+            dataOffset = ftell(f);
+            break;
+        } else {
+            /* Skip unknown chunk */
+            fseek(f, chunkSize, SEEK_CUR);
+        }
+    }
+
+    printf("SoundMgr: WAV - format=%d, channels=%d, rate=%d, bits=%d, dataSize=%d\n",
+           audioFormat, numChannels, sampleRate, bitsPerSample, dataSize);
+
+    if (audioFormat != 1) {  /* 1 = PCM */
+        fclose(f);
+        printf("SoundMgr: WAV - Not PCM format (format=%d)\n", audioFormat);
+        return false;
+    }
+
+    if (bitsPerSample != 16) {
+        fclose(f);
+        printf("SoundMgr: WAV - Only 16-bit supported (got %d-bit)\n", bitsPerSample);
+        return false;
+    }
+
+    if (dataSize == 0 || dataOffset == 0) {
+        fclose(f);
+        printf("SoundMgr: WAV - No data chunk found\n");
+        return false;
+    }
+
+    /* Seek to data and read PCM */
+    fseek(f, dataOffset, SEEK_SET);
+    int16_t *rawData = (int16_t*)malloc(dataSize);
+    if (!rawData) {
+        fclose(f);
+        return false;
+    }
+
+    size_t bytesRead = fread(rawData, 1, dataSize, f);
+    fclose(f);
+
+    if (bytesRead < dataSize) {
+        printf("SoundMgr: WAV - Only read %zu of %u bytes\n", bytesRead, dataSize);
+        dataSize = bytesRead;
+    }
+
+    int totalSamples = dataSize / (bitsPerSample / 8) / numChannels;
+
+    /* Convert to mono if stereo */
+    int16_t *monoData;
+    int monoSamples;
+
+    if (numChannels == 2) {
+        monoSamples = totalSamples;
+        monoData = (int16_t*)malloc(monoSamples * sizeof(int16_t));
+        if (!monoData) {
+            free(rawData);
+            return false;
+        }
+        for (int i = 0; i < monoSamples; i++) {
+            monoData[i] = (rawData[i * 2] + rawData[i * 2 + 1]) / 2;
+        }
+        free(rawData);
+    } else {
+        monoData = rawData;
+        monoSamples = totalSamples;
+    }
+
+    /* Resample to 48kHz if needed */
+    int16_t *finalBuffer;
+    int finalSamples;
+
+    if ((int)sampleRate != OPUS_SAMPLE_RATE) {
+        printf("SoundMgr: WAV - Resampling from %d Hz to %d Hz\n", sampleRate, OPUS_SAMPLE_RATE);
+        finalBuffer = resampleLinear(monoData, monoSamples, sampleRate, OPUS_SAMPLE_RATE, &finalSamples);
+        free(monoData);
+        if (!finalBuffer) {
+            return false;
+        }
+    } else {
+        finalBuffer = monoData;
+        finalSamples = monoSamples;
+    }
+
+    /* Enforce max duration */
+    int maxSamples = OPUS_SAMPLE_RATE * SOUND_MAX_DURATION_SEC;
+    if (finalSamples > maxSamples) {
+        printf("SoundMgr: WAV - Truncating to %d sec\n", SOUND_MAX_DURATION_SEC);
+        finalSamples = maxSamples;
+    }
+
+    *outPcm = finalBuffer;
+    *outSamples = finalSamples;
+    printf("SoundMgr: WAV - Decoded %d samples (%.2f sec)\n", finalSamples, (float)finalSamples / OPUS_SAMPLE_RATE);
+    return true;
+}
+
 static bool decodeMP3(const char *filepath, int16_t **outPcm, int *outSamples) {
+    /* Check if it's a WAV file */
+    const char *ext = strrchr(filepath, '.');
+    if (ext && strcasecmp(ext, ".wav") == 0) {
+        return decodeWAV(filepath, outPcm, outSamples);
+    }
+
     FILE *f = fopen(filepath, "rb");
     if (!f) {
         return false;

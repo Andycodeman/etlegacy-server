@@ -38,6 +38,7 @@
 
 #ifdef FEATURE_VOICE
 #include "cg_voice.h"
+#include "cg_etman.h"
 #endif
 
 char *Binding_FromName(const char *cvar);
@@ -4350,6 +4351,9 @@ static void CG_Draw2D(void)
 	Voice_DrawTransmitIndicator();
 	Voice_DrawTalkingHUD();
 	Voice_DrawInputMeter();
+
+	// ETMan sound menu
+	ETMan_Draw();
 #endif
 
 #ifdef FEATURE_EDV

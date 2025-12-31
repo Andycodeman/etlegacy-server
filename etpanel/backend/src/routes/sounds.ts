@@ -15,16 +15,25 @@ import {
   ensureTempDir,
   cleanupTempFiles,
   deleteTempFile,
+  getTempFileExtension,
 } from '../utils/audio.js';
 
+// Supported audio formats
+const SUPPORTED_EXTENSIONS = ['.mp3', '.wav'];
+const SUPPORTED_CONTENT_TYPES = ['audio/mpeg', 'audio/mp3', 'audio/wav', 'audio/wave', 'audio/x-wav'];
+
 // Validation schemas
+// Aliases allow: letters, numbers, underscores, and dashes
+const aliasRegex = /^[a-zA-Z0-9_-]+$/;
+const aliasMessage = 'Only letters, numbers, underscores, and dashes allowed';
+
 const addSoundSchema = z.object({
-  alias: z.string().min(1).max(32).regex(/^[a-zA-Z0-9_]+$/, 'Only letters, numbers, and underscores allowed'),
+  alias: z.string().min(1).max(32).regex(aliasRegex, aliasMessage),
   visibility: z.enum(['private', 'shared', 'public']).optional().default('private'),
 });
 
 const renameSoundSchema = z.object({
-  newAlias: z.string().min(1).max(32).regex(/^[a-zA-Z0-9_]+$/, 'Only letters, numbers, and underscores allowed'),
+  newAlias: z.string().min(1).max(32).regex(aliasRegex, aliasMessage),
 });
 
 const visibilitySchema = z.object({
@@ -32,7 +41,7 @@ const visibilitySchema = z.object({
 });
 
 const createPlaylistSchema = z.object({
-  name: z.string().min(1).max(32).regex(/^[a-zA-Z0-9_]+$/, 'Only letters, numbers, and underscores allowed'),
+  name: z.string().min(1).max(32).regex(aliasRegex, aliasMessage),
   description: z.string().max(256).optional(),
 });
 
@@ -50,7 +59,7 @@ const shareSchema = z.object({
 });
 
 const acceptShareSchema = z.object({
-  alias: z.string().min(1).max(32).regex(/^[a-zA-Z0-9_]+$/, 'Only letters, numbers, and underscores allowed'),
+  alias: z.string().min(1).max(32).regex(aliasRegex, aliasMessage),
 });
 
 const verifyCodeSchema = z.object({
@@ -59,7 +68,7 @@ const verifyCodeSchema = z.object({
 
 const uploadFromUrlSchema = z.object({
   url: z.string().url(),
-  alias: z.string().min(1).max(32).regex(/^[a-zA-Z0-9_]+$/, 'Only letters, numbers, and underscores allowed'),
+  alias: z.string().min(1).max(32).regex(aliasRegex, aliasMessage),
 });
 
 const tempUploadFromUrlSchema = z.object({
@@ -68,7 +77,7 @@ const tempUploadFromUrlSchema = z.object({
 
 const saveClipSchema = z.object({
   tempId: z.string().uuid(),
-  alias: z.string().min(1).max(32).regex(/^[a-zA-Z0-9_]+$/, 'Only letters, numbers, and underscores allowed'),
+  alias: z.string().min(1).max(32).regex(aliasRegex, aliasMessage),
   startTime: z.number().min(0),
   endTime: z.number().min(0),
   isPublic: z.boolean().optional().default(false),
@@ -349,7 +358,7 @@ export const soundsRoutes: FastifyPluginAsync = async (fastify) => {
   // Upload / Import Sounds
   // ============================================================================
 
-  // Upload MP3 file directly
+  // Upload audio file directly (MP3 or WAV)
   fastify.post('/upload', { preHandler: authenticate }, async (request, reply) => {
     const guid = await getUserGuid(request.user.userId);
     if (!guid) {
@@ -379,9 +388,9 @@ export const soundsRoutes: FastifyPluginAsync = async (fastify) => {
       alias = aliasField;
     }
 
-    if (!alias || !/^[a-zA-Z0-9_]+$/.test(alias)) {
+    if (!alias || !aliasRegex.test(alias)) {
       fastify.log.warn({ fields: data.fields, aliasField }, 'Invalid alias field');
-      return reply.status(400).send({ error: 'Invalid alias. Only letters, numbers, and underscores allowed.' });
+      return reply.status(400).send({ error: `Invalid alias. ${aliasMessage}` });
     }
 
     // Check alias doesn't already exist for this user
@@ -395,10 +404,10 @@ export const soundsRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.status(409).send({ error: 'You already have a sound with this alias' });
     }
 
-    // Validate file type
+    // Validate file type (MP3 or WAV)
     const ext = extname(data.filename).toLowerCase();
-    if (ext !== '.mp3') {
-      return reply.status(400).send({ error: 'Only MP3 files are allowed' });
+    if (!SUPPORTED_EXTENSIONS.includes(ext)) {
+      return reply.status(400).send({ error: 'Only MP3 and WAV files are allowed' });
     }
 
     // Read file into buffer to check size
@@ -417,8 +426,8 @@ export const soundsRoutes: FastifyPluginAsync = async (fastify) => {
       mkdirSync(SOUNDS_DIR, { recursive: true });
     }
 
-    // Generate unique filename
-    const uniqueFilename = `${randomUUID()}.mp3`;
+    // Generate unique filename (preserve original extension)
+    const uniqueFilename = `${randomUUID()}${ext}`;
     const filePath = join(SOUNDS_DIR, uniqueFilename);
 
     // Write file
@@ -572,7 +581,7 @@ export const soundsRoutes: FastifyPluginAsync = async (fastify) => {
   // Temp Upload & Clip Editor (NEW)
   // ============================================================================
 
-  // Upload MP3 file to temp storage for editing
+  // Upload audio file to temp storage for editing (MP3 or WAV)
   fastify.post('/upload-temp', { preHandler: authenticate }, async (request, reply) => {
     const guid = await getUserGuid(request.user.userId);
     if (!guid) {
@@ -584,10 +593,10 @@ export const soundsRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.status(400).send({ error: 'No file uploaded' });
     }
 
-    // Validate file type
+    // Validate file type (MP3 or WAV)
     const ext = extname(data.filename).toLowerCase();
-    if (ext !== '.mp3') {
-      return reply.status(400).send({ error: 'Only MP3 files are allowed' });
+    if (!SUPPORTED_EXTENSIONS.includes(ext)) {
+      return reply.status(400).send({ error: 'Only MP3 and WAV files are allowed' });
     }
 
     // Read file into buffer
@@ -604,9 +613,9 @@ export const soundsRoutes: FastifyPluginAsync = async (fastify) => {
     // Ensure temp directory exists
     ensureTempDir();
 
-    // Generate temp file ID
+    // Generate temp file ID (preserve original extension)
     const tempId = randomUUID();
-    const tempFilePath = join(SOUNDS_TEMP_DIR, `${tempId}.mp3`);
+    const tempFilePath = join(SOUNDS_TEMP_DIR, `${tempId}${ext}`);
 
     // Write file to temp storage
     writeFileSync(tempFilePath, buffer);
@@ -619,7 +628,7 @@ export const soundsRoutes: FastifyPluginAsync = async (fastify) => {
       // Clean up and report error
       unlinkSync(tempFilePath);
       fastify.log.error({ err }, 'Failed to get audio duration');
-      return reply.status(400).send({ error: 'Could not read audio file. Make sure it is a valid MP3.' });
+      return reply.status(400).send({ error: 'Could not read audio file. Make sure it is a valid audio file.' });
     }
 
     return {
@@ -629,10 +638,11 @@ export const soundsRoutes: FastifyPluginAsync = async (fastify) => {
       fileSize: buffer.length,
       originalName: data.filename,
       maxClipDuration: MAX_CLIP_DURATION_SECONDS,
+      format: ext.substring(1), // 'mp3' or 'wav'
     };
   });
 
-  // Import MP3 from URL to temp storage for editing
+  // Import audio from URL to temp storage for editing (MP3 or WAV)
   fastify.post('/import-url-temp', { preHandler: authenticate }, async (request, reply) => {
     const body = tempUploadFromUrlSchema.safeParse(request.body);
     if (!body.success) {
@@ -655,11 +665,17 @@ export const soundsRoutes: FastifyPluginAsync = async (fastify) => {
 
       // Check content type
       const contentType = response.headers.get('content-type') || '';
-      if (!contentType.includes('audio/mpeg') && !contentType.includes('audio/mp3')) {
-        // Also allow if URL ends with .mp3
-        if (!url.toLowerCase().endsWith('.mp3')) {
-          return reply.status(400).send({ error: 'URL does not point to an MP3 file' });
-        }
+      const isValidContentType = SUPPORTED_CONTENT_TYPES.some(ct => contentType.includes(ct));
+
+      // Determine file extension from URL or content type
+      const urlLower = url.toLowerCase();
+      let ext = '.mp3'; // default
+      if (urlLower.endsWith('.wav') || contentType.includes('wav')) {
+        ext = '.wav';
+      } else if (urlLower.endsWith('.mp3') || contentType.includes('mpeg') || contentType.includes('mp3')) {
+        ext = '.mp3';
+      } else if (!isValidContentType) {
+        return reply.status(400).send({ error: 'URL does not point to an MP3 or WAV file' });
       }
 
       // Check content length if available
@@ -679,13 +695,13 @@ export const soundsRoutes: FastifyPluginAsync = async (fastify) => {
       // Ensure temp directory exists
       ensureTempDir();
 
-      // Generate temp file ID
+      // Generate temp file ID (with detected extension)
       const tempId = randomUUID();
-      const tempFilePath = join(SOUNDS_TEMP_DIR, `${tempId}.mp3`);
+      const tempFilePath = join(SOUNDS_TEMP_DIR, `${tempId}${ext}`);
 
       // Extract original filename from URL
       const urlPath = new URL(url).pathname;
-      const originalName = urlPath.split('/').pop() || 'downloaded.mp3';
+      const originalName = urlPath.split('/').pop() || `downloaded${ext}`;
 
       // Write file to temp storage
       writeFileSync(tempFilePath, buffer);
@@ -698,7 +714,7 @@ export const soundsRoutes: FastifyPluginAsync = async (fastify) => {
         // Clean up and report error
         unlinkSync(tempFilePath);
         fastify.log.error({ err }, 'Failed to get audio duration');
-        return reply.status(400).send({ error: 'Could not read audio file. Make sure the URL points to a valid MP3.' });
+        return reply.status(400).send({ error: 'Could not read audio file. Make sure the URL points to a valid audio file.' });
       }
 
       return {
@@ -708,6 +724,7 @@ export const soundsRoutes: FastifyPluginAsync = async (fastify) => {
         fileSize: buffer.length,
         originalName,
         maxClipDuration: MAX_CLIP_DURATION_SECONDS,
+        format: ext.substring(1), // 'mp3' or 'wav'
       };
     } catch (err) {
       fastify.log.error({ err }, 'URL temp import error');
@@ -715,7 +732,7 @@ export const soundsRoutes: FastifyPluginAsync = async (fastify) => {
     }
   });
 
-  // Stream temp file for preview
+  // Stream temp file for preview (MP3 or WAV)
   fastify.get('/temp/:tempId', { preHandler: authenticate }, async (request, reply) => {
     const { tempId } = request.params as { tempId: string };
 
@@ -724,11 +741,14 @@ export const soundsRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.status(400).send({ error: 'Invalid temp file ID' });
     }
 
-    const tempFilePath = join(SOUNDS_TEMP_DIR, `${tempId}.mp3`);
-
-    if (!existsSync(tempFilePath)) {
+    // Check for both extensions
+    const ext = getTempFileExtension(tempId);
+    if (!ext) {
       return reply.status(404).send({ error: 'Temp file not found or expired' });
     }
+
+    const tempFilePath = join(SOUNDS_TEMP_DIR, `${tempId}${ext}`);
+    const contentType = ext === '.wav' ? 'audio/wav' : 'audio/mpeg';
 
     const stats = statSync(tempFilePath);
     const range = request.headers.range;
@@ -744,19 +764,19 @@ export const soundsRoutes: FastifyPluginAsync = async (fastify) => {
       reply.header('Content-Range', `bytes ${start}-${end}/${stats.size}`);
       reply.header('Accept-Ranges', 'bytes');
       reply.header('Content-Length', chunkSize);
-      reply.header('Content-Type', 'audio/mpeg');
+      reply.header('Content-Type', contentType);
 
       return reply.send(createReadStream(tempFilePath, { start, end }));
     }
 
     reply.header('Content-Length', stats.size);
-    reply.header('Content-Type', 'audio/mpeg');
+    reply.header('Content-Type', contentType);
     reply.header('Accept-Ranges', 'bytes');
 
     return reply.send(createReadStream(tempFilePath));
   });
 
-  // Get waveform data for temp file
+  // Get waveform data for temp file (MP3 or WAV)
   fastify.get('/temp/:tempId/waveform', { preHandler: authenticate }, async (request, reply) => {
     const { tempId } = request.params as { tempId: string };
 
@@ -765,11 +785,13 @@ export const soundsRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.status(400).send({ error: 'Invalid temp file ID' });
     }
 
-    const tempFilePath = join(SOUNDS_TEMP_DIR, `${tempId}.mp3`);
-
-    if (!existsSync(tempFilePath)) {
+    // Check for both extensions
+    const ext = getTempFileExtension(tempId);
+    if (!ext) {
       return reply.status(404).send({ error: 'Temp file not found or expired' });
     }
+
+    const tempFilePath = join(SOUNDS_TEMP_DIR, `${tempId}${ext}`);
 
     try {
       const peaks = await generateWaveformPeaks(tempFilePath, 200);
@@ -781,7 +803,7 @@ export const soundsRoutes: FastifyPluginAsync = async (fastify) => {
     }
   });
 
-  // Save clipped audio as permanent sound
+  // Save clipped audio as permanent sound (preserves WAV format)
   fastify.post('/save-clip', { preHandler: authenticate }, async (request, reply) => {
     const body = saveClipSchema.safeParse(request.body);
     if (!body.success) {
@@ -815,23 +837,25 @@ export const soundsRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.status(409).send({ error: 'You already have a sound with this alias' });
     }
 
-    // Check temp file exists
-    const tempFilePath = join(SOUNDS_TEMP_DIR, `${tempId}.mp3`);
-    if (!existsSync(tempFilePath)) {
+    // Check temp file exists (could be .mp3 or .wav)
+    const ext = getTempFileExtension(tempId);
+    if (!ext) {
       return reply.status(404).send({ error: 'Temp file not found or expired. Please upload again.' });
     }
+
+    const tempFilePath = join(SOUNDS_TEMP_DIR, `${tempId}${ext}`);
 
     // Ensure sounds directory exists
     if (!existsSync(SOUNDS_DIR)) {
       mkdirSync(SOUNDS_DIR, { recursive: true });
     }
 
-    // Generate unique filename for permanent storage
-    const uniqueFilename = `${randomUUID()}.mp3`;
+    // Generate unique filename for permanent storage (preserve format)
+    const uniqueFilename = `${randomUUID()}${ext}`;
     const permanentFilePath = join(SOUNDS_DIR, uniqueFilename);
 
     try {
-      // Clip and convert the audio
+      // Clip and convert the audio (preserves WAV if input is WAV)
       const { duration, fileSize } = await clipAndConvertAudio(
         tempFilePath,
         permanentFilePath,
@@ -839,12 +863,13 @@ export const soundsRoutes: FastifyPluginAsync = async (fastify) => {
         endTime
       );
 
-      // Check final file size
-      if (fileSize > MAX_FILE_SIZE) {
+      // Check final file size (WAV files are larger, allow more for them)
+      const maxSize = ext === '.wav' ? MAX_FILE_SIZE * 3 : MAX_FILE_SIZE; // 6MB for WAV, 2MB for MP3
+      if (fileSize > maxSize) {
         // Clean up the clipped file
         unlinkSync(permanentFilePath);
         return reply.status(400).send({
-          error: 'Clipped audio exceeds 2MB. Try selecting a shorter portion.',
+          error: `Clipped audio exceeds ${maxSize / 1024 / 1024}MB. Try selecting a shorter portion.`,
         });
       }
 
@@ -853,7 +878,7 @@ export const soundsRoutes: FastifyPluginAsync = async (fastify) => {
         .insert(schema.soundFiles)
         .values({
           filename: uniqueFilename,
-          originalName: `${alias}.mp3`,
+          originalName: `${alias}${ext}`,
           filePath: uniqueFilename,
           fileSize,
           durationSeconds: duration,
@@ -1366,6 +1391,45 @@ export const soundsRoutes: FastifyPluginAsync = async (fastify) => {
     return { success: true };
   });
 
+  // Rename playlist
+  fastify.patch('/playlists/:name/rename', { preHandler: authenticate }, async (request, reply) => {
+    const { name } = request.params as { name: string };
+    const body = z.object({ newName: z.string().min(1).max(32).regex(aliasRegex, aliasMessage) }).safeParse(request.body);
+    if (!body.success) {
+      return reply.status(400).send({ error: 'Invalid input', details: body.error.flatten() });
+    }
+
+    const { newName } = body.data;
+    const guid = await getUserGuid(request.user.userId);
+    if (!guid) {
+      return reply.status(400).send({ error: 'No GUID linked to account' });
+    }
+
+    // Check if new name already exists
+    const [existing] = await db
+      .select({ id: schema.soundPlaylists.id })
+      .from(schema.soundPlaylists)
+      .where(and(eq(schema.soundPlaylists.guid, guid), eq(schema.soundPlaylists.name, newName)))
+      .limit(1);
+
+    if (existing) {
+      return reply.status(409).send({ error: 'A playlist with this name already exists' });
+    }
+
+    // Rename the playlist
+    const result = await db
+      .update(schema.soundPlaylists)
+      .set({ name: newName })
+      .where(and(eq(schema.soundPlaylists.guid, guid), eq(schema.soundPlaylists.name, name)))
+      .returning();
+
+    if (result.length === 0) {
+      return reply.status(404).send({ error: 'Playlist not found' });
+    }
+
+    return { success: true, newName };
+  });
+
   // Add sound to playlist
   fastify.post('/playlists/:name/sounds', { preHandler: authenticate }, async (request, reply) => {
     const { name } = request.params as { name: string };
@@ -1745,7 +1809,7 @@ export const soundsRoutes: FastifyPluginAsync = async (fastify) => {
   });
 
   // ============================================================================
-  // MP3 Streaming
+  // Audio Streaming (MP3 and WAV)
   // ============================================================================
 
   // Stream user's sound by alias
@@ -1777,6 +1841,9 @@ export const soundsRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.status(404).send({ error: 'Sound file not found on disk' });
     }
 
+    // Determine content type based on extension
+    const contentType = filePath.toLowerCase().endsWith('.wav') ? 'audio/wav' : 'audio/mpeg';
+
     const stats = statSync(filePath);
     const range = request.headers.range;
 
@@ -1791,13 +1858,13 @@ export const soundsRoutes: FastifyPluginAsync = async (fastify) => {
       reply.header('Content-Range', `bytes ${start}-${end}/${stats.size}`);
       reply.header('Accept-Ranges', 'bytes');
       reply.header('Content-Length', chunkSize);
-      reply.header('Content-Type', 'audio/mpeg');
+      reply.header('Content-Type', contentType);
 
       return reply.send(createReadStream(filePath, { start, end }));
     }
 
     reply.header('Content-Length', stats.size);
-    reply.header('Content-Type', 'audio/mpeg');
+    reply.header('Content-Type', contentType);
     reply.header('Accept-Ranges', 'bytes');
 
     return reply.send(createReadStream(filePath));
@@ -1833,6 +1900,9 @@ export const soundsRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.status(404).send({ error: 'Sound file not found on disk' });
     }
 
+    // Determine content type based on extension
+    const contentType = filePath.toLowerCase().endsWith('.wav') ? 'audio/wav' : 'audio/mpeg';
+
     const stats = statSync(filePath);
     const range = request.headers.range;
 
@@ -1846,13 +1916,13 @@ export const soundsRoutes: FastifyPluginAsync = async (fastify) => {
       reply.header('Content-Range', `bytes ${start}-${end}/${stats.size}`);
       reply.header('Accept-Ranges', 'bytes');
       reply.header('Content-Length', chunkSize);
-      reply.header('Content-Type', 'audio/mpeg');
+      reply.header('Content-Type', contentType);
 
       return reply.send(createReadStream(filePath, { start, end }));
     }
 
     reply.header('Content-Length', stats.size);
-    reply.header('Content-Type', 'audio/mpeg');
+    reply.header('Content-Type', contentType);
     reply.header('Accept-Ranges', 'bytes');
 
     return reply.send(createReadStream(filePath));
@@ -2020,5 +2090,661 @@ export const soundsRoutes: FastifyPluginAsync = async (fastify) => {
       .where(eq(schema.soundFiles.id, fileId));
 
     return { success: true, isPublic };
+  });
+
+  // ============================================================================
+  // Sound Menus (Dynamic Per-Player Menus)
+  // ============================================================================
+
+  // Validation schemas for menus
+  const createMenuSchema = z.object({
+    menuName: z.string().min(1).max(32).regex(aliasRegex, aliasMessage),
+    menuPosition: z.number().int().min(1).max(9),
+    playlistId: z.number().int().optional().nullable(),
+  });
+
+  const updateMenuSchema = z.object({
+    menuName: z.string().min(1).max(32).regex(aliasRegex, aliasMessage).optional(),
+    menuPosition: z.number().int().min(1).max(9).optional(),
+    playlistId: z.number().int().optional().nullable(),
+  });
+
+  const addMenuItemSchema = z.object({
+    soundAlias: z.string().min(1).max(32),
+    itemPosition: z.number().int().min(1).max(9),
+    displayName: z.string().max(32).optional().nullable(),
+  });
+
+  const updateMenuItemSchema = z.object({
+    itemPosition: z.number().int().min(1).max(9).optional(),
+    displayName: z.string().max(32).optional().nullable(),
+  });
+
+  const reorderMenuItemsSchema = z.object({
+    itemIds: z.array(z.number().int()),
+  });
+
+  // GET /api/sounds/menus - List user's menus
+  fastify.get('/menus', { preHandler: authenticate }, async (request, reply) => {
+    const guid = await getUserGuid(request.user.userId);
+    if (!guid) {
+      return reply.status(400).send({ error: 'No GUID linked to account. Use /etman register in-game.' });
+    }
+
+    // Get all menus with their playlist info and item counts
+    const menusQuery = sql`
+      SELECT
+        m.id,
+        m.menu_name as "menuName",
+        m.menu_position as "menuPosition",
+        m.playlist_id as "playlistId",
+        m.created_at as "createdAt",
+        m.updated_at as "updatedAt",
+        sp.name as "playlistName",
+        CASE
+          WHEN m.playlist_id IS NOT NULL THEN
+            (SELECT COUNT(*) FROM sound_playlist_items spi WHERE spi.playlist_id = m.playlist_id)
+          ELSE
+            (SELECT COUNT(*) FROM user_sound_menu_items mi WHERE mi.menu_id = m.id)
+        END as "itemCount"
+      FROM user_sound_menus m
+      LEFT JOIN sound_playlists sp ON sp.id = m.playlist_id
+      WHERE m.user_guid = ${guid}
+      ORDER BY m.menu_position ASC
+    `;
+
+    const result = await db.execute(menusQuery);
+    const menus = result.rows.map(row => ({
+      id: row.id,
+      menuName: row.menuName,
+      menuPosition: row.menuPosition,
+      playlistId: row.playlistId,
+      playlistName: row.playlistName,
+      itemCount: Number(row.itemCount),
+      createdAt: row.createdAt,
+      updatedAt: row.updatedAt,
+    }));
+
+    return { menus };
+  });
+
+  // POST /api/sounds/menus - Create a menu
+  fastify.post('/menus', { preHandler: authenticate }, async (request, reply) => {
+    const body = createMenuSchema.safeParse(request.body);
+    if (!body.success) {
+      return reply.status(400).send({ error: 'Invalid input', details: body.error.flatten() });
+    }
+
+    const guid = await getUserGuid(request.user.userId);
+    if (!guid) {
+      return reply.status(400).send({ error: 'No GUID linked to account' });
+    }
+
+    const { menuName, menuPosition, playlistId } = body.data;
+
+    // Check if position is already taken
+    const [existing] = await db
+      .select({ id: schema.userSoundMenus.id })
+      .from(schema.userSoundMenus)
+      .where(and(
+        eq(schema.userSoundMenus.userGuid, guid),
+        eq(schema.userSoundMenus.menuPosition, menuPosition)
+      ))
+      .limit(1);
+
+    if (existing) {
+      return reply.status(409).send({ error: `Position ${menuPosition} is already in use` });
+    }
+
+    // If playlistId provided, verify it exists and belongs to user (or is public)
+    if (playlistId) {
+      const [playlist] = await db
+        .select({ id: schema.soundPlaylists.id })
+        .from(schema.soundPlaylists)
+        .where(and(
+          eq(schema.soundPlaylists.id, playlistId),
+          or(
+            eq(schema.soundPlaylists.guid, guid),
+            eq(schema.soundPlaylists.isPublic, true)
+          )
+        ))
+        .limit(1);
+
+      if (!playlist) {
+        return reply.status(404).send({ error: 'Playlist not found or not accessible' });
+      }
+    }
+
+    const [menu] = await db
+      .insert(schema.userSoundMenus)
+      .values({
+        userGuid: guid,
+        menuName,
+        menuPosition,
+        playlistId: playlistId || null,
+      })
+      .returning();
+
+    return { success: true, menu };
+  });
+
+  // GET /api/sounds/menus/:id - Get a specific menu with its items
+  fastify.get('/menus/:id', { preHandler: authenticate }, async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const menuId = parseInt(id, 10);
+
+    const guid = await getUserGuid(request.user.userId);
+    if (!guid) {
+      return reply.status(400).send({ error: 'No GUID linked to account' });
+    }
+
+    // Get the menu
+    const [menu] = await db
+      .select({
+        id: schema.userSoundMenus.id,
+        menuName: schema.userSoundMenus.menuName,
+        menuPosition: schema.userSoundMenus.menuPosition,
+        playlistId: schema.userSoundMenus.playlistId,
+        createdAt: schema.userSoundMenus.createdAt,
+        updatedAt: schema.userSoundMenus.updatedAt,
+      })
+      .from(schema.userSoundMenus)
+      .where(and(
+        eq(schema.userSoundMenus.id, menuId),
+        eq(schema.userSoundMenus.userGuid, guid)
+      ))
+      .limit(1);
+
+    if (!menu) {
+      return reply.status(404).send({ error: 'Menu not found' });
+    }
+
+    // If menu is backed by a playlist, get first 9 sounds from the playlist
+    if (menu.playlistId) {
+      const playlistItems = await db
+        .select({
+          id: schema.soundPlaylistItems.id,
+          orderNumber: schema.soundPlaylistItems.orderNumber,
+          alias: schema.userSounds.alias,
+          soundFileId: schema.soundFiles.id,
+          durationSeconds: schema.soundFiles.durationSeconds,
+        })
+        .from(schema.soundPlaylistItems)
+        .innerJoin(schema.userSounds, eq(schema.soundPlaylistItems.userSoundId, schema.userSounds.id))
+        .innerJoin(schema.soundFiles, eq(schema.userSounds.soundFileId, schema.soundFiles.id))
+        .where(eq(schema.soundPlaylistItems.playlistId, menu.playlistId))
+        .orderBy(asc(schema.soundPlaylistItems.orderNumber))
+        .limit(9);
+
+      // Map to item format (1-based positions)
+      const items = playlistItems.map((item, idx) => ({
+        id: item.id,
+        itemPosition: idx + 1,
+        displayName: item.alias,
+        soundAlias: item.alias,
+        soundFileId: item.soundFileId,
+        durationSeconds: item.durationSeconds,
+        isFromPlaylist: true,
+      }));
+
+      return { menu, items, isPlaylistBacked: true };
+    }
+
+    // Get manual menu items
+    const menuItems = await db
+      .select({
+        id: schema.userSoundMenuItems.id,
+        itemPosition: schema.userSoundMenuItems.itemPosition,
+        displayName: schema.userSoundMenuItems.displayName,
+        soundId: schema.userSoundMenuItems.soundId,
+        soundAlias: schema.userSounds.alias,
+        soundFileId: schema.soundFiles.id,
+        durationSeconds: schema.soundFiles.durationSeconds,
+      })
+      .from(schema.userSoundMenuItems)
+      .innerJoin(schema.userSounds, eq(schema.userSoundMenuItems.soundId, schema.userSounds.id))
+      .innerJoin(schema.soundFiles, eq(schema.userSounds.soundFileId, schema.soundFiles.id))
+      .where(eq(schema.userSoundMenuItems.menuId, menuId))
+      .orderBy(asc(schema.userSoundMenuItems.itemPosition));
+
+    const items = menuItems.map(item => ({
+      id: item.id,
+      itemPosition: item.itemPosition,
+      displayName: item.displayName || item.soundAlias,
+      soundAlias: item.soundAlias,
+      soundFileId: item.soundFileId,
+      durationSeconds: item.durationSeconds,
+      isFromPlaylist: false,
+    }));
+
+    return { menu, items, isPlaylistBacked: false };
+  });
+
+  // PUT /api/sounds/menus/:id - Update a menu
+  fastify.put('/menus/:id', { preHandler: authenticate }, async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const menuId = parseInt(id, 10);
+    const body = updateMenuSchema.safeParse(request.body);
+    if (!body.success) {
+      return reply.status(400).send({ error: 'Invalid input', details: body.error.flatten() });
+    }
+
+    const guid = await getUserGuid(request.user.userId);
+    if (!guid) {
+      return reply.status(400).send({ error: 'No GUID linked to account' });
+    }
+
+    // Verify menu exists and belongs to user
+    const [existing] = await db
+      .select({ id: schema.userSoundMenus.id })
+      .from(schema.userSoundMenus)
+      .where(and(
+        eq(schema.userSoundMenus.id, menuId),
+        eq(schema.userSoundMenus.userGuid, guid)
+      ))
+      .limit(1);
+
+    if (!existing) {
+      return reply.status(404).send({ error: 'Menu not found' });
+    }
+
+    const { menuName, menuPosition, playlistId } = body.data;
+
+    // If changing position, check it's not taken by another menu
+    if (menuPosition !== undefined) {
+      const [positionTaken] = await db
+        .select({ id: schema.userSoundMenus.id })
+        .from(schema.userSoundMenus)
+        .where(and(
+          eq(schema.userSoundMenus.userGuid, guid),
+          eq(schema.userSoundMenus.menuPosition, menuPosition),
+          sql`${schema.userSoundMenus.id} != ${menuId}`
+        ))
+        .limit(1);
+
+      if (positionTaken) {
+        return reply.status(409).send({ error: `Position ${menuPosition} is already in use by another menu` });
+      }
+    }
+
+    // If playlistId provided, verify it exists and belongs to user
+    if (playlistId !== undefined && playlistId !== null) {
+      const [playlist] = await db
+        .select({ id: schema.soundPlaylists.id })
+        .from(schema.soundPlaylists)
+        .where(and(
+          eq(schema.soundPlaylists.id, playlistId),
+          or(
+            eq(schema.soundPlaylists.guid, guid),
+            eq(schema.soundPlaylists.isPublic, true)
+          )
+        ))
+        .limit(1);
+
+      if (!playlist) {
+        return reply.status(404).send({ error: 'Playlist not found or not accessible' });
+      }
+    }
+
+    // Build update object
+    const updateData: Partial<{
+      menuName: string;
+      menuPosition: number;
+      playlistId: number | null;
+      updatedAt: Date;
+    }> = { updatedAt: new Date() };
+
+    if (menuName !== undefined) updateData.menuName = menuName;
+    if (menuPosition !== undefined) updateData.menuPosition = menuPosition;
+    if (playlistId !== undefined) updateData.playlistId = playlistId;
+
+    const [updated] = await db
+      .update(schema.userSoundMenus)
+      .set(updateData)
+      .where(eq(schema.userSoundMenus.id, menuId))
+      .returning();
+
+    return { success: true, menu: updated };
+  });
+
+  // DELETE /api/sounds/menus/:id - Delete a menu
+  fastify.delete('/menus/:id', { preHandler: authenticate }, async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const menuId = parseInt(id, 10);
+
+    const guid = await getUserGuid(request.user.userId);
+    if (!guid) {
+      return reply.status(400).send({ error: 'No GUID linked to account' });
+    }
+
+    const result = await db
+      .delete(schema.userSoundMenus)
+      .where(and(
+        eq(schema.userSoundMenus.id, menuId),
+        eq(schema.userSoundMenus.userGuid, guid)
+      ))
+      .returning();
+
+    if (result.length === 0) {
+      return reply.status(404).send({ error: 'Menu not found' });
+    }
+
+    return { success: true };
+  });
+
+  // POST /api/sounds/menus/:id/items - Add item to menu
+  fastify.post('/menus/:id/items', { preHandler: authenticate }, async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const menuId = parseInt(id, 10);
+    const body = addMenuItemSchema.safeParse(request.body);
+    if (!body.success) {
+      return reply.status(400).send({ error: 'Invalid input', details: body.error.flatten() });
+    }
+
+    const guid = await getUserGuid(request.user.userId);
+    if (!guid) {
+      return reply.status(400).send({ error: 'No GUID linked to account' });
+    }
+
+    // Verify menu exists, belongs to user, and is NOT playlist-backed
+    const [menu] = await db
+      .select({
+        id: schema.userSoundMenus.id,
+        playlistId: schema.userSoundMenus.playlistId,
+      })
+      .from(schema.userSoundMenus)
+      .where(and(
+        eq(schema.userSoundMenus.id, menuId),
+        eq(schema.userSoundMenus.userGuid, guid)
+      ))
+      .limit(1);
+
+    if (!menu) {
+      return reply.status(404).send({ error: 'Menu not found' });
+    }
+
+    if (menu.playlistId) {
+      return reply.status(400).send({ error: 'Cannot add items to a playlist-backed menu. Edit the playlist instead.' });
+    }
+
+    const { soundAlias, itemPosition, displayName } = body.data;
+
+    // Check position isn't already taken
+    const [positionTaken] = await db
+      .select({ id: schema.userSoundMenuItems.id })
+      .from(schema.userSoundMenuItems)
+      .where(and(
+        eq(schema.userSoundMenuItems.menuId, menuId),
+        eq(schema.userSoundMenuItems.itemPosition, itemPosition)
+      ))
+      .limit(1);
+
+    if (positionTaken) {
+      return reply.status(409).send({ error: `Position ${itemPosition} is already in use` });
+    }
+
+    // Get user sound by alias
+    const [userSound] = await db
+      .select({ id: schema.userSounds.id })
+      .from(schema.userSounds)
+      .where(and(
+        eq(schema.userSounds.guid, guid),
+        eq(schema.userSounds.alias, soundAlias)
+      ))
+      .limit(1);
+
+    if (!userSound) {
+      return reply.status(404).send({ error: 'Sound not found in your library' });
+    }
+
+    const [item] = await db
+      .insert(schema.userSoundMenuItems)
+      .values({
+        menuId,
+        soundId: userSound.id,
+        itemPosition,
+        displayName: displayName || null,
+      })
+      .returning();
+
+    return { success: true, item };
+  });
+
+  // PUT /api/sounds/menus/:id/items/:itemId - Update a menu item
+  fastify.put('/menus/:id/items/:itemId', { preHandler: authenticate }, async (request, reply) => {
+    const { id, itemId } = request.params as { id: string; itemId: string };
+    const menuId = parseInt(id, 10);
+    const menuItemId = parseInt(itemId, 10);
+    const body = updateMenuItemSchema.safeParse(request.body);
+    if (!body.success) {
+      return reply.status(400).send({ error: 'Invalid input', details: body.error.flatten() });
+    }
+
+    const guid = await getUserGuid(request.user.userId);
+    if (!guid) {
+      return reply.status(400).send({ error: 'No GUID linked to account' });
+    }
+
+    // Verify menu exists and belongs to user
+    const [menu] = await db
+      .select({ id: schema.userSoundMenus.id, playlistId: schema.userSoundMenus.playlistId })
+      .from(schema.userSoundMenus)
+      .where(and(
+        eq(schema.userSoundMenus.id, menuId),
+        eq(schema.userSoundMenus.userGuid, guid)
+      ))
+      .limit(1);
+
+    if (!menu) {
+      return reply.status(404).send({ error: 'Menu not found' });
+    }
+
+    if (menu.playlistId) {
+      return reply.status(400).send({ error: 'Cannot modify items in a playlist-backed menu' });
+    }
+
+    const { itemPosition, displayName } = body.data;
+
+    // If changing position, check it's not taken
+    if (itemPosition !== undefined) {
+      const [positionTaken] = await db
+        .select({ id: schema.userSoundMenuItems.id })
+        .from(schema.userSoundMenuItems)
+        .where(and(
+          eq(schema.userSoundMenuItems.menuId, menuId),
+          eq(schema.userSoundMenuItems.itemPosition, itemPosition),
+          sql`${schema.userSoundMenuItems.id} != ${menuItemId}`
+        ))
+        .limit(1);
+
+      if (positionTaken) {
+        return reply.status(409).send({ error: `Position ${itemPosition} is already in use` });
+      }
+    }
+
+    // Build update
+    const updateData: Partial<{ itemPosition: number; displayName: string | null }> = {};
+    if (itemPosition !== undefined) updateData.itemPosition = itemPosition;
+    if (displayName !== undefined) updateData.displayName = displayName;
+
+    const [updated] = await db
+      .update(schema.userSoundMenuItems)
+      .set(updateData)
+      .where(and(
+        eq(schema.userSoundMenuItems.id, menuItemId),
+        eq(schema.userSoundMenuItems.menuId, menuId)
+      ))
+      .returning();
+
+    if (!updated) {
+      return reply.status(404).send({ error: 'Menu item not found' });
+    }
+
+    return { success: true, item: updated };
+  });
+
+  // DELETE /api/sounds/menus/:id/items/:itemId - Remove item from menu
+  fastify.delete('/menus/:id/items/:itemId', { preHandler: authenticate }, async (request, reply) => {
+    const { id, itemId } = request.params as { id: string; itemId: string };
+    const menuId = parseInt(id, 10);
+    const menuItemId = parseInt(itemId, 10);
+
+    const guid = await getUserGuid(request.user.userId);
+    if (!guid) {
+      return reply.status(400).send({ error: 'No GUID linked to account' });
+    }
+
+    // Verify menu exists and belongs to user
+    const [menu] = await db
+      .select({ id: schema.userSoundMenus.id, playlistId: schema.userSoundMenus.playlistId })
+      .from(schema.userSoundMenus)
+      .where(and(
+        eq(schema.userSoundMenus.id, menuId),
+        eq(schema.userSoundMenus.userGuid, guid)
+      ))
+      .limit(1);
+
+    if (!menu) {
+      return reply.status(404).send({ error: 'Menu not found' });
+    }
+
+    if (menu.playlistId) {
+      return reply.status(400).send({ error: 'Cannot remove items from a playlist-backed menu' });
+    }
+
+    const result = await db
+      .delete(schema.userSoundMenuItems)
+      .where(and(
+        eq(schema.userSoundMenuItems.id, menuItemId),
+        eq(schema.userSoundMenuItems.menuId, menuId)
+      ))
+      .returning();
+
+    if (result.length === 0) {
+      return reply.status(404).send({ error: 'Menu item not found' });
+    }
+
+    return { success: true };
+  });
+
+  // PUT /api/sounds/menus/:id/reorder - Reorder menu items
+  fastify.put('/menus/:id/reorder', { preHandler: authenticate }, async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const menuId = parseInt(id, 10);
+    const body = reorderMenuItemsSchema.safeParse(request.body);
+    if (!body.success) {
+      return reply.status(400).send({ error: 'Invalid input', details: body.error.flatten() });
+    }
+
+    const guid = await getUserGuid(request.user.userId);
+    if (!guid) {
+      return reply.status(400).send({ error: 'No GUID linked to account' });
+    }
+
+    // Verify menu exists and belongs to user
+    const [menu] = await db
+      .select({ id: schema.userSoundMenus.id, playlistId: schema.userSoundMenus.playlistId })
+      .from(schema.userSoundMenus)
+      .where(and(
+        eq(schema.userSoundMenus.id, menuId),
+        eq(schema.userSoundMenus.userGuid, guid)
+      ))
+      .limit(1);
+
+    if (!menu) {
+      return reply.status(404).send({ error: 'Menu not found' });
+    }
+
+    if (menu.playlistId) {
+      return reply.status(400).send({ error: 'Cannot reorder items in a playlist-backed menu' });
+    }
+
+    // Update positions based on new order (itemIds in order)
+    const { itemIds } = body.data;
+    for (let i = 0; i < itemIds.length && i < 9; i++) {
+      await db
+        .update(schema.userSoundMenuItems)
+        .set({ itemPosition: i + 1 })
+        .where(and(
+          eq(schema.userSoundMenuItems.id, itemIds[i]),
+          eq(schema.userSoundMenuItems.menuId, menuId)
+        ));
+    }
+
+    return { success: true };
+  });
+
+  // GET /api/sounds/menus/for-game/:guid - Get menu data for in-game client (no auth required for game client)
+  // This endpoint is called by the ETMan server to fetch menu data for a player
+  fastify.get('/menus/for-game/:guid', async (request, reply) => {
+    const { guid } = request.params as { guid: string };
+
+    if (!guid || guid.length !== 32) {
+      return reply.status(400).send({ error: 'Invalid GUID' });
+    }
+
+    // Get all menus for this GUID
+    const menus = await db
+      .select({
+        id: schema.userSoundMenus.id,
+        menuName: schema.userSoundMenus.menuName,
+        menuPosition: schema.userSoundMenus.menuPosition,
+        playlistId: schema.userSoundMenus.playlistId,
+      })
+      .from(schema.userSoundMenus)
+      .where(eq(schema.userSoundMenus.userGuid, guid))
+      .orderBy(asc(schema.userSoundMenus.menuPosition));
+
+    // For each menu, get its items (either from playlist or manual items)
+    const menusWithItems = await Promise.all(menus.map(async (menu) => {
+      let items: { position: number; name: string; soundAlias: string }[] = [];
+
+      if (menu.playlistId) {
+        // Get first 9 from playlist
+        const playlistItems = await db
+          .select({
+            alias: schema.userSounds.alias,
+            orderNumber: schema.soundPlaylistItems.orderNumber,
+          })
+          .from(schema.soundPlaylistItems)
+          .innerJoin(schema.userSounds, eq(schema.soundPlaylistItems.userSoundId, schema.userSounds.id))
+          .where(eq(schema.soundPlaylistItems.playlistId, menu.playlistId))
+          .orderBy(asc(schema.soundPlaylistItems.orderNumber))
+          .limit(9);
+
+        items = playlistItems.map((item, idx) => ({
+          position: idx + 1,
+          name: item.alias,
+          soundAlias: item.alias,
+        }));
+      } else {
+        // Get manual items
+        const menuItems = await db
+          .select({
+            itemPosition: schema.userSoundMenuItems.itemPosition,
+            displayName: schema.userSoundMenuItems.displayName,
+            soundAlias: schema.userSounds.alias,
+          })
+          .from(schema.userSoundMenuItems)
+          .innerJoin(schema.userSounds, eq(schema.userSoundMenuItems.soundId, schema.userSounds.id))
+          .where(eq(schema.userSoundMenuItems.menuId, menu.id))
+          .orderBy(asc(schema.userSoundMenuItems.itemPosition));
+
+        items = menuItems.map(item => ({
+          position: item.itemPosition,
+          name: item.displayName || item.soundAlias,
+          soundAlias: item.soundAlias,
+        }));
+      }
+
+      return {
+        position: menu.menuPosition,
+        name: menu.menuName,
+        isPlaylist: !!menu.playlistId,
+        items,
+      };
+    }));
+
+    return { menus: menusWithItems };
   });
 };

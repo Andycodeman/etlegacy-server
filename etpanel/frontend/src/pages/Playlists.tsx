@@ -34,6 +34,9 @@ export default function Playlists() {
   const [dragOverItem, setDragOverItem] = useState<number | null>(null);
   const [search, setSearch] = useState('');
   const [debouncedSearch, setDebouncedSearch] = useState('');
+  const [editingPlaylistName, setEditingPlaylistName] = useState<string | null>(null);
+  const [newPlaylistNameInput, setNewPlaylistNameInput] = useState('');
+  const [renameError, setRenameError] = useState<string | null>(null);
 
   // Debounce search
   useEffect(() => {
@@ -158,6 +161,24 @@ export default function Playlists() {
     },
   });
 
+  const renameMutation = useMutation({
+    mutationFn: ({ oldName, newName }: { oldName: string; newName: string }) =>
+      sounds.renamePlaylist(oldName, newName),
+    onSuccess: (data, variables) => {
+      queryClient.invalidateQueries({ queryKey: ['playlists'] });
+      // Update selected playlist name if it was renamed
+      if (selectedPlaylist?.name === variables.oldName) {
+        setSelectedPlaylist({ ...selectedPlaylist, name: data.newName });
+      }
+      setEditingPlaylistName(null);
+      setNewPlaylistNameInput('');
+      setRenameError(null);
+    },
+    onError: (error) => {
+      setRenameError((error as Error).message);
+    },
+  });
+
   const handleDragStart = (index: number) => {
     setDraggedItem(index);
   };
@@ -221,6 +242,23 @@ export default function Playlists() {
     );
   }
 
+  // Start editing playlist name
+  const startEditPlaylistName = (playlist: Playlist) => {
+    setEditingPlaylistName(playlist.name);
+    setNewPlaylistNameInput(playlist.name);
+    setRenameError(null);
+  };
+
+  // Handle rename submit
+  const handleRenamePlaylist = (oldName: string) => {
+    if (!newPlaylistNameInput || newPlaylistNameInput === oldName) {
+      setEditingPlaylistName(null);
+      setRenameError(null);
+      return;
+    }
+    renameMutation.mutate({ oldName, newName: newPlaylistNameInput });
+  };
+
   // Helper to render a playlist item
   const renderPlaylistItem = (playlist: Playlist) => (
     <div
@@ -238,10 +276,40 @@ export default function Playlists() {
     >
       <div className="flex items-center justify-between">
         <div className="flex-1 min-w-0">
-          <div className="font-medium truncate flex items-center gap-2">
-            {playlist.isPublic && <span title="Public">🌐</span>}
-            {playlist.name}
-          </div>
+          {editingPlaylistName === playlist.name && playlist.isOwner !== false ? (
+            <div onClick={(e) => e.stopPropagation()}>
+              <input
+                type="text"
+                value={newPlaylistNameInput}
+                onChange={(e) => setNewPlaylistNameInput(e.target.value.replace(/[^a-zA-Z0-9_-]/g, ''))}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') handleRenamePlaylist(playlist.name);
+                  if (e.key === 'Escape') {
+                    setEditingPlaylistName(null);
+                    setRenameError(null);
+                  }
+                }}
+                onBlur={() => handleRenamePlaylist(playlist.name)}
+                autoFocus
+                className={`bg-gray-700 border rounded px-2 py-1 text-white w-full text-sm ${renameError ? 'border-red-500' : 'border-blue-500'}`}
+              />
+              {renameError && <div className="text-xs text-red-400 mt-1">{renameError}</div>}
+            </div>
+          ) : (
+            <div
+              className={`font-medium truncate flex items-center gap-2 ${playlist.isOwner !== false ? 'cursor-pointer hover:text-blue-400' : ''}`}
+              onClick={(e) => {
+                if (playlist.isOwner !== false) {
+                  e.stopPropagation();
+                  startEditPlaylistName(playlist);
+                }
+              }}
+              title={playlist.isOwner !== false ? 'Click to rename' : undefined}
+            >
+              {playlist.isPublic && <span title="Public">🌐</span>}
+              {playlist.name}
+            </div>
+          )}
           <div className="text-sm text-gray-400">
             {playlist.soundCount || 0} sound{(playlist.soundCount || 0) !== 1 ? 's' : ''}
             {playlist.isOwner === false && playlist.ownerName && (
@@ -504,7 +572,7 @@ export default function Playlists() {
                 <input
                   type="text"
                   value={newPlaylistName}
-                  onChange={(e) => setNewPlaylistName(e.target.value.replace(/[^a-zA-Z0-9_]/g, ''))}
+                  onChange={(e) => setNewPlaylistName(e.target.value.replace(/[^a-zA-Z0-9_-]/g, ''))}
                   placeholder="playlist_name"
                   className="w-full bg-gray-700 border border-gray-600 rounded px-4 py-2 text-white placeholder-gray-400 focus:outline-none focus:border-blue-500"
                 />

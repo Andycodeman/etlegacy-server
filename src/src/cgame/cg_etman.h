@@ -54,6 +54,11 @@
 #define VOICE_CMD_ACCOUNT_REGISTER        0x30
 #define VOICE_RESP_REGISTER_CODE          0x31
 
+/* Dynamic Sound Menus */
+#define VOICE_CMD_MENU_GET                0x32
+#define VOICE_CMD_MENU_PLAY               0x33
+#define VOICE_RESP_MENU_DATA              0x34
+
 /*
  * Sound Response Packet Types (server -> client)
  */
@@ -68,6 +73,30 @@
  */
 #define ETMAN_GUID_LEN          32
 #define ETMAN_MAX_NAME_LEN      32
+#define ETMAN_MAX_MENUS         9
+#define ETMAN_MAX_MENU_ITEMS    9
+
+/*
+ * Menu item structure
+ */
+typedef struct
+{
+	int  position;                          // 1-9 position in menu
+	char name[ETMAN_MAX_NAME_LEN + 1];      // Display name
+	char soundAlias[ETMAN_MAX_NAME_LEN + 1]; // Sound alias to play
+} etmanMenuItem_t;
+
+/*
+ * Menu structure
+ */
+typedef struct
+{
+	int             position;               // 1-9 position in root menu
+	char            name[ETMAN_MAX_NAME_LEN + 1];
+	qboolean        isPlaylist;             // Backed by playlist
+	int             itemCount;
+	etmanMenuItem_t items[ETMAN_MAX_MENU_ITEMS];
+} etmanMenu_t;
 
 /**
  * Initialize ETMan system.
@@ -104,6 +133,37 @@ void ETMan_Cmd_f(void);
  * Draw any active ETMan UI (share prompts, etc).
  */
 void ETMan_Draw(void);
+
+/**
+ * Toggle sound menu visibility.
+ * Called when player presses menu key.
+ */
+void ETMan_ToggleMenu(void);
+
+/**
+ * Check if menu is currently visible.
+ */
+qboolean ETMan_IsMenuActive(void);
+
+/**
+ * Handle key press while menu is active.
+ * @param key Key code (1-9 for selection, 0 or ESC to close)
+ * @return qtrue if key was handled
+ */
+qboolean ETMan_MenuKeyEvent(int key);
+
+/**
+ * Request menu data from server.
+ * Called on first menu open.
+ */
+void ETMan_RequestMenus(void);
+
+/**
+ * Console command handlers for sound menu.
+ */
+void CG_SoundMenu_f(void);      /* Toggle menu on/off */
+void CG_SoundMenuDown_f(void);  /* +soundmenu (open menu) */
+void CG_SoundMenuUp_f(void);    /* -soundmenu (currently does nothing) */
 
 #endif /* FEATURE_VOICE */
 

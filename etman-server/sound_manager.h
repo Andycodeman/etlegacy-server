@@ -59,6 +59,11 @@
 #define VOICE_CMD_ACCOUNT_REGISTER        0x30  /* Request registration code: <guid><playerName> */
 #define VOICE_RESP_REGISTER_CODE          0x31  /* Registration code response */
 
+/* Phase 8: Dynamic sound menus */
+#define VOICE_CMD_MENU_GET                0x32  /* Get user's sound menus: <guid> */
+#define VOICE_CMD_MENU_PLAY               0x33  /* Play from menu: <guid><menuPos><itemPos> */
+#define VOICE_RESP_MENU_DATA              0x34  /* Binary menu data response */
+
 /*
  * Sound Response Packet Types (server -> client)
  */

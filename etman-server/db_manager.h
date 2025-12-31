@@ -580,4 +580,51 @@ void DB_EscapeString(const char *str, char *outEscaped, int outLen);
  */
 bool DB_ExecuteRaw(const char *query);
 
+
+/*
+ * Dynamic sound menu structures and operations
+ */
+
+#define DB_MAX_MENU_ITEMS 9
+#define DB_MAX_MENUS 9
+
+typedef struct {
+    int         position;
+    char        name[33];
+    char        soundAlias[33];
+} DBMenuItem;
+
+typedef struct {
+    int         position;
+    char        name[33];
+    bool        isPlaylist;
+    int         itemCount;
+    DBMenuItem  items[DB_MAX_MENU_ITEMS];
+} DBMenu;
+
+typedef struct {
+    DBMenu      menus[DB_MAX_MENUS];
+    int         count;
+} DBMenuResult;
+
+/**
+ * Get user's sound menus with items populated.
+ * @param guid Player GUID
+ * @param outResult Output result (caller must provide pointer)
+ * @return true on success
+ */
+bool DB_GetUserMenus(const char *guid, DBMenuResult *outResult);
+
+/**
+ * Get the sound file path for a menu item.
+ * @param guid Player GUID
+ * @param menuPos Menu position (1-9)
+ * @param itemPos Item position (1-9)
+ * @param outFilePath Output buffer for file path
+ * @param outLen Output buffer length
+ * @return true if found
+ */
+bool DB_GetMenuItemSound(const char *guid, int menuPos, int itemPos,
+                         char *outFilePath, int outLen);
+
 #endif /* DB_MANAGER_H */
