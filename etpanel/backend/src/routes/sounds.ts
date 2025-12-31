@@ -1065,7 +1065,7 @@ export const soundsRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.get('/public/library', { preHandler: authenticate }, async (request, reply) => {
     const { page = '0', search } = request.query as { page?: string; search?: string };
     const pageNum = parseInt(page, 10) || 0;
-    const limit = 25;
+    const limit = 50;
     const offset = pageNum * limit;
 
     // Use raw SQL to get DISTINCT sounds that are either:

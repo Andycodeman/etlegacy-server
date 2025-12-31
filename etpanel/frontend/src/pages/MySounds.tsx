@@ -612,9 +612,10 @@ export default function MySounds() {
           <div className="bg-gray-800 rounded-lg flex-1 overflow-hidden flex flex-col">
             {/* Mobile: Card Layout */}
             <div className="md:hidden divide-y divide-gray-700 overflow-y-auto flex-1">
-              {userSounds.map((sound) => (
+              {userSounds.map((sound, index) => (
                 <div key={sound.id} className="p-4">
                   <div className="flex items-start justify-between gap-3">
+                    <span className="text-sm text-gray-500 w-8 flex-shrink-0">{page * pageSize + index + 1}.</span>
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2 mb-1">
                         <AudioPlayer alias={sound.alias} />
@@ -818,6 +819,7 @@ export default function MySounds() {
                 <table className="w-full">
                   <thead className="sticky top-0 bg-gray-800 z-10">
                     <tr className="text-left text-gray-400 border-b border-gray-700">
+                      <th className="px-4 py-2 w-12">#</th>
                       <th className="px-4 py-2 w-16">Play</th>
                       <SortableHeader label="Alias" field="alias" currentSort={sortField} currentDirection={sortDirection} onSort={handleSort} />
                       <SortableHeader label="Size" field="fileSize" currentSort={sortField} currentDirection={sortDirection} onSort={handleSort} />
@@ -831,8 +833,9 @@ export default function MySounds() {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-700">
-                  {userSounds.map((sound) => (
+                  {userSounds.map((sound, index) => (
                     <tr key={sound.id} className="hover:bg-gray-700/30">
+                      <td className="px-4 py-2 text-sm text-gray-500">{page * pageSize + index + 1}</td>
                       <td className="px-4 py-2">
                         <AudioPlayer alias={sound.alias} />
                       </td>

@@ -361,9 +361,10 @@ export default function PublicSounds() {
           <div className="flex-1 overflow-hidden flex flex-col">
             {/* Mobile: Card Layout */}
             <div className="md:hidden divide-y divide-gray-700 overflow-y-auto flex-1">
-              {sortedSounds.map((sound: PublicSound) => (
+              {sortedSounds.map((sound: PublicSound, index: number) => (
                 <div key={sound.soundFileId} className="p-3">
                   <div className="flex items-center gap-3">
+                    <span className="text-sm text-gray-500 w-8 flex-shrink-0">{page * 50 + index + 1}.</span>
                     <AudioPlayer soundFileId={sound.soundFileId} />
                     <div className="flex-1 min-w-0">
                       {isAdmin && editingSoundId === sound.soundFileId ? (
@@ -444,6 +445,7 @@ export default function PublicSounds() {
                 <table className="w-full">
                   <thead className="sticky top-0 bg-gray-800 z-10">
                     <tr className="text-left text-gray-400 border-b border-gray-700">
+                      <th className="px-4 py-3 w-12">#</th>
                       <th className="px-4 py-3 w-16">Play</th>
                       <SortableHeader label="Alias" field="originalName" currentSort={sortField} currentDirection={sortDirection} onSort={handleSort} />
                       <SortableHeader label="Size" field="fileSize" currentSort={sortField} currentDirection={sortDirection} onSort={handleSort} />
@@ -454,8 +456,9 @@ export default function PublicSounds() {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-700">
-                  {sortedSounds.map((sound: PublicSound) => (
+                  {sortedSounds.map((sound: PublicSound, index: number) => (
                     <tr key={sound.soundFileId} className="hover:bg-gray-700/30">
+                      <td className="px-4 py-2 text-sm text-gray-500">{page * 50 + index + 1}</td>
                       <td className="px-4 py-2">
                         <AudioPlayer soundFileId={sound.soundFileId} />
                       </td>
