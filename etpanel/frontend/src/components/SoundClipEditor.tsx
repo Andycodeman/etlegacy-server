@@ -13,6 +13,8 @@ interface SoundClipEditorProps {
   saveError?: string;
   isReclip?: boolean; // True when creating a new clip from an existing sound
   existingAliases?: string[]; // List of user's existing aliases for auto-increment
+  initialAlias?: string; // Pre-set alias (e.g., from unfinished sounds)
+  streamUrl?: string; // Custom stream URL (e.g., for unfinished sounds)
 }
 
 // Format time with hundredths precision
@@ -68,6 +70,8 @@ export default function SoundClipEditor({
   saveError,
   isReclip = false,
   existingAliases = [],
+  initialAlias,
+  streamUrl,
 }: SoundClipEditorProps) {
   const audioRef = useRef<HTMLAudioElement>(null);
   const timelineRef = useRef<HTMLDivElement>(null);
@@ -100,6 +104,11 @@ export default function SoundClipEditor({
 
   // Generate initial alias: add _clip suffix only for re-clips, auto-increment if exists
   const generateUniqueAlias = () => {
+    // If initialAlias is provided, use it directly
+    if (initialAlias) {
+      return initialAlias;
+    }
+
     let candidate = isReclip
       ? baseAlias.substring(0, 27) + '_clip'
       : baseAlias.substring(0, 32);
@@ -171,9 +180,10 @@ export default function SoundClipEditor({
     const loadAudio = async () => {
       try {
         const token = localStorage.getItem('accessToken');
-        const streamUrl = sounds.getTempStreamUrl(tempId);
+        // Use custom streamUrl if provided, otherwise use default temp stream URL
+        const audioStreamUrl = streamUrl || sounds.getTempStreamUrl(tempId);
 
-        const response = await fetch(streamUrl, {
+        const response = await fetch(audioStreamUrl, {
           headers: {
             Authorization: `Bearer ${token}`,
           },
@@ -196,7 +206,7 @@ export default function SoundClipEditor({
     };
 
     loadAudio();
-  }, [tempId]);
+  }, [tempId, streamUrl]);
 
   // Audio event handlers - use high-precision timer for selection end detection
   useEffect(() => {

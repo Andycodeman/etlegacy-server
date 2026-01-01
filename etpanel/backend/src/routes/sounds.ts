@@ -23,9 +23,13 @@ const SUPPORTED_EXTENSIONS = ['.mp3', '.wav'];
 const SUPPORTED_CONTENT_TYPES = ['audio/mpeg', 'audio/mp3', 'audio/wav', 'audio/wave', 'audio/x-wav'];
 
 // Validation schemas
-// Aliases allow: letters, numbers, underscores, and dashes
+// Aliases allow: letters, numbers, underscores, and dashes (no spaces - used in commands)
 const aliasRegex = /^[a-zA-Z0-9_-]+$/;
 const aliasMessage = 'Only letters, numbers, underscores, and dashes allowed';
+
+// Playlist names allow: letters, numbers, underscores, dashes, and spaces (display only)
+const playlistNameRegex = /^[a-zA-Z0-9_\- ]+$/;
+const playlistNameMessage = 'Only letters, numbers, underscores, dashes, and spaces allowed';
 
 const addSoundSchema = z.object({
   alias: z.string().min(1).max(32).regex(aliasRegex, aliasMessage),
@@ -41,7 +45,7 @@ const visibilitySchema = z.object({
 });
 
 const createPlaylistSchema = z.object({
-  name: z.string().min(1).max(32).regex(aliasRegex, aliasMessage),
+  name: z.string().min(1).max(32).regex(playlistNameRegex, playlistNameMessage),
   description: z.string().max(256).optional(),
 });
 
@@ -86,7 +90,7 @@ const saveClipSchema = z.object({
 // Max file size for temp uploads: 20MB (larger files allowed, will be clipped down)
 const MAX_TEMP_FILE_SIZE = 20 * 1024 * 1024;
 // Max file size for final clips: 2MB
-const MAX_FILE_SIZE = 2 * 1024 * 1024;
+const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB for final saved sounds
 
 // Helper to get MP3 duration - uses FFmpeg if available, falls back to estimate
 async function getMP3Duration(filePath: string): Promise<number | null> {
@@ -1236,7 +1240,13 @@ export const soundsRoutes: FastifyPluginAsync = async (fastify) => {
         sp.current_position as "currentPosition",
         sp.created_at as "createdAt",
         sp.guid as "ownerGuid",
-        (SELECT COUNT(*) FROM sound_playlist_items WHERE playlist_id = sp.id) as "soundCount",
+        (
+          SELECT COUNT(*)
+          FROM sound_playlist_items spi
+          INNER JOIN user_sounds us ON spi.user_sound_id = us.id
+          INNER JOIN sound_files sf ON us.sound_file_id = sf.id
+          WHERE spi.playlist_id = sp.id
+        ) as "soundCount",
         CASE WHEN sp.guid = ${guid} THEN true ELSE false END as "isOwner",
         COALESCE(ps.display_name, ps.name, u.display_name, 'Unknown') as "ownerName"
       FROM sound_playlists sp
@@ -1394,7 +1404,7 @@ export const soundsRoutes: FastifyPluginAsync = async (fastify) => {
   // Rename playlist
   fastify.patch('/playlists/:name/rename', { preHandler: authenticate }, async (request, reply) => {
     const { name } = request.params as { name: string };
-    const body = z.object({ newName: z.string().min(1).max(32).regex(aliasRegex, aliasMessage) }).safeParse(request.body);
+    const body = z.object({ newName: z.string().min(1).max(32).regex(playlistNameRegex, playlistNameMessage) }).safeParse(request.body);
     if (!body.success) {
       return reply.status(400).send({ error: 'Invalid input', details: body.error.flatten() });
     }
@@ -2096,27 +2106,39 @@ export const soundsRoutes: FastifyPluginAsync = async (fastify) => {
   // Sound Menus (Dynamic Per-Player Menus)
   // ============================================================================
 
-  // Validation schemas for menus
+  // Validation schemas for menus (menu names allow spaces like playlist names)
+  // Note: parentId enables hierarchical nesting (null = root level)
+  // Position 0 = unassigned (menu saved but not in a slot)
   const createMenuSchema = z.object({
-    menuName: z.string().min(1).max(32).regex(aliasRegex, aliasMessage),
-    menuPosition: z.number().int().min(1).max(9),
+    menuName: z.string().min(1).max(32).regex(playlistNameRegex, playlistNameMessage),
+    menuPosition: z.number().int().min(0).max(9), // 0 = unassigned, 1-9 = slot
+    parentId: z.number().int().optional().nullable(), // Parent menu ID for nesting
     playlistId: z.number().int().optional().nullable(),
   });
 
   const updateMenuSchema = z.object({
-    menuName: z.string().min(1).max(32).regex(aliasRegex, aliasMessage).optional(),
-    menuPosition: z.number().int().min(1).max(9).optional(),
+    menuName: z.string().min(1).max(32).regex(playlistNameRegex, playlistNameMessage).optional(),
+    menuPosition: z.number().int().min(0).max(9).optional(), // 0 = unassigned, 1-9 = slot
+    parentId: z.number().int().optional().nullable(),
     playlistId: z.number().int().optional().nullable(),
   });
 
+  // Item types: 'sound' = playable sound, 'menu' = nested menu, 'playlist' = embedded playlist
   const addMenuItemSchema = z.object({
-    soundAlias: z.string().min(1).max(32),
     itemPosition: z.number().int().min(1).max(9),
+    itemType: z.enum(['sound', 'menu', 'playlist']).default('sound'),
+    soundAlias: z.string().min(1).max(32).optional(), // Required if itemType='sound'
+    nestedMenuId: z.number().int().optional().nullable(), // Required if itemType='menu'
+    playlistId: z.number().int().optional().nullable(), // Required if itemType='playlist'
     displayName: z.string().max(32).optional().nullable(),
   });
 
   const updateMenuItemSchema = z.object({
     itemPosition: z.number().int().min(1).max(9).optional(),
+    itemType: z.enum(['sound', 'menu', 'playlist']).optional(),
+    soundAlias: z.string().min(1).max(32).optional(),
+    nestedMenuId: z.number().int().optional().nullable(),
+    playlistId: z.number().int().optional().nullable(),
     displayName: z.string().max(32).optional().nullable(),
   });
 
@@ -2124,40 +2146,93 @@ export const soundsRoutes: FastifyPluginAsync = async (fastify) => {
     itemIds: z.array(z.number().int()),
   });
 
-  // GET /api/sounds/menus - List user's menus
+  // GET /api/sounds/menus - List user's menus (supports ?parentId= for hierarchical browsing)
   fastify.get('/menus', { preHandler: authenticate }, async (request, reply) => {
     const guid = await getUserGuid(request.user.userId);
     if (!guid) {
       return reply.status(400).send({ error: 'No GUID linked to account. Use /etman register in-game.' });
     }
 
+    // Optional parentId filter for hierarchical navigation
+    const query = request.query as { parentId?: string };
+    const parentIdFilter = query.parentId !== undefined
+      ? (query.parentId === 'null' || query.parentId === '' ? null : parseInt(query.parentId, 10))
+      : undefined;
+
     // Get all menus with their playlist info and item counts
-    const menusQuery = sql`
-      SELECT
-        m.id,
-        m.menu_name as "menuName",
-        m.menu_position as "menuPosition",
-        m.playlist_id as "playlistId",
-        m.created_at as "createdAt",
-        m.updated_at as "updatedAt",
-        sp.name as "playlistName",
-        CASE
-          WHEN m.playlist_id IS NOT NULL THEN
-            (SELECT COUNT(*) FROM sound_playlist_items spi WHERE spi.playlist_id = m.playlist_id)
-          ELSE
-            (SELECT COUNT(*) FROM user_sound_menu_items mi WHERE mi.menu_id = m.id)
-        END as "itemCount"
-      FROM user_sound_menus m
-      LEFT JOIN sound_playlists sp ON sp.id = m.playlist_id
-      WHERE m.user_guid = ${guid}
-      ORDER BY m.menu_position ASC
-    `;
+    // If parentId is specified, filter by it; otherwise return all menus
+    const menusQuery = parentIdFilter === undefined
+      ? sql`
+        SELECT
+          m.id,
+          m.menu_name as "menuName",
+          m.menu_position as "menuPosition",
+          m.parent_id as "parentId",
+          m.playlist_id as "playlistId",
+          m.created_at as "createdAt",
+          m.updated_at as "updatedAt",
+          sp.name as "playlistName",
+          CASE
+            WHEN m.playlist_id IS NOT NULL THEN
+              (SELECT COUNT(*) FROM sound_playlist_items spi WHERE spi.playlist_id = m.playlist_id)
+            ELSE
+              (SELECT COUNT(*) FROM user_sound_menu_items mi WHERE mi.menu_id = m.id)
+          END as "itemCount"
+        FROM user_sound_menus m
+        LEFT JOIN sound_playlists sp ON sp.id = m.playlist_id
+        WHERE m.user_guid = ${guid}
+        ORDER BY m.parent_id NULLS FIRST, m.menu_position ASC
+      `
+      : parentIdFilter === null
+        ? sql`
+          SELECT
+            m.id,
+            m.menu_name as "menuName",
+            m.menu_position as "menuPosition",
+            m.parent_id as "parentId",
+            m.playlist_id as "playlistId",
+            m.created_at as "createdAt",
+            m.updated_at as "updatedAt",
+            sp.name as "playlistName",
+            CASE
+              WHEN m.playlist_id IS NOT NULL THEN
+                (SELECT COUNT(*) FROM sound_playlist_items spi WHERE spi.playlist_id = m.playlist_id)
+              ELSE
+                (SELECT COUNT(*) FROM user_sound_menu_items mi WHERE mi.menu_id = m.id)
+            END as "itemCount"
+          FROM user_sound_menus m
+          LEFT JOIN sound_playlists sp ON sp.id = m.playlist_id
+          WHERE m.user_guid = ${guid} AND m.parent_id IS NULL
+          ORDER BY m.menu_position ASC
+        `
+        : sql`
+          SELECT
+            m.id,
+            m.menu_name as "menuName",
+            m.menu_position as "menuPosition",
+            m.parent_id as "parentId",
+            m.playlist_id as "playlistId",
+            m.created_at as "createdAt",
+            m.updated_at as "updatedAt",
+            sp.name as "playlistName",
+            CASE
+              WHEN m.playlist_id IS NOT NULL THEN
+                (SELECT COUNT(*) FROM sound_playlist_items spi WHERE spi.playlist_id = m.playlist_id)
+              ELSE
+                (SELECT COUNT(*) FROM user_sound_menu_items mi WHERE mi.menu_id = m.id)
+            END as "itemCount"
+          FROM user_sound_menus m
+          LEFT JOIN sound_playlists sp ON sp.id = m.playlist_id
+          WHERE m.user_guid = ${guid} AND m.parent_id = ${parentIdFilter}
+          ORDER BY m.menu_position ASC
+        `;
 
     const result = await db.execute(menusQuery);
     const menus = result.rows.map(row => ({
       id: row.id,
       menuName: row.menuName,
       menuPosition: row.menuPosition,
+      parentId: row.parentId,
       playlistId: row.playlistId,
       playlistName: row.playlistName,
       itemCount: Number(row.itemCount),
@@ -2168,7 +2243,7 @@ export const soundsRoutes: FastifyPluginAsync = async (fastify) => {
     return { menus };
   });
 
-  // POST /api/sounds/menus - Create a menu
+  // POST /api/sounds/menus - Create a menu (supports nesting via parentId)
   fastify.post('/menus', { preHandler: authenticate }, async (request, reply) => {
     const body = createMenuSchema.safeParse(request.body);
     if (!body.success) {
@@ -2180,16 +2255,41 @@ export const soundsRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.status(400).send({ error: 'No GUID linked to account' });
     }
 
-    const { menuName, menuPosition, playlistId } = body.data;
+    const { menuName, menuPosition, parentId, playlistId } = body.data;
 
-    // Check if position is already taken
+    // If parentId provided, verify it exists and belongs to user
+    if (parentId) {
+      const [parentMenu] = await db
+        .select({ id: schema.userSoundMenus.id })
+        .from(schema.userSoundMenus)
+        .where(and(
+          eq(schema.userSoundMenus.id, parentId),
+          eq(schema.userSoundMenus.userGuid, guid)
+        ))
+        .limit(1);
+
+      if (!parentMenu) {
+        return reply.status(404).send({ error: 'Parent menu not found' });
+      }
+    }
+
+    // Check if position is already taken within the same parent
+    const positionCheck = parentId
+      ? and(
+          eq(schema.userSoundMenus.userGuid, guid),
+          eq(schema.userSoundMenus.menuPosition, menuPosition),
+          eq(schema.userSoundMenus.parentId, parentId)
+        )
+      : and(
+          eq(schema.userSoundMenus.userGuid, guid),
+          eq(schema.userSoundMenus.menuPosition, menuPosition),
+          sql`${schema.userSoundMenus.parentId} IS NULL`
+        );
+
     const [existing] = await db
       .select({ id: schema.userSoundMenus.id })
       .from(schema.userSoundMenus)
-      .where(and(
-        eq(schema.userSoundMenus.userGuid, guid),
-        eq(schema.userSoundMenus.menuPosition, menuPosition)
-      ))
+      .where(positionCheck)
       .limit(1);
 
     if (existing) {
@@ -2221,6 +2321,7 @@ export const soundsRoutes: FastifyPluginAsync = async (fastify) => {
         userGuid: guid,
         menuName,
         menuPosition,
+        parentId: parentId || null,
         playlistId: playlistId || null,
       })
       .returning();
@@ -2228,7 +2329,7 @@ export const soundsRoutes: FastifyPluginAsync = async (fastify) => {
     return { success: true, menu };
   });
 
-  // GET /api/sounds/menus/:id - Get a specific menu with its items
+  // GET /api/sounds/menus/:id - Get a specific menu with its items (supports hierarchical items)
   fastify.get('/menus/:id', { preHandler: authenticate }, async (request, reply) => {
     const { id } = request.params as { id: string };
     const menuId = parseInt(id, 10);
@@ -2238,12 +2339,13 @@ export const soundsRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.status(400).send({ error: 'No GUID linked to account' });
     }
 
-    // Get the menu
+    // Get the menu including parentId
     const [menu] = await db
       .select({
         id: schema.userSoundMenus.id,
         menuName: schema.userSoundMenus.menuName,
         menuPosition: schema.userSoundMenus.menuPosition,
+        parentId: schema.userSoundMenus.parentId,
         playlistId: schema.userSoundMenus.playlistId,
         createdAt: schema.userSoundMenus.createdAt,
         updatedAt: schema.userSoundMenus.updatedAt,
@@ -2259,12 +2361,13 @@ export const soundsRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.status(404).send({ error: 'Menu not found' });
     }
 
-    // If menu is backed by a playlist, get first 9 sounds from the playlist
+    // If menu is backed by a playlist, get sounds from the playlist (all are type='sound')
     if (menu.playlistId) {
       const playlistItems = await db
         .select({
           id: schema.soundPlaylistItems.id,
           orderNumber: schema.soundPlaylistItems.orderNumber,
+          userSoundId: schema.userSounds.id,
           alias: schema.userSounds.alias,
           soundFileId: schema.soundFiles.id,
           durationSeconds: schema.soundFiles.durationSeconds,
@@ -2273,51 +2376,69 @@ export const soundsRoutes: FastifyPluginAsync = async (fastify) => {
         .innerJoin(schema.userSounds, eq(schema.soundPlaylistItems.userSoundId, schema.userSounds.id))
         .innerJoin(schema.soundFiles, eq(schema.userSounds.soundFileId, schema.soundFiles.id))
         .where(eq(schema.soundPlaylistItems.playlistId, menu.playlistId))
-        .orderBy(asc(schema.soundPlaylistItems.orderNumber))
-        .limit(9);
+        .orderBy(asc(schema.soundPlaylistItems.orderNumber));
 
       // Map to item format (1-based positions)
       const items = playlistItems.map((item, idx) => ({
         id: item.id,
         itemPosition: idx + 1,
+        itemType: 'sound' as const,
         displayName: item.alias,
         soundAlias: item.alias,
+        soundId: item.userSoundId,
         soundFileId: item.soundFileId,
         durationSeconds: item.durationSeconds,
+        nestedMenuId: null,
         isFromPlaylist: true,
       }));
 
-      return { menu, items, isPlaylistBacked: true };
+      return { menu, items, isPlaylistBacked: true, totalItems: items.length };
     }
 
-    // Get manual menu items
-    const menuItems = await db
-      .select({
-        id: schema.userSoundMenuItems.id,
-        itemPosition: schema.userSoundMenuItems.itemPosition,
-        displayName: schema.userSoundMenuItems.displayName,
-        soundId: schema.userSoundMenuItems.soundId,
-        soundAlias: schema.userSounds.alias,
-        soundFileId: schema.soundFiles.id,
-        durationSeconds: schema.soundFiles.durationSeconds,
-      })
-      .from(schema.userSoundMenuItems)
-      .innerJoin(schema.userSounds, eq(schema.userSoundMenuItems.soundId, schema.userSounds.id))
-      .innerJoin(schema.soundFiles, eq(schema.userSounds.soundFileId, schema.soundFiles.id))
-      .where(eq(schema.userSoundMenuItems.menuId, menuId))
-      .orderBy(asc(schema.userSoundMenuItems.itemPosition));
+    // Get menu items with type info (using raw SQL for flexibility)
+    const itemsQuery = sql`
+      SELECT
+        mi.id,
+        mi.item_position as "itemPosition",
+        mi.item_type as "itemType",
+        mi.display_name as "displayName",
+        mi.sound_id as "soundId",
+        mi.nested_menu_id as "nestedMenuId",
+        mi.playlist_id as "playlistId",
+        us.alias as "soundAlias",
+        sf.id as "soundFileId",
+        sf.duration_seconds as "durationSeconds",
+        nm.menu_name as "nestedMenuName",
+        pl.name as "playlistName",
+        (SELECT COUNT(*) FROM sound_playlist_items WHERE playlist_id = mi.playlist_id) as "playlistSoundCount"
+      FROM user_sound_menu_items mi
+      LEFT JOIN user_sounds us ON us.id = mi.sound_id
+      LEFT JOIN sound_files sf ON sf.id = us.sound_file_id
+      LEFT JOIN user_sound_menus nm ON nm.id = mi.nested_menu_id
+      LEFT JOIN sound_playlists pl ON pl.id = mi.playlist_id
+      WHERE mi.menu_id = ${menuId}
+      ORDER BY mi.item_position ASC
+    `;
 
-    const items = menuItems.map(item => ({
-      id: item.id,
-      itemPosition: item.itemPosition,
-      displayName: item.displayName || item.soundAlias,
-      soundAlias: item.soundAlias,
-      soundFileId: item.soundFileId,
-      durationSeconds: item.durationSeconds,
+    const result = await db.execute(itemsQuery);
+    const items = result.rows.map(row => ({
+      id: row.id,
+      itemPosition: row.itemPosition,
+      itemType: row.itemType || 'sound',
+      displayName: row.displayName || row.soundAlias || row.nestedMenuName || row.playlistName || 'Unknown',
+      soundAlias: row.soundAlias,
+      soundId: row.soundId,
+      soundFileId: row.soundFileId,
+      durationSeconds: row.durationSeconds,
+      nestedMenuId: row.nestedMenuId,
+      nestedMenuName: row.nestedMenuName,
+      playlistId: row.playlistId,
+      playlistName: row.playlistName,
+      playlistSoundCount: row.playlistSoundCount ? Number(row.playlistSoundCount) : 0,
       isFromPlaylist: false,
     }));
 
-    return { menu, items, isPlaylistBacked: false };
+    return { menu, items, isPlaylistBacked: false, totalItems: items.length };
   });
 
   // PUT /api/sounds/menus/:id - Update a menu
@@ -2432,7 +2553,7 @@ export const soundsRoutes: FastifyPluginAsync = async (fastify) => {
     return { success: true };
   });
 
-  // POST /api/sounds/menus/:id/items - Add item to menu
+  // POST /api/sounds/menus/:id/items - Add item to menu (supports sounds and nested menus)
   fastify.post('/menus/:id/items', { preHandler: authenticate }, async (request, reply) => {
     const { id } = request.params as { id: string };
     const menuId = parseInt(id, 10);
@@ -2463,11 +2584,18 @@ export const soundsRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.status(404).send({ error: 'Menu not found' });
     }
 
-    if (menu.playlistId) {
-      return reply.status(400).send({ error: 'Cannot add items to a playlist-backed menu. Edit the playlist instead.' });
-    }
+    const { itemPosition, itemType, soundAlias, nestedMenuId, playlistId, displayName } = body.data;
 
-    const { soundAlias, itemPosition, displayName } = body.data;
+    // Validate based on itemType
+    if (itemType === 'sound' && !soundAlias) {
+      return reply.status(400).send({ error: 'soundAlias is required for sound items' });
+    }
+    if (itemType === 'menu' && !nestedMenuId) {
+      return reply.status(400).send({ error: 'nestedMenuId is required for menu items' });
+    }
+    if (itemType === 'playlist' && !playlistId) {
+      return reply.status(400).send({ error: 'playlistId is required for playlist items' });
+    }
 
     // Check position isn't already taken
     const [positionTaken] = await db
@@ -2483,26 +2611,73 @@ export const soundsRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.status(409).send({ error: `Position ${itemPosition} is already in use` });
     }
 
-    // Get user sound by alias
-    const [userSound] = await db
-      .select({ id: schema.userSounds.id })
-      .from(schema.userSounds)
-      .where(and(
-        eq(schema.userSounds.guid, guid),
-        eq(schema.userSounds.alias, soundAlias)
-      ))
-      .limit(1);
+    let soundId: number | null = null;
+    let validNestedMenuId: number | null = null;
+    let validPlaylistId: number | null = null;
 
-    if (!userSound) {
-      return reply.status(404).send({ error: 'Sound not found in your library' });
+    if (itemType === 'sound' && soundAlias) {
+      // Get user sound by alias
+      const [userSound] = await db
+        .select({ id: schema.userSounds.id })
+        .from(schema.userSounds)
+        .where(and(
+          eq(schema.userSounds.guid, guid),
+          eq(schema.userSounds.alias, soundAlias)
+        ))
+        .limit(1);
+
+      if (!userSound) {
+        return reply.status(404).send({ error: 'Sound not found in your library' });
+      }
+      soundId = userSound.id;
+    } else if (itemType === 'menu' && nestedMenuId) {
+      // Verify nested menu exists and belongs to user
+      const [nestedMenu] = await db
+        .select({ id: schema.userSoundMenus.id })
+        .from(schema.userSoundMenus)
+        .where(and(
+          eq(schema.userSoundMenus.id, nestedMenuId),
+          eq(schema.userSoundMenus.userGuid, guid)
+        ))
+        .limit(1);
+
+      if (!nestedMenu) {
+        return reply.status(404).send({ error: 'Nested menu not found' });
+      }
+
+      // Prevent circular reference
+      if (nestedMenuId === menuId) {
+        return reply.status(400).send({ error: 'Cannot nest a menu within itself' });
+      }
+
+      validNestedMenuId = nestedMenu.id;
+    } else if (itemType === 'playlist' && playlistId) {
+      // Verify playlist exists and belongs to user
+      const [playlist] = await db
+        .select({ id: schema.soundPlaylists.id })
+        .from(schema.soundPlaylists)
+        .where(and(
+          eq(schema.soundPlaylists.id, playlistId),
+          eq(schema.soundPlaylists.guid, guid)
+        ))
+        .limit(1);
+
+      if (!playlist) {
+        return reply.status(404).send({ error: 'Playlist not found' });
+      }
+
+      validPlaylistId = playlist.id;
     }
 
     const [item] = await db
       .insert(schema.userSoundMenuItems)
       .values({
         menuId,
-        soundId: userSound.id,
         itemPosition,
+        itemType: itemType || 'sound',
+        soundId,
+        nestedMenuId: validNestedMenuId,
+        playlistId: validPlaylistId,
         displayName: displayName || null,
       })
       .returning();
@@ -2746,5 +2921,618 @@ export const soundsRoutes: FastifyPluginAsync = async (fastify) => {
     }));
 
     return { menus: menusWithItems };
+  });
+
+  // ============================================================================
+  // Unfinished Sounds (Multi-file Upload Staging)
+  // ============================================================================
+
+  // Max file size for individual unfinished uploads: 10MB per file
+  const MAX_UNFINISHED_FILE_SIZE = 10 * 1024 * 1024;
+
+  // Helper to normalize alias from filename
+  const normalizeAlias = (filename: string): string => {
+    return filename
+      .replace(/\.(mp3|wav)$/i, '') // Remove extension
+      .replace(/\s+/g, '_') // Replace spaces with underscores
+      .replace(/[^a-zA-Z0-9_-]/g, '') // Remove invalid characters
+      .substring(0, 32); // Max 32 chars
+  };
+
+  // Helper to make alias unique
+  const makeUniqueAlias = async (baseAlias: string, guid: string): Promise<string> => {
+    // Get all existing aliases (from both user_sounds and unfinished_sounds)
+    const [existingSounds, existingUnfinished] = await Promise.all([
+      db.select({ alias: schema.userSounds.alias })
+        .from(schema.userSounds)
+        .where(eq(schema.userSounds.guid, guid)),
+      db.select({ alias: schema.unfinishedSounds.alias })
+        .from(schema.unfinishedSounds)
+        .where(eq(schema.unfinishedSounds.userGuid, guid)),
+    ]);
+
+    const existingAliases = new Set([
+      ...existingSounds.map(s => s.alias.toLowerCase()),
+      ...existingUnfinished.map(s => s.alias.toLowerCase()),
+    ]);
+
+    // If base alias is empty, use 'sound'
+    let candidate = baseAlias || 'sound';
+    if (!existingAliases.has(candidate.toLowerCase())) {
+      return candidate;
+    }
+
+    // Try with incrementing numbers
+    let counter = 1;
+    const maxBase = candidate.substring(0, 29); // Leave room for _N suffix
+    while (counter < 1000) {
+      candidate = `${maxBase}_${counter}`;
+      if (!existingAliases.has(candidate.toLowerCase())) {
+        return candidate;
+      }
+      counter++;
+    }
+
+    // Fallback with random suffix
+    return `${maxBase}_${Date.now().toString(36)}`.substring(0, 32);
+  };
+
+  // List unfinished sounds
+  fastify.get('/unfinished', { preHandler: authenticate }, async (request, reply) => {
+    const guid = await getUserGuid(request.user.userId);
+    if (!guid) {
+      return reply.status(400).send({ error: 'No GUID linked to account. Use /etman register in-game.' });
+    }
+
+    const sounds = await db
+      .select()
+      .from(schema.unfinishedSounds)
+      .where(eq(schema.unfinishedSounds.userGuid, guid))
+      .orderBy(desc(schema.unfinishedSounds.createdAt));
+
+    return { sounds, count: sounds.length };
+  });
+
+  // Upload multiple files to unfinished sounds (10MB max per file, unlimited count)
+  fastify.post('/upload-unfinished', { preHandler: authenticate }, async (request, reply) => {
+    const guid = await getUserGuid(request.user.userId);
+    if (!guid) {
+      return reply.status(400).send({ error: 'No GUID linked to account. Use /etman register in-game.' });
+    }
+
+    // Get all files from the multipart request
+    const parts = request.parts();
+    const uploaded: { tempId: string; alias: string; originalName: string; fileSize: number; durationSeconds: number | null }[] = [];
+    const errors: { filename: string; error: string }[] = [];
+
+    ensureTempDir();
+
+    for await (const part of parts) {
+      if (part.type !== 'file') continue;
+
+      const filename = part.filename || 'unknown';
+      const ext = extname(filename).toLowerCase();
+
+      // Validate file type
+      if (!SUPPORTED_EXTENSIONS.includes(ext)) {
+        errors.push({ filename, error: 'Only MP3 and WAV files are allowed' });
+        // Drain the stream
+        for await (const _ of part.file) { /* discard */ }
+        continue;
+      }
+
+      // Read file into buffer
+      const chunks: Buffer[] = [];
+      let totalSize = 0;
+      let sizeLimitExceeded = false;
+
+      for await (const chunk of part.file) {
+        totalSize += chunk.length;
+        if (totalSize > MAX_UNFINISHED_FILE_SIZE) {
+          sizeLimitExceeded = true;
+          // Continue draining but don't store more chunks
+        } else {
+          chunks.push(chunk);
+        }
+      }
+
+      if (sizeLimitExceeded) {
+        errors.push({ filename, error: 'File too large. Maximum size is 10MB per file.' });
+        continue;
+      }
+
+      const buffer = Buffer.concat(chunks);
+
+      // Generate unique temp ID and save file
+      const tempId = randomUUID();
+      const tempFilePath = join(SOUNDS_TEMP_DIR, `${tempId}${ext}`);
+
+      try {
+        writeFileSync(tempFilePath, buffer);
+
+        // Get duration
+        let durationSeconds: number | null = null;
+        try {
+          durationSeconds = await getAudioDuration(tempFilePath);
+        } catch {
+          // Duration will be null - that's ok
+        }
+
+        // Generate unique alias
+        const baseAlias = normalizeAlias(filename);
+        const alias = await makeUniqueAlias(baseAlias, guid);
+
+        // Create unfinished sound record
+        await db.insert(schema.unfinishedSounds).values({
+          userGuid: guid,
+          tempId,
+          alias,
+          originalName: filename,
+          fileSize: buffer.length,
+          durationSeconds: durationSeconds ? Math.round(durationSeconds) : null,
+          fileExtension: ext,
+        });
+
+        uploaded.push({
+          tempId,
+          alias,
+          originalName: filename,
+          fileSize: buffer.length,
+          durationSeconds: durationSeconds ? Math.round(durationSeconds) : null,
+        });
+      } catch (err) {
+        fastify.log.error({ err, filename }, 'Failed to process uploaded file');
+        errors.push({ filename, error: 'Failed to process file' });
+        // Clean up temp file if it was written
+        if (existsSync(tempFilePath)) {
+          unlinkSync(tempFilePath);
+        }
+      }
+    }
+
+    return {
+      success: uploaded.length > 0,
+      uploaded,
+      errors,
+      totalUploaded: uploaded.length,
+      totalErrors: errors.length,
+    };
+  });
+
+  // Rename unfinished sound alias
+  fastify.patch('/unfinished/:tempId', { preHandler: authenticate }, async (request, reply) => {
+    const { tempId } = request.params as { tempId: string };
+    const body = renameSoundSchema.safeParse(request.body);
+    if (!body.success) {
+      return reply.status(400).send({ error: 'Invalid input', details: body.error.flatten() });
+    }
+
+    const guid = await getUserGuid(request.user.userId);
+    if (!guid) {
+      return reply.status(400).send({ error: 'No GUID linked to account' });
+    }
+
+    // Check if new alias already exists in either user_sounds or unfinished_sounds
+    const [existingUserSound] = await db
+      .select({ id: schema.userSounds.id })
+      .from(schema.userSounds)
+      .where(and(eq(schema.userSounds.guid, guid), eq(schema.userSounds.alias, body.data.newAlias)))
+      .limit(1);
+
+    if (existingUserSound) {
+      return reply.status(409).send({ error: 'A sound with that name already exists in your library' });
+    }
+
+    const [existingUnfinished] = await db
+      .select({ id: schema.unfinishedSounds.id })
+      .from(schema.unfinishedSounds)
+      .where(and(
+        eq(schema.unfinishedSounds.userGuid, guid),
+        eq(schema.unfinishedSounds.alias, body.data.newAlias),
+        sql`${schema.unfinishedSounds.tempId} != ${tempId}`
+      ))
+      .limit(1);
+
+    if (existingUnfinished) {
+      return reply.status(409).send({ error: 'Another unfinished sound already has that name' });
+    }
+
+    const result = await db
+      .update(schema.unfinishedSounds)
+      .set({ alias: body.data.newAlias })
+      .where(and(eq(schema.unfinishedSounds.userGuid, guid), eq(schema.unfinishedSounds.tempId, tempId)))
+      .returning();
+
+    if (result.length === 0) {
+      return reply.status(404).send({ error: 'Unfinished sound not found' });
+    }
+
+    return { success: true, alias: body.data.newAlias };
+  });
+
+  // Delete unfinished sound
+  fastify.delete('/unfinished/:tempId', { preHandler: authenticate }, async (request, reply) => {
+    const { tempId } = request.params as { tempId: string };
+
+    const guid = await getUserGuid(request.user.userId);
+    if (!guid) {
+      return reply.status(400).send({ error: 'No GUID linked to account' });
+    }
+
+    // Get the unfinished sound
+    const [sound] = await db
+      .select({ fileExtension: schema.unfinishedSounds.fileExtension })
+      .from(schema.unfinishedSounds)
+      .where(and(eq(schema.unfinishedSounds.userGuid, guid), eq(schema.unfinishedSounds.tempId, tempId)))
+      .limit(1);
+
+    if (!sound) {
+      return reply.status(404).send({ error: 'Unfinished sound not found' });
+    }
+
+    // Delete database record
+    await db
+      .delete(schema.unfinishedSounds)
+      .where(and(eq(schema.unfinishedSounds.userGuid, guid), eq(schema.unfinishedSounds.tempId, tempId)));
+
+    // Delete temp file
+    const tempFilePath = join(SOUNDS_TEMP_DIR, `${tempId}${sound.fileExtension}`);
+    if (existsSync(tempFilePath)) {
+      unlinkSync(tempFilePath);
+    }
+
+    return { success: true };
+  });
+
+  // Save unfinished sound directly (no clipping) - just moves to library as-is
+  fastify.post('/unfinished/:tempId/save', { preHandler: authenticate }, async (request, reply) => {
+    const { tempId } = request.params as { tempId: string };
+
+    const guid = await getUserGuid(request.user.userId);
+    if (!guid) {
+      return reply.status(400).send({ error: 'No GUID linked to account' });
+    }
+
+    // Get the unfinished sound
+    const [sound] = await db
+      .select()
+      .from(schema.unfinishedSounds)
+      .where(and(eq(schema.unfinishedSounds.userGuid, guid), eq(schema.unfinishedSounds.tempId, tempId)))
+      .limit(1);
+
+    if (!sound) {
+      return reply.status(404).send({ error: 'Unfinished sound not found' });
+    }
+
+    // Check if alias already exists in user_sounds
+    const [existingAlias] = await db
+      .select({ id: schema.userSounds.id })
+      .from(schema.userSounds)
+      .where(and(eq(schema.userSounds.guid, guid), eq(schema.userSounds.alias, sound.alias)))
+      .limit(1);
+
+    if (existingAlias) {
+      return reply.status(409).send({ error: 'A sound with this alias already exists in your library' });
+    }
+
+    // Check temp file exists
+    const tempFilePath = join(SOUNDS_TEMP_DIR, `${tempId}${sound.fileExtension}`);
+    if (!existsSync(tempFilePath)) {
+      // Clean up orphaned record
+      await db
+        .delete(schema.unfinishedSounds)
+        .where(eq(schema.unfinishedSounds.id, sound.id));
+      return reply.status(404).send({ error: 'Temp file not found. Please re-upload.' });
+    }
+
+    // Check file size (must be under 2MB for MP3, 6MB for WAV after clipping)
+    const stats = statSync(tempFilePath);
+    const maxSize = sound.fileExtension === '.wav' ? MAX_FILE_SIZE * 3 : MAX_FILE_SIZE;
+    if (stats.size > maxSize) {
+      return reply.status(400).send({
+        error: `File is too large (${(stats.size / 1024 / 1024).toFixed(1)}MB). Please use the Edit button to clip it to 30 seconds or less.`,
+      });
+    }
+
+    // Ensure sounds directory exists
+    if (!existsSync(SOUNDS_DIR)) {
+      mkdirSync(SOUNDS_DIR, { recursive: true });
+    }
+
+    // Move file to permanent storage
+    const uniqueFilename = `${randomUUID()}${sound.fileExtension}`;
+    const permanentFilePath = join(SOUNDS_DIR, uniqueFilename);
+
+    try {
+      const { copyFileSync } = await import('fs');
+      copyFileSync(tempFilePath, permanentFilePath);
+      unlinkSync(tempFilePath);
+
+      // Create sound file record
+      const [soundFile] = await db
+        .insert(schema.soundFiles)
+        .values({
+          filename: uniqueFilename,
+          originalName: sound.originalName,
+          filePath: uniqueFilename,
+          fileSize: stats.size,
+          durationSeconds: sound.durationSeconds,
+          addedByGuid: guid,
+          isPublic: false,
+          referenceCount: 1,
+        })
+        .returning({ id: schema.soundFiles.id });
+
+      // Create user sound record
+      await db.insert(schema.userSounds).values({
+        guid,
+        soundFileId: soundFile.id,
+        alias: sound.alias,
+        visibility: 'private',
+      });
+
+      // Delete unfinished record
+      await db
+        .delete(schema.unfinishedSounds)
+        .where(eq(schema.unfinishedSounds.id, sound.id));
+
+      return {
+        success: true,
+        alias: sound.alias,
+        fileSize: stats.size,
+        durationSeconds: sound.durationSeconds,
+      };
+    } catch (err) {
+      fastify.log.error({ err }, 'Error saving unfinished sound');
+      // Clean up if partial
+      if (existsSync(permanentFilePath)) {
+        unlinkSync(permanentFilePath);
+      }
+      return reply.status(500).send({ error: 'Failed to save sound' });
+    }
+  });
+
+  // Get unfinished sound for clip editor - returns temp file info
+  fastify.get('/unfinished/:tempId/edit', { preHandler: authenticate }, async (request, reply) => {
+    const { tempId } = request.params as { tempId: string };
+
+    const guid = await getUserGuid(request.user.userId);
+    if (!guid) {
+      return reply.status(400).send({ error: 'No GUID linked to account' });
+    }
+
+    // Get the unfinished sound
+    const [sound] = await db
+      .select()
+      .from(schema.unfinishedSounds)
+      .where(and(eq(schema.unfinishedSounds.userGuid, guid), eq(schema.unfinishedSounds.tempId, tempId)))
+      .limit(1);
+
+    if (!sound) {
+      return reply.status(404).send({ error: 'Unfinished sound not found' });
+    }
+
+    // Check temp file exists
+    const tempFilePath = join(SOUNDS_TEMP_DIR, `${tempId}${sound.fileExtension}`);
+    if (!existsSync(tempFilePath)) {
+      // Clean up orphaned record
+      await db
+        .delete(schema.unfinishedSounds)
+        .where(eq(schema.unfinishedSounds.id, sound.id));
+      return reply.status(404).send({ error: 'Temp file not found. Please re-upload.' });
+    }
+
+    const stats = statSync(tempFilePath);
+
+    // Get accurate duration if not already set
+    let durationSeconds = sound.durationSeconds;
+    if (!durationSeconds) {
+      try {
+        durationSeconds = Math.round(await getAudioDuration(tempFilePath));
+        // Update the record
+        await db
+          .update(schema.unfinishedSounds)
+          .set({ durationSeconds })
+          .where(eq(schema.unfinishedSounds.id, sound.id));
+      } catch {
+        // Use fallback estimate
+        durationSeconds = Math.round((stats.size * 8) / (128 * 1000));
+      }
+    }
+
+    return {
+      success: true,
+      tempId: sound.tempId,
+      alias: sound.alias,
+      originalName: sound.originalName,
+      durationSeconds,
+      fileSize: stats.size,
+      maxClipDuration: MAX_CLIP_DURATION_SECONDS,
+      format: sound.fileExtension.substring(1),
+    };
+  });
+
+  // Save clipped audio from unfinished sound (uses existing save-clip logic)
+  fastify.post('/unfinished/:tempId/save-clip', { preHandler: authenticate }, async (request, reply) => {
+    const { tempId } = request.params as { tempId: string };
+    const body = z.object({
+      alias: z.string().min(1).max(32).regex(aliasRegex, aliasMessage),
+      startTime: z.number().min(0),
+      endTime: z.number().min(0),
+      isPublic: z.boolean().optional().default(false),
+    }).safeParse(request.body);
+
+    if (!body.success) {
+      return reply.status(400).send({ error: 'Invalid input', details: body.error.flatten() });
+    }
+
+    const guid = await getUserGuid(request.user.userId);
+    if (!guid) {
+      return reply.status(400).send({ error: 'No GUID linked to account' });
+    }
+
+    const { alias, startTime, endTime, isPublic } = body.data;
+
+    // Validate clip duration
+    const clipDuration = endTime - startTime;
+    if (clipDuration <= 0) {
+      return reply.status(400).send({ error: 'End time must be after start time' });
+    }
+    if (clipDuration > MAX_CLIP_DURATION_SECONDS) {
+      return reply.status(400).send({ error: `Clip duration cannot exceed ${MAX_CLIP_DURATION_SECONDS} seconds` });
+    }
+
+    // Get the unfinished sound
+    const [sound] = await db
+      .select()
+      .from(schema.unfinishedSounds)
+      .where(and(eq(schema.unfinishedSounds.userGuid, guid), eq(schema.unfinishedSounds.tempId, tempId)))
+      .limit(1);
+
+    if (!sound) {
+      return reply.status(404).send({ error: 'Unfinished sound not found' });
+    }
+
+    // Check alias doesn't already exist
+    const [existingAlias] = await db
+      .select({ id: schema.userSounds.id })
+      .from(schema.userSounds)
+      .where(and(eq(schema.userSounds.guid, guid), eq(schema.userSounds.alias, alias)))
+      .limit(1);
+
+    if (existingAlias) {
+      return reply.status(409).send({ error: 'You already have a sound with this alias' });
+    }
+
+    // Check temp file exists
+    const tempFilePath = join(SOUNDS_TEMP_DIR, `${tempId}${sound.fileExtension}`);
+    if (!existsSync(tempFilePath)) {
+      await db
+        .delete(schema.unfinishedSounds)
+        .where(eq(schema.unfinishedSounds.id, sound.id));
+      return reply.status(404).send({ error: 'Temp file not found. Please re-upload.' });
+    }
+
+    // Ensure sounds directory exists
+    if (!existsSync(SOUNDS_DIR)) {
+      mkdirSync(SOUNDS_DIR, { recursive: true });
+    }
+
+    // Generate unique filename for permanent storage (preserve format)
+    const uniqueFilename = `${randomUUID()}${sound.fileExtension}`;
+    const permanentFilePath = join(SOUNDS_DIR, uniqueFilename);
+
+    try {
+      // Clip and convert the audio
+      const { duration, fileSize } = await clipAndConvertAudio(
+        tempFilePath,
+        permanentFilePath,
+        startTime,
+        endTime
+      );
+
+      // Check final file size
+      const maxSize = sound.fileExtension === '.wav' ? MAX_FILE_SIZE * 3 : MAX_FILE_SIZE;
+      if (fileSize > maxSize) {
+        unlinkSync(permanentFilePath);
+        return reply.status(400).send({
+          error: `Clipped audio exceeds ${maxSize / 1024 / 1024}MB. Try selecting a shorter portion.`,
+        });
+      }
+
+      // Create sound file record
+      const [soundFile] = await db
+        .insert(schema.soundFiles)
+        .values({
+          filename: uniqueFilename,
+          originalName: `${alias}${sound.fileExtension}`,
+          filePath: uniqueFilename,
+          fileSize,
+          durationSeconds: duration,
+          addedByGuid: guid,
+          isPublic,
+          referenceCount: 1,
+        })
+        .returning({ id: schema.soundFiles.id });
+
+      // Create user sound record
+      await db.insert(schema.userSounds).values({
+        guid,
+        soundFileId: soundFile.id,
+        alias,
+        visibility: isPublic ? 'public' : 'private',
+      });
+
+      // Delete temp file and unfinished record
+      unlinkSync(tempFilePath);
+      await db
+        .delete(schema.unfinishedSounds)
+        .where(eq(schema.unfinishedSounds.id, sound.id));
+
+      return {
+        success: true,
+        alias,
+        fileSize,
+        durationSeconds: duration,
+        isPublic,
+      };
+    } catch (err) {
+      fastify.log.error({ err }, 'Error saving clipped audio from unfinished');
+      if (existsSync(permanentFilePath)) {
+        unlinkSync(permanentFilePath);
+      }
+      return reply.status(500).send({ error: 'Failed to process audio clip' });
+    }
+  });
+
+  // Stream unfinished temp file for preview
+  fastify.get('/unfinished/:tempId/stream', { preHandler: authenticate }, async (request, reply) => {
+    const { tempId } = request.params as { tempId: string };
+
+    const guid = await getUserGuid(request.user.userId);
+    if (!guid) {
+      return reply.status(400).send({ error: 'No GUID linked to account' });
+    }
+
+    // Verify ownership
+    const [sound] = await db
+      .select({ fileExtension: schema.unfinishedSounds.fileExtension })
+      .from(schema.unfinishedSounds)
+      .where(and(eq(schema.unfinishedSounds.userGuid, guid), eq(schema.unfinishedSounds.tempId, tempId)))
+      .limit(1);
+
+    if (!sound) {
+      return reply.status(404).send({ error: 'Unfinished sound not found' });
+    }
+
+    const tempFilePath = join(SOUNDS_TEMP_DIR, `${tempId}${sound.fileExtension}`);
+    if (!existsSync(tempFilePath)) {
+      return reply.status(404).send({ error: 'Temp file not found' });
+    }
+
+    const contentType = sound.fileExtension === '.wav' ? 'audio/wav' : 'audio/mpeg';
+    const stats = statSync(tempFilePath);
+    const range = request.headers.range;
+
+    if (range) {
+      const parts = range.replace(/bytes=/, '').split('-');
+      const start = parseInt(parts[0], 10);
+      const end = parts[1] ? parseInt(parts[1], 10) : stats.size - 1;
+      const chunkSize = end - start + 1;
+
+      reply.code(206);
+      reply.header('Content-Range', `bytes ${start}-${end}/${stats.size}`);
+      reply.header('Accept-Ranges', 'bytes');
+      reply.header('Content-Length', chunkSize);
+      reply.header('Content-Type', contentType);
+
+      return reply.send(createReadStream(tempFilePath, { start, end }));
+    }
+
+    reply.header('Content-Length', stats.size);
+    reply.header('Content-Type', contentType);
+    reply.header('Accept-Ranges', 'bytes');
+
+    return reply.send(createReadStream(tempFilePath));
   });
 };

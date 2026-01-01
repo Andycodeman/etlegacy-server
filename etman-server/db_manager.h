@@ -582,23 +582,30 @@ bool DB_ExecuteRaw(const char *query);
 
 
 /*
- * Dynamic sound menu structures and operations
+ * Dynamic sound menu structures and operations (Phase 9: Hierarchical)
  */
 
 #define DB_MAX_MENU_ITEMS 9
 #define DB_MAX_MENUS 9
+#define DB_MENU_ITEM_SOUND 0
+#define DB_MENU_ITEM_MENU  1
 
 typedef struct {
-    int         position;
-    char        name[33];
-    char        soundAlias[33];
+    int         position;           /* 1-9 position in current page */
+    int         itemType;           /* 0=sound, 1=menu/playlist */
+    char        name[33];           /* Display name */
+    char        soundAlias[33];     /* For sounds: alias to play */
+    int         nestedMenuId;       /* For menus: ID to navigate to */
 } DBMenuItem;
 
 typedef struct {
-    int         position;
-    char        name[33];
-    bool        isPlaylist;
-    int         itemCount;
+    int         menuId;             /* Database menu ID (0 = root) */
+    int         position;           /* Position in parent menu */
+    char        name[33];           /* Menu name */
+    bool        isPlaylist;         /* Backed by playlist (auto-populated) */
+    int         itemCount;          /* Items in this page */
+    int         totalItems;         /* Total items in menu */
+    int         pageOffset;         /* Current pagination offset */
     DBMenuItem  items[DB_MAX_MENU_ITEMS];
 } DBMenu;
 
@@ -607,8 +614,14 @@ typedef struct {
     int         count;
 } DBMenuResult;
 
+/* Hierarchical menu query result */
+typedef struct {
+    DBMenu      menu;               /* Single menu context */
+    bool        found;              /* Whether menu was found */
+} DBMenuPageResult;
+
 /**
- * Get user's sound menus with items populated.
+ * Get user's sound menus with items populated (legacy - root menus only).
  * @param guid Player GUID
  * @param outResult Output result (caller must provide pointer)
  * @return true on success
@@ -626,5 +639,29 @@ bool DB_GetUserMenus(const char *guid, DBMenuResult *outResult);
  */
 bool DB_GetMenuItemSound(const char *guid, int menuPos, int itemPos,
                          char *outFilePath, int outLen);
+
+/**
+ * Get a page of menu items for hierarchical navigation.
+ * @param guid Player GUID
+ * @param menuId Menu ID (0 = root level menus)
+ * @param pageOffset Starting offset (0, 9, 18, ...)
+ * @param outResult Output result with menu data
+ * @return true if menu found
+ */
+bool DB_GetMenuPage(const char *guid, int menuId, int pageOffset, DBMenuPageResult *outResult);
+
+/**
+ * Get sound file path by user_sounds.id or sound_files.id.
+ * First checks user's personal library, then public sounds.
+ * @param guid Player GUID
+ * @param soundId Database ID (user_sounds.id or sound_files.id for public)
+ * @param outFilePath Output buffer for file path
+ * @param outLen Output buffer length
+ * @param outName Output buffer for sound name (can be NULL)
+ * @param nameLen Name buffer length
+ * @return true if found
+ */
+bool DB_GetSoundById(const char *guid, int soundId, char *outFilePath, int outLen,
+                     char *outName, int nameLen);
 
 #endif /* DB_MANAGER_H */

@@ -281,7 +281,7 @@ export default function Playlists() {
               <input
                 type="text"
                 value={newPlaylistNameInput}
-                onChange={(e) => setNewPlaylistNameInput(e.target.value.replace(/[^a-zA-Z0-9_-]/g, ''))}
+                onChange={(e) => setNewPlaylistNameInput(e.target.value.replace(/[^a-zA-Z0-9_\- ]/g, ''))}
                 onKeyDown={(e) => {
                   if (e.key === 'Enter') handleRenamePlaylist(playlist.name);
                   if (e.key === 'Escape') {
@@ -518,7 +518,7 @@ export default function Playlists() {
                           </div>
                         )}
                         <div className="w-8 text-center text-gray-500 text-sm">
-                          {item.orderNumber}
+                          {index + 1}
                         </div>
                         <AudioPlayer
                           alias={selectedPlaylist.isOwner ? item.alias : undefined}
@@ -572,8 +572,8 @@ export default function Playlists() {
                 <input
                   type="text"
                   value={newPlaylistName}
-                  onChange={(e) => setNewPlaylistName(e.target.value.replace(/[^a-zA-Z0-9_-]/g, ''))}
-                  placeholder="playlist_name"
+                  onChange={(e) => setNewPlaylistName(e.target.value.replace(/[^a-zA-Z0-9_\- ]/g, ''))}
+                  placeholder="My Playlist"
                   className="w-full bg-gray-700 border border-gray-600 rounded px-4 py-2 text-white placeholder-gray-400 focus:outline-none focus:border-blue-500"
                 />
               </div>

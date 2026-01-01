@@ -45,18 +45,18 @@ ssh ${VPS_HOST} << 'EOF'
 cd ~/etpanel/backend
 npm install --production
 
-# Kill existing process and restart
-pkill -f 'node dist/index.js' 2>/dev/null || true
+# Kill any process using port 3000 and restart the systemd service
+sudo fuser -k 3000/tcp 2>/dev/null || true
 sleep 1
-nohup node dist/index.js >> /tmp/etpanel.log 2>&1 &
-sleep 2
+sudo systemctl restart etpanel-api
+sleep 3
 
 # Verify it's running
-if curl -s http://localhost:3000/health > /dev/null; then
+if systemctl is-active --quiet etpanel-api; then
   echo "✓ Backend running"
 else
   echo "✗ Backend failed to start"
-  tail -20 /tmp/etpanel.log
+  sudo journalctl -u etpanel-api --no-pager -n 20
   exit 1
 fi
 EOF

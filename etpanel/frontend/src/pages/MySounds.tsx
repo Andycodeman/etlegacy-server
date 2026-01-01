@@ -1,8 +1,8 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { sounds } from '../api/client';
-import type { UserSound, PendingShare, TempUploadResponse } from '../api/client';
+import type { UserSound, PendingShare, TempUploadResponse, UnfinishedSound, UnfinishedEditResponse } from '../api/client';
 import AudioPlayer from '../components/AudioPlayer';
 import SoundClipEditor from '../components/SoundClipEditor';
 import SoundMenuEditor from '../components/SoundMenuEditor';
@@ -83,7 +83,7 @@ function SortableHeader({
   );
 }
 
-type TabType = 'library' | 'menus';
+type TabType = 'library' | 'unfinished' | 'menus';
 
 export default function MySounds() {
   const queryClient = useQueryClient();
@@ -93,7 +93,9 @@ export default function MySounds() {
   // Tab state - default to 'library', can be set via URL param
   const [activeTab, setActiveTab] = useState<TabType>(() => {
     const tab = searchParams.get('tab');
-    return tab === 'menus' ? 'menus' : 'library';
+    if (tab === 'menus') return 'menus';
+    if (tab === 'unfinished') return 'unfinished';
+    return 'library';
   });
 
   const handleTabChange = (tab: TabType) => {
@@ -118,7 +120,7 @@ export default function MySounds() {
 
   // Upload modal state
   const [uploadModal, setUploadModal] = useState(false);
-  const [uploadMode, setUploadMode] = useState<'file' | 'url'>('file');
+  const [uploadMode, setUploadMode] = useState<'file' | 'multi' | 'url'>('file');
   const [uploadUrl, setUploadUrl] = useState('');
   const [uploadFile, setUploadFile] = useState<File | null>(null);
   const [uploadError, setUploadError] = useState('');
@@ -133,9 +135,33 @@ export default function MySounds() {
   // State for creating clip from existing sound
   const [copyingSound, setCopyingSound] = useState<string | null>(null);
 
+  // Unfinished sounds state
+  const [editingUnfinishedAlias, setEditingUnfinishedAlias] = useState<string | null>(null);
+  const [newUnfinishedAlias, setNewUnfinishedAlias] = useState('');
+  const [unfinishedRenameError, setUnfinishedRenameError] = useState<string | null>(null);
+  const [savingUnfinished, setSavingUnfinished] = useState<string | null>(null);
+  const [editingUnfinishedSound, setEditingUnfinishedSound] = useState<UnfinishedEditResponse | null>(null);
+
+  // Multi-file upload state
+  const [uploadFiles, setUploadFiles] = useState<File[]>([]);
+  const [isMultiUploading, setIsMultiUploading] = useState(false);
+  const [multiUploadProgress, setMultiUploadProgress] = useState<{ uploaded: number; total: number } | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Unfinished sound preview player
+  const [playingUnfinishedId, setPlayingUnfinishedId] = useState<string | null>(null);
+  const unfinishedAudioRef = useRef<HTMLAudioElement | null>(null);
+
   // Sorting state
   const [sortField, setSortField] = useState<SortField>('alias');
   const [sortDirection, setSortDirection] = useState<SortDirection>('asc');
+
+  // Multi-select state for batch playlist add (persists across pagination/search)
+  const [selectedSounds, setSelectedSounds] = useState<Set<string>>(new Set());
+  const [showPlaylistModal, setShowPlaylistModal] = useState(false);
+  const [selectedPlaylists, setSelectedPlaylists] = useState<Set<string>>(new Set());
+  const [isAddingToPlaylists, setIsAddingToPlaylists] = useState(false);
+  const [batchAddResults, setBatchAddResults] = useState<{ added: number; skipped: number } | null>(null);
 
   const handleSort = (field: SortField) => {
     if (sortField === field) {
@@ -174,6 +200,20 @@ export default function MySounds() {
   const { data: sharesData } = useQuery({
     queryKey: ['pendingShares'],
     queryFn: sounds.pendingShares,
+    enabled: guidStatus?.linked === true,
+  });
+
+  // Fetch unfinished sounds
+  const { data: unfinishedData, isLoading: unfinishedLoading } = useQuery({
+    queryKey: ['unfinishedSounds'],
+    queryFn: sounds.listUnfinished,
+    enabled: guidStatus?.linked === true,
+  });
+
+  // Fetch playlists for batch add modal
+  const { data: playlistsData } = useQuery({
+    queryKey: ['playlists'],
+    queryFn: sounds.playlists,
     enabled: guidStatus?.linked === true,
   });
 
@@ -340,6 +380,321 @@ export default function MySounds() {
     },
   });
 
+  // Unfinished sounds mutations
+  const renameUnfinishedMutation = useMutation({
+    mutationFn: ({ tempId, newAlias }: { tempId: string; newAlias: string }) =>
+      sounds.renameUnfinished(tempId, newAlias),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['unfinishedSounds'] });
+      setEditingUnfinishedAlias(null);
+      setNewUnfinishedAlias('');
+      setUnfinishedRenameError(null);
+    },
+    onError: (error: Error) => {
+      setUnfinishedRenameError(error.message);
+    },
+  });
+
+  const deleteUnfinishedMutation = useMutation({
+    mutationFn: (tempId: string) => sounds.deleteUnfinished(tempId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['unfinishedSounds'] });
+    },
+  });
+
+  const saveUnfinishedMutation = useMutation({
+    mutationFn: (tempId: string) => sounds.saveUnfinished(tempId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['unfinishedSounds'] });
+      queryClient.invalidateQueries({ queryKey: ['mySounds'] });
+      setSavingUnfinished(null);
+    },
+    onError: (error: Error) => {
+      alert('Failed to save sound: ' + error.message);
+      setSavingUnfinished(null);
+    },
+  });
+
+  // Handle multi-file upload
+  const handleMultiFileUpload = async () => {
+    if (uploadFiles.length === 0) return;
+
+    setIsMultiUploading(true);
+    setMultiUploadProgress({ uploaded: 0, total: uploadFiles.length });
+    setUploadError('');
+
+    try {
+      const result = await sounds.uploadUnfinished(uploadFiles);
+
+      if (result.errors.length > 0) {
+        const errorMessages = result.errors.map(e => `${e.filename}: ${e.error}`).join('\n');
+        setUploadError(`Some files failed to upload:\n${errorMessages}`);
+      }
+
+      if (result.uploaded.length > 0) {
+        queryClient.invalidateQueries({ queryKey: ['unfinishedSounds'] });
+        // Switch to unfinished tab to show uploaded files
+        handleTabChange('unfinished');
+      }
+
+      // Reset upload state
+      setUploadFiles([]);
+      if (fileInputRef.current) {
+        fileInputRef.current.value = '';
+      }
+
+      if (result.errors.length === 0) {
+        setUploadModal(false);
+      }
+    } catch (err) {
+      setUploadError((err as Error).message);
+    } finally {
+      setIsMultiUploading(false);
+      setMultiUploadProgress(null);
+    }
+  };
+
+  // Handle editing unfinished sound (open clip editor)
+  const handleEditUnfinished = async (tempId: string) => {
+    try {
+      const result = await sounds.getUnfinishedForEdit(tempId);
+      setEditingUnfinishedSound(result);
+    } catch (err) {
+      alert('Failed to open editor: ' + (err as Error).message);
+    }
+  };
+
+  // Save clipped audio from unfinished sound
+  const handleSaveUnfinishedClip = async (alias: string, startTime: number, endTime: number, isPublic: boolean) => {
+    if (!editingUnfinishedSound) return;
+
+    // Check for duplicate alias
+    if (soundsData?.sounds.some((s: UserSound) => s.alias.toLowerCase() === alias.toLowerCase())) {
+      setSaveClipError('You already have a sound with this alias');
+      return;
+    }
+
+    setIsSavingClip(true);
+    setSaveClipError('');
+
+    try {
+      await sounds.saveUnfinishedClip(editingUnfinishedSound.tempId, alias, startTime, endTime, isPublic);
+      queryClient.invalidateQueries({ queryKey: ['mySounds'] });
+      queryClient.invalidateQueries({ queryKey: ['unfinishedSounds'] });
+      setEditingUnfinishedSound(null);
+      setIsSavingClip(false);
+      setSaveClipError('');
+    } catch (err) {
+      setSaveClipError((err as Error).message);
+      setIsSavingClip(false);
+    }
+  };
+
+  // Handle unfinished alias rename
+  const handleUnfinishedRename = (tempId: string) => {
+    if (!newUnfinishedAlias) {
+      setEditingUnfinishedAlias(null);
+      setUnfinishedRenameError(null);
+      return;
+    }
+    // Check for duplicate in both user sounds and unfinished sounds
+    const isDuplicate = soundsData?.sounds.some(
+      (s: UserSound) => s.alias.toLowerCase() === newUnfinishedAlias.toLowerCase()
+    ) || unfinishedData?.sounds.some(
+      (s: UnfinishedSound) => s.alias.toLowerCase() === newUnfinishedAlias.toLowerCase() && s.tempId !== tempId
+    );
+    if (isDuplicate) {
+      setUnfinishedRenameError(`Alias "${newUnfinishedAlias}" already exists`);
+      return;
+    }
+    setUnfinishedRenameError(null);
+    renameUnfinishedMutation.mutate({ tempId, newAlias: newUnfinishedAlias });
+  };
+
+  const startUnfinishedEdit = (sound: UnfinishedSound) => {
+    setEditingUnfinishedAlias(sound.tempId);
+    setNewUnfinishedAlias(sound.alias);
+  };
+
+  // Play/stop unfinished sound preview
+  const toggleUnfinishedPlay = async (tempId: string) => {
+    // If already playing this sound, stop it
+    if (playingUnfinishedId === tempId) {
+      if (unfinishedAudioRef.current) {
+        unfinishedAudioRef.current.pause();
+        unfinishedAudioRef.current = null;
+      }
+      setPlayingUnfinishedId(null);
+      return;
+    }
+
+    // Stop any currently playing sound
+    if (unfinishedAudioRef.current) {
+      unfinishedAudioRef.current.pause();
+      unfinishedAudioRef.current = null;
+    }
+
+    // Start playing the new sound
+    try {
+      const token = localStorage.getItem('accessToken');
+      const streamUrl = sounds.getUnfinishedStreamUrl(tempId);
+
+      const response = await fetch(streamUrl, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+
+      if (!response.ok) throw new Error('Failed to load audio');
+
+      const blob = await response.blob();
+      const blobUrl = URL.createObjectURL(blob);
+
+      const audio = new Audio(blobUrl);
+      audio.onended = () => {
+        setPlayingUnfinishedId(null);
+        URL.revokeObjectURL(blobUrl);
+      };
+      audio.onerror = () => {
+        setPlayingUnfinishedId(null);
+        URL.revokeObjectURL(blobUrl);
+      };
+
+      unfinishedAudioRef.current = audio;
+      setPlayingUnfinishedId(tempId);
+      audio.play();
+    } catch (err) {
+      console.error('Failed to play audio:', err);
+      setPlayingUnfinishedId(null);
+    }
+  };
+
+  // Handle multi-file selection
+  const handleMultiFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files || []);
+    const validFiles: File[] = [];
+    const errors: string[] = [];
+
+    for (const file of files) {
+      const ext = file.name.toLowerCase();
+      if (!ext.endsWith('.mp3') && !ext.endsWith('.wav')) {
+        errors.push(`${file.name}: Only MP3 and WAV files are allowed`);
+        continue;
+      }
+      if (file.size > 10 * 1024 * 1024) {
+        errors.push(`${file.name}: File too large (max 10MB)`);
+        continue;
+      }
+      validFiles.push(file);
+    }
+
+    if (errors.length > 0) {
+      setUploadError(errors.join('\n'));
+    } else {
+      setUploadError('');
+    }
+
+    setUploadFiles(validFiles);
+  };
+
+  // Multi-select handlers for batch playlist add
+  const toggleSoundSelection = (alias: string) => {
+    setSelectedSounds(prev => {
+      const newSet = new Set(prev);
+      if (newSet.has(alias)) {
+        newSet.delete(alias);
+      } else {
+        newSet.add(alias);
+      }
+      return newSet;
+    });
+  };
+
+  const toggleSelectAllOnPage = (pageItems: UserSound[]) => {
+    // Toggle all sounds on current page
+    const pageAliases = pageItems.map((s: UserSound) => s.alias);
+    const allSelected = pageAliases.every((alias: string) => selectedSounds.has(alias));
+
+    setSelectedSounds(prev => {
+      const newSet = new Set(prev);
+      if (allSelected) {
+        // Deselect all on current page
+        pageAliases.forEach((alias: string) => newSet.delete(alias));
+      } else {
+        // Select all on current page
+        pageAliases.forEach((alias: string) => newSet.add(alias));
+      }
+      return newSet;
+    });
+  };
+
+  const clearSelection = () => {
+    setSelectedSounds(new Set());
+  };
+
+  const togglePlaylistSelection = (playlistName: string) => {
+    setSelectedPlaylists(prev => {
+      const newSet = new Set(prev);
+      if (newSet.has(playlistName)) {
+        newSet.delete(playlistName);
+      } else {
+        newSet.add(playlistName);
+      }
+      return newSet;
+    });
+  };
+
+  const handleBatchAddToPlaylists = async () => {
+    if (selectedSounds.size === 0 || selectedPlaylists.size === 0) return;
+
+    setIsAddingToPlaylists(true);
+    setBatchAddResults(null);
+
+    let added = 0;
+    let skipped = 0;
+
+    // Add each selected sound to each selected playlist
+    for (const playlistName of selectedPlaylists) {
+      for (const soundAlias of selectedSounds) {
+        try {
+          await sounds.addToPlaylist(playlistName, soundAlias);
+          added++;
+        } catch (err) {
+          // If error is "already exists", count as skipped
+          const errorMessage = (err as Error).message || '';
+          if (errorMessage.includes('already') || errorMessage.includes('exists')) {
+            skipped++;
+          } else {
+            // Other errors - still count as skipped but log
+            console.error(`Failed to add ${soundAlias} to ${playlistName}:`, err);
+            skipped++;
+          }
+        }
+      }
+    }
+
+    setBatchAddResults({ added, skipped });
+    setIsAddingToPlaylists(false);
+
+    // Refresh playlists data
+    queryClient.invalidateQueries({ queryKey: ['playlists'] });
+    queryClient.invalidateQueries({ queryKey: ['mySounds'] });
+  };
+
+  const closeBatchAddModal = () => {
+    setShowPlaylistModal(false);
+    setSelectedPlaylists(new Set());
+    setBatchAddResults(null);
+    // Clear selection after successful add
+    if (batchAddResults && batchAddResults.added > 0) {
+      setSelectedSounds(new Set());
+    }
+  };
+
+  // Get user's own playlists for batch add
+  const userPlaylists = useMemo(() => {
+    if (!playlistsData?.playlists) return [];
+    return playlistsData.playlists.filter((p) => p.isOwner === true);
+  }, [playlistsData]);
+
   // Upload handlers
   const resetUploadModal = () => {
     // Clean up temp file if we're canceling during edit
@@ -350,12 +705,18 @@ export default function MySounds() {
     setUploadMode('file');
     setUploadUrl('');
     setUploadFile(null);
+    setUploadFiles([]);
     setUploadError('');
     setIsUploading(false);
+    setIsMultiUploading(false);
+    setMultiUploadProgress(null);
     setTempUploadData(null);
     setIsSavingClip(false);
     setSaveClipError('');
     setIsReclip(false);
+    if (fileInputRef.current) {
+      fileInputRef.current.value = '';
+    }
   };
 
   // Upload to temp storage and switch to clip editor
@@ -561,7 +922,7 @@ export default function MySounds() {
             )}
           </div>
           {activeTab === 'library' && (
-            <div className="flex gap-3">
+            <div className="flex gap-3 items-center flex-wrap">
               <input
                 type="text"
                 placeholder="Search sounds..."
@@ -569,6 +930,27 @@ export default function MySounds() {
                 onChange={(e) => setSearch(e.target.value)}
                 className="w-full sm:w-48 bg-gray-700 border border-gray-600 rounded px-4 py-2 text-white placeholder-gray-400 focus:outline-none focus:border-blue-500"
               />
+              {/* Selection Actions */}
+              {selectedSounds.size > 0 && (
+                <div className="flex items-center gap-2 bg-blue-900/40 border border-blue-600 rounded px-3 py-1.5">
+                  <span className="text-sm text-blue-300">
+                    {selectedSounds.size} selected
+                  </span>
+                  <button
+                    onClick={() => setShowPlaylistModal(true)}
+                    className="px-3 py-1 bg-blue-600 hover:bg-blue-500 rounded text-sm font-medium transition-colors"
+                  >
+                    Add to Playlists
+                  </button>
+                  <button
+                    onClick={clearSelection}
+                    className="px-2 py-1 text-gray-400 hover:text-white text-sm transition-colors"
+                    title="Clear selection"
+                  >
+                    ✕
+                  </button>
+                </div>
+              )}
               <button
                 onClick={() => setUploadModal(true)}
                 className="px-4 py-2 bg-orange-600 hover:bg-orange-500 rounded font-medium transition-colors flex items-center gap-2 whitespace-nowrap"
@@ -590,6 +972,26 @@ export default function MySounds() {
             }`}
           >
             Sound Library
+            {soundsData?.sounds && soundsData.sounds.length > 0 && (
+              <span className="ml-2 px-1.5 py-0.5 text-xs rounded-full bg-gray-600 text-white">
+                {soundsData.sounds.length}
+              </span>
+            )}
+          </button>
+          <button
+            onClick={() => handleTabChange('unfinished')}
+            className={`px-4 py-2 rounded-t-lg font-medium transition-colors relative ${
+              activeTab === 'unfinished'
+                ? 'bg-gray-800 text-white border-b-2 border-orange-500'
+                : 'bg-gray-800/50 text-gray-400 hover:text-white hover:bg-gray-800'
+            }`}
+          >
+            Unfinished
+            {unfinishedData && unfinishedData.count > 0 && (
+              <span className="ml-2 px-1.5 py-0.5 text-xs rounded-full bg-yellow-600 text-white">
+                {unfinishedData.count}
+              </span>
+            )}
           </button>
           <button
             onClick={() => handleTabChange('menus')}
@@ -609,6 +1011,141 @@ export default function MySounds() {
         {/* Sound Menus Tab */}
         {activeTab === 'menus' && (
           <SoundMenuEditor userSounds={soundsData?.sounds || []} />
+        )}
+
+        {/* Unfinished Sounds Tab */}
+        {activeTab === 'unfinished' && (
+          <div className="flex-1 flex flex-col gap-4">
+            <div className="bg-yellow-900/30 border border-yellow-600 rounded-lg p-4 flex-shrink-0">
+              <h2 className="text-lg font-semibold text-yellow-400 mb-2">📦 Unfinished Uploads</h2>
+              <p className="text-gray-300 text-sm">
+                These sounds have been uploaded but not yet added to your library.
+                You can edit the alias, use the <strong>Edit</strong> button to clip/trim the audio,
+                or <strong>Save</strong> directly to add them as-is. Only files under 10MB can be saved directly.
+              </p>
+            </div>
+
+            {unfinishedLoading ? (
+              <div className="flex items-center justify-center h-32">
+                <div className="text-gray-400">Loading unfinished sounds...</div>
+              </div>
+            ) : !unfinishedData?.sounds || unfinishedData.sounds.length === 0 ? (
+              <div className="bg-gray-800 rounded-lg p-8 text-center flex-1 flex flex-col items-center justify-center">
+                <div className="text-4xl mb-4">📭</div>
+                <h2 className="text-xl font-semibold mb-2">No Unfinished Sounds</h2>
+                <p className="text-gray-400 mb-4">
+                  Upload multiple files at once and they'll appear here for you to review before adding to your library.
+                </p>
+                <button
+                  onClick={() => setUploadModal(true)}
+                  className="px-4 py-2 bg-orange-600 hover:bg-orange-500 rounded font-medium transition-colors"
+                >
+                  Upload Sounds
+                </button>
+              </div>
+            ) : (
+              <div className="bg-gray-800 rounded-lg flex-1 overflow-hidden flex flex-col">
+                <div className="overflow-y-auto flex-1 divide-y divide-gray-700">
+                  {unfinishedData.sounds.map((sound: UnfinishedSound) => (
+                    <div key={sound.tempId} className="p-4 flex flex-col sm:flex-row sm:items-center gap-3">
+                      {/* Sound Info */}
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 mb-1">
+                          {editingUnfinishedAlias === sound.tempId ? (
+                            <div className="flex-1">
+                              <input
+                                type="text"
+                                value={newUnfinishedAlias}
+                                onChange={(e) => {
+                                  setNewUnfinishedAlias(e.target.value.replace(/[^a-zA-Z0-9_-]/g, ''));
+                                  setUnfinishedRenameError(null);
+                                }}
+                                onKeyDown={(e) => {
+                                  if (e.key === 'Enter') handleUnfinishedRename(sound.tempId);
+                                  if (e.key === 'Escape') {
+                                    setEditingUnfinishedAlias(null);
+                                    setUnfinishedRenameError(null);
+                                  }
+                                }}
+                                onBlur={() => handleUnfinishedRename(sound.tempId)}
+                                autoFocus
+                                maxLength={32}
+                                className={`bg-gray-700 border rounded px-2 py-1 text-white w-full max-w-xs ${unfinishedRenameError ? 'border-red-500' : 'border-blue-500'}`}
+                              />
+                              {unfinishedRenameError && <div className="text-xs text-red-400 mt-1">{unfinishedRenameError}</div>}
+                            </div>
+                          ) : (
+                            <div
+                              className="font-medium truncate cursor-pointer hover:text-blue-400"
+                              onClick={() => startUnfinishedEdit(sound)}
+                              title="Click to rename"
+                            >
+                              {sound.alias}
+                            </div>
+                          )}
+                        </div>
+                        <div className="text-sm text-gray-400 flex items-center gap-2 flex-wrap">
+                          <span title="Original filename">{sound.originalName}</span>
+                          <span>•</span>
+                          <span>{formatFileSize(sound.fileSize)}</span>
+                          {sound.durationSeconds && (
+                            <>
+                              <span>•</span>
+                              <span>{formatDuration(sound.durationSeconds)}</span>
+                            </>
+                          )}
+                        </div>
+                        <div className="text-xs text-gray-500 mt-1">
+                          Uploaded {formatRelativeTime(sound.createdAt)}
+                        </div>
+                      </div>
+
+                      {/* Action Buttons */}
+                      <div className="flex gap-2 flex-shrink-0">
+                        <button
+                          onClick={() => toggleUnfinishedPlay(sound.tempId)}
+                          className={`px-3 py-1.5 rounded text-sm font-medium transition-colors ${
+                            playingUnfinishedId === sound.tempId
+                              ? 'bg-orange-600 hover:bg-orange-500'
+                              : 'bg-gray-600 hover:bg-gray-500'
+                          }`}
+                          title={playingUnfinishedId === sound.tempId ? 'Stop' : 'Play preview'}
+                        >
+                          {playingUnfinishedId === sound.tempId ? '⏹️' : '▶️'}
+                        </button>
+                        <button
+                          onClick={() => handleEditUnfinished(sound.tempId)}
+                          className="px-3 py-1.5 bg-blue-600 hover:bg-blue-500 rounded text-sm font-medium transition-colors flex items-center gap-1"
+                          title="Open clip editor to trim audio"
+                        >
+                          ✂️ Edit
+                        </button>
+                        <button
+                          onClick={() => {
+                            setSavingUnfinished(sound.tempId);
+                            saveUnfinishedMutation.mutate(sound.tempId);
+                          }}
+                          disabled={savingUnfinished === sound.tempId || saveUnfinishedMutation.isPending}
+                          className="px-3 py-1.5 bg-green-600 hover:bg-green-500 disabled:bg-gray-600 disabled:cursor-not-allowed rounded text-sm font-medium transition-colors flex items-center gap-1"
+                          title="Save directly to library (file must be under 2MB)"
+                        >
+                          {savingUnfinished === sound.tempId ? '...' : '💾'} Save
+                        </button>
+                        <button
+                          onClick={() => deleteUnfinishedMutation.mutate(sound.tempId)}
+                          disabled={deleteUnfinishedMutation.isPending}
+                          className="px-3 py-1.5 bg-red-600 hover:bg-red-500 disabled:bg-gray-600 disabled:cursor-not-allowed rounded text-sm font-medium transition-colors"
+                          title="Delete this upload"
+                        >
+                          🗑️
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
         )}
 
         {/* Library Tab Content */}
@@ -671,9 +1208,15 @@ export default function MySounds() {
             {/* Mobile: Card Layout */}
             <div className="md:hidden divide-y divide-gray-700 overflow-y-auto flex-1">
               {userSounds.map((sound, index) => (
-                <div key={sound.id} className="p-4">
+                <div key={sound.id} className={`p-4 ${selectedSounds.has(sound.alias) ? 'bg-blue-900/20' : ''}`}>
                   <div className="flex items-start justify-between gap-3">
-                    <span className="text-sm text-gray-500 w-8 flex-shrink-0">{page * pageSize + index + 1}.</span>
+                    <input
+                      type="checkbox"
+                      checked={selectedSounds.has(sound.alias)}
+                      onChange={() => toggleSoundSelection(sound.alias)}
+                      className="w-4 h-4 mt-1 rounded bg-gray-700 border-gray-600 text-orange-600 focus:ring-orange-500 cursor-pointer flex-shrink-0"
+                    />
+                    <span className="text-sm text-gray-500 w-6 flex-shrink-0">{page * pageSize + index + 1}.</span>
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2 mb-1">
                         <AudioPlayer alias={sound.alias} />
@@ -877,7 +1420,16 @@ export default function MySounds() {
                 <table className="w-full">
                   <thead className="sticky top-0 bg-gray-800 z-10">
                     <tr className="text-left text-gray-400 border-b border-gray-700">
-                      <th className="px-4 py-2 w-12">#</th>
+                      <th className="px-2 py-2 w-10">
+                        <input
+                          type="checkbox"
+                          checked={userSounds.length > 0 && userSounds.every((s: UserSound) => selectedSounds.has(s.alias))}
+                          onChange={() => toggleSelectAllOnPage(userSounds)}
+                          className="w-4 h-4 rounded bg-gray-700 border-gray-600 text-orange-600 focus:ring-orange-500 cursor-pointer"
+                          title="Select all on this page"
+                        />
+                      </th>
+                      <th className="px-2 py-2 w-12">#</th>
                       <th className="px-4 py-2 w-16">Play</th>
                       <SortableHeader label="Alias" field="alias" currentSort={sortField} currentDirection={sortDirection} onSort={handleSort} />
                       <SortableHeader label="Size" field="fileSize" currentSort={sortField} currentDirection={sortDirection} onSort={handleSort} />
@@ -892,8 +1444,16 @@ export default function MySounds() {
                   </thead>
                   <tbody className="divide-y divide-gray-700">
                   {userSounds.map((sound, index) => (
-                    <tr key={sound.id} className="hover:bg-gray-700/30">
-                      <td className="px-4 py-2 text-sm text-gray-500">{page * pageSize + index + 1}</td>
+                    <tr key={sound.id} className={`hover:bg-gray-700/30 ${selectedSounds.has(sound.alias) ? 'bg-blue-900/20' : ''}`}>
+                      <td className="px-2 py-2">
+                        <input
+                          type="checkbox"
+                          checked={selectedSounds.has(sound.alias)}
+                          onChange={() => toggleSoundSelection(sound.alias)}
+                          className="w-4 h-4 rounded bg-gray-700 border-gray-600 text-orange-600 focus:ring-orange-500 cursor-pointer"
+                        />
+                      </td>
+                      <td className="px-2 py-2 text-sm text-gray-500">{page * pageSize + index + 1}</td>
                       <td className="px-4 py-2">
                         <AudioPlayer alias={sound.alias} />
                       </td>
@@ -1209,22 +1769,30 @@ export default function MySounds() {
             </div>
           ) : (
             /* Upload Form Mode */
-            <div className="bg-gray-800 rounded-lg p-6 max-w-md w-full">
+            <div className="bg-gray-800 rounded-lg p-6 max-w-lg w-full">
               <h3 className="text-lg font-semibold mb-4">Add New Sound</h3>
 
-              {/* Mode Toggle */}
+              {/* Mode Toggle - now with 3 options */}
               <div className="flex mb-4 bg-gray-700 rounded-lg p-1">
                 <button
                   onClick={() => setUploadMode('file')}
-                  className={`flex-1 py-2 px-4 rounded-md text-sm font-medium transition-colors ${
+                  className={`flex-1 py-2 px-3 rounded-md text-sm font-medium transition-colors ${
                     uploadMode === 'file' ? 'bg-orange-600 text-white' : 'text-gray-300 hover:text-white'
                   }`}
                 >
-                  Upload File
+                  Single File
+                </button>
+                <button
+                  onClick={() => setUploadMode('multi')}
+                  className={`flex-1 py-2 px-3 rounded-md text-sm font-medium transition-colors ${
+                    uploadMode === 'multi' ? 'bg-orange-600 text-white' : 'text-gray-300 hover:text-white'
+                  }`}
+                >
+                  Multiple Files
                 </button>
                 <button
                   onClick={() => setUploadMode('url')}
-                  className={`flex-1 py-2 px-4 rounded-md text-sm font-medium transition-colors ${
+                  className={`flex-1 py-2 px-3 rounded-md text-sm font-medium transition-colors ${
                     uploadMode === 'url' ? 'bg-orange-600 text-white' : 'text-gray-300 hover:text-white'
                   }`}
                 >
@@ -1233,7 +1801,7 @@ export default function MySounds() {
               </div>
 
               <div className="space-y-4">
-                {/* File Upload */}
+                {/* Single File Upload */}
                 {uploadMode === 'file' && (
                   <div>
                     <label className="block text-sm text-gray-400 mb-1">Audio File (MP3 or WAV, max 20MB)</label>
@@ -1251,6 +1819,49 @@ export default function MySounds() {
                     <p className="text-xs text-gray-500 mt-2">
                       You'll be able to select a 30-second clip after uploading
                     </p>
+                  </div>
+                )}
+
+                {/* Multi-File Upload */}
+                {uploadMode === 'multi' && (
+                  <div>
+                    <label className="block text-sm text-gray-400 mb-1">
+                      Audio Files (MP3 or WAV, max 10MB each)
+                    </label>
+                    <input
+                      ref={fileInputRef}
+                      type="file"
+                      accept=".mp3,.wav,audio/mpeg,audio/wav,audio/wave"
+                      multiple
+                      onChange={handleMultiFileSelect}
+                      className="w-full bg-gray-700 border border-gray-600 rounded px-4 py-2 text-white file:mr-4 file:py-1 file:px-4 file:rounded file:border-0 file:bg-orange-600 file:text-white file:cursor-pointer hover:file:bg-orange-500"
+                    />
+                    {uploadFiles.length > 0 && (
+                      <div className="mt-2 space-y-1">
+                        <p className="text-sm text-gray-400">
+                          {uploadFiles.length} file{uploadFiles.length !== 1 ? 's' : ''} selected
+                          ({(uploadFiles.reduce((acc, f) => acc + f.size, 0) / 1024 / 1024).toFixed(1)} MB total)
+                        </p>
+                        <div className="max-h-32 overflow-y-auto text-xs text-gray-500 space-y-0.5">
+                          {uploadFiles.map((f, i) => (
+                            <div key={i} className="truncate">
+                              • {f.name} ({(f.size / 1024 / 1024).toFixed(1)} MB)
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                    <div className="mt-2 p-3 bg-yellow-900/30 border border-yellow-600/50 rounded text-sm">
+                      <p className="text-yellow-400 font-medium">📦 Batch Upload Mode</p>
+                      <p className="text-yellow-300/80 text-xs mt-1">
+                        Files will go to the <strong>Unfinished</strong> tab where you can:
+                      </p>
+                      <ul className="text-yellow-300/80 text-xs mt-1 ml-3 list-disc">
+                        <li>Edit aliases before saving</li>
+                        <li>Clip/trim each sound individually</li>
+                        <li>Save directly if under 10MB</li>
+                      </ul>
+                    </div>
                   </div>
                 )}
 
@@ -1273,26 +1884,81 @@ export default function MySounds() {
               </div>
 
               {uploadError && (
-                <p className="text-red-400 text-sm mt-3">{uploadError}</p>
+                <p className="text-red-400 text-sm mt-3 whitespace-pre-wrap">{uploadError}</p>
+              )}
+
+              {isMultiUploading && multiUploadProgress && (
+                <div className="mt-3">
+                  <div className="flex justify-between text-sm text-gray-400 mb-1">
+                    <span>Uploading...</span>
+                    <span>{multiUploadProgress.uploaded}/{multiUploadProgress.total}</span>
+                  </div>
+                  <div className="w-full bg-gray-700 rounded-full h-2">
+                    <div
+                      className="bg-orange-600 h-2 rounded-full transition-all"
+                      style={{ width: `${(multiUploadProgress.uploaded / multiUploadProgress.total) * 100}%` }}
+                    />
+                  </div>
+                </div>
               )}
 
               <div className="flex justify-end gap-3 mt-6">
                 <button
                   onClick={resetUploadModal}
-                  className="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded transition-colors"
+                  disabled={isUploading || isMultiUploading}
+                  className="px-4 py-2 bg-gray-700 hover:bg-gray-600 disabled:bg-gray-800 disabled:cursor-not-allowed rounded transition-colors"
                 >
                   Cancel
                 </button>
-                <button
-                  onClick={handleTempUpload}
-                  disabled={isUploading || (uploadMode === 'file' ? !uploadFile : !uploadUrl)}
-                  className="px-4 py-2 bg-orange-600 hover:bg-orange-500 disabled:bg-gray-600 disabled:cursor-not-allowed rounded font-medium transition-colors"
-                >
-                  {isUploading ? 'Uploading...' : 'Continue to Editor'}
-                </button>
+                {uploadMode === 'multi' ? (
+                  <button
+                    onClick={handleMultiFileUpload}
+                    disabled={isMultiUploading || uploadFiles.length === 0}
+                    className="px-4 py-2 bg-orange-600 hover:bg-orange-500 disabled:bg-gray-600 disabled:cursor-not-allowed rounded font-medium transition-colors"
+                  >
+                    {isMultiUploading ? 'Uploading...' : `Upload ${uploadFiles.length} File${uploadFiles.length !== 1 ? 's' : ''}`}
+                  </button>
+                ) : (
+                  <button
+                    onClick={handleTempUpload}
+                    disabled={isUploading || (uploadMode === 'file' ? !uploadFile : !uploadUrl)}
+                    className="px-4 py-2 bg-orange-600 hover:bg-orange-500 disabled:bg-gray-600 disabled:cursor-not-allowed rounded font-medium transition-colors"
+                  >
+                    {isUploading ? 'Uploading...' : 'Continue to Editor'}
+                  </button>
+                )}
               </div>
             </div>
           )}
+        </div>
+      )}
+
+      {/* Unfinished Sound Clip Editor Modal */}
+      {editingUnfinishedSound && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4 overflow-y-auto">
+          <div className="max-w-3xl w-full my-8">
+            <SoundClipEditor
+              tempId={editingUnfinishedSound.tempId}
+              durationSeconds={editingUnfinishedSound.durationSeconds}
+              maxClipDuration={editingUnfinishedSound.maxClipDuration}
+              originalName={editingUnfinishedSound.originalName}
+              onSave={handleSaveUnfinishedClip}
+              onCancel={() => {
+                setEditingUnfinishedSound(null);
+                setIsSavingClip(false);
+                setSaveClipError('');
+              }}
+              isSaving={isSavingClip}
+              saveError={saveClipError}
+              isReclip={false}
+              existingAliases={[
+                ...(soundsData?.sounds?.map((s: UserSound) => s.alias) || []),
+                ...(unfinishedData?.sounds?.map((s: UnfinishedSound) => s.alias) || []),
+              ]}
+              initialAlias={editingUnfinishedSound.alias}
+              streamUrl={sounds.getUnfinishedStreamUrl(editingUnfinishedSound.tempId)}
+            />
+          </div>
         </div>
       )}
 
@@ -1400,6 +2066,106 @@ export default function MySounds() {
                 {visibilityMutation.isPending ? 'Changing...' : 'Make Private'}
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Batch Add to Playlists Modal */}
+      {showPlaylistModal && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
+          <div className="bg-gray-800 rounded-lg p-6 max-w-md w-full max-h-[80vh] flex flex-col">
+            <h3 className="text-lg font-semibold mb-4">Add to Playlists</h3>
+
+            {batchAddResults ? (
+              // Show results after batch add
+              <div className="flex-1">
+                <div className="bg-green-900/30 border border-green-600 rounded-lg p-4 mb-4">
+                  <p className="text-green-400 font-medium mb-2">Done!</p>
+                  <ul className="text-gray-300 text-sm space-y-1">
+                    <li>✓ {batchAddResults.added} sound{batchAddResults.added !== 1 ? 's' : ''} added to playlist{selectedPlaylists.size !== 1 ? 's' : ''}</li>
+                    {batchAddResults.skipped > 0 && (
+                      <li className="text-gray-400">⊘ {batchAddResults.skipped} skipped (already in playlist)</li>
+                    )}
+                  </ul>
+                </div>
+                <div className="flex justify-end">
+                  <button
+                    onClick={closeBatchAddModal}
+                    className="px-4 py-2 bg-orange-600 hover:bg-orange-500 rounded font-medium transition-colors"
+                  >
+                    Done
+                  </button>
+                </div>
+              </div>
+            ) : (
+              // Show playlist selection
+              <>
+                <p className="text-gray-400 text-sm mb-4">
+                  Adding {selectedSounds.size} sound{selectedSounds.size !== 1 ? 's' : ''} to selected playlists.
+                  {' '}Sounds already in a playlist will be skipped.
+                </p>
+
+                {userPlaylists.length === 0 ? (
+                  <div className="flex-1 flex flex-col items-center justify-center py-8">
+                    <div className="text-4xl mb-3">📁</div>
+                    <p className="text-gray-400 text-center">
+                      You don't have any playlists yet.
+                    </p>
+                    <button
+                      onClick={() => {
+                        closeBatchAddModal();
+                        navigate('/sounds/playlists');
+                      }}
+                      className="mt-4 px-4 py-2 bg-blue-600 hover:bg-blue-500 rounded font-medium transition-colors"
+                    >
+                      Create a Playlist
+                    </button>
+                  </div>
+                ) : (
+                  <>
+                    <div className="flex-1 overflow-y-auto border border-gray-700 rounded-lg divide-y divide-gray-700 mb-4">
+                      {userPlaylists.map((playlist: { name: string; soundCount?: number }) => (
+                        <label
+                          key={playlist.name}
+                          className="flex items-center gap-3 p-3 hover:bg-gray-700/50 cursor-pointer"
+                        >
+                          <input
+                            type="checkbox"
+                            checked={selectedPlaylists.has(playlist.name)}
+                            onChange={() => togglePlaylistSelection(playlist.name)}
+                            className="w-4 h-4 rounded bg-gray-700 border-gray-600 text-orange-600 focus:ring-orange-500"
+                          />
+                          <span className="flex-1 font-medium">{playlist.name}</span>
+                          {playlist.soundCount !== undefined && (
+                            <span className="text-sm text-gray-500">{playlist.soundCount} sounds</span>
+                          )}
+                        </label>
+                      ))}
+                    </div>
+
+                    <div className="flex justify-end gap-3">
+                      <button
+                        onClick={closeBatchAddModal}
+                        disabled={isAddingToPlaylists}
+                        className="px-4 py-2 bg-gray-700 hover:bg-gray-600 disabled:bg-gray-800 disabled:cursor-not-allowed rounded transition-colors"
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        onClick={handleBatchAddToPlaylists}
+                        disabled={isAddingToPlaylists || selectedPlaylists.size === 0}
+                        className="px-4 py-2 bg-orange-600 hover:bg-orange-500 disabled:bg-gray-600 disabled:cursor-not-allowed rounded font-medium transition-colors"
+                      >
+                        {isAddingToPlaylists
+                          ? 'Adding...'
+                          : `Add to ${selectedPlaylists.size} Playlist${selectedPlaylists.size !== 1 ? 's' : ''}`
+                        }
+                      </button>
+                    </div>
+                  </>
+                )}
+              </>
+            )}
           </div>
         </div>
       )}

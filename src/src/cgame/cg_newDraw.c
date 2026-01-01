@@ -33,6 +33,9 @@
  */
 
 #include "cg_local.h"
+#ifdef FEATURE_VOICE
+#include "cg_etman.h"
+#endif
 
 /**
  * @brief CG_TrimLeftPixels
@@ -738,6 +741,11 @@ void CG_MouseEvent(int x, int y)
 	}
 #endif
 		break;
+#ifdef FEATURE_VOICE
+	case CGAME_EVENT_SOUNDMENU:
+		/* Sound menu - don't capture mouse, allow normal view movement */
+		break;
+#endif
 	default:
 		if (cg.snap->ps.pm_type == PM_INTERMISSION)
 		{
@@ -902,6 +910,14 @@ void CG_EventHandling(int type, qboolean fForced)
 			cg.showSpawnpointsMenu = qfalse;
 			trap_Cvar_Set("cl_bypassmouseinput", "0");
 		}
+#ifdef FEATURE_VOICE
+		else if (cgs.eventHandling == CGAME_EVENT_SOUNDMENU)
+		{
+			/* Escape was pressed - close the sound menu */
+			extern void ETMan_CloseMenu(void);
+			ETMan_CloseMenu();
+		}
+#endif
 		else if (cg.snap && cg.snap->ps.pm_type == PM_INTERMISSION && fForced)
 		{
 			trap_UI_Popup(UIMENU_INGAME);
@@ -1011,6 +1027,11 @@ void CG_KeyEvent(int key, qboolean down)
 	case CGAME_EVENT_HUDEDITOR:
 		CG_HudEditor_KeyHandling(key, down);
 		break;
+#ifdef FEATURE_VOICE
+	case CGAME_EVENT_SOUNDMENU:
+		ETMan_SoundMenu_KeyHandling(key, down);
+		return;  /* Don't fall through to default which clears event handling */
+#endif
 #ifdef FEATURE_MULTIVIEW
 	case  CGAME_EVENT_MULTIVIEW:
 #ifdef FEATURE_EDV

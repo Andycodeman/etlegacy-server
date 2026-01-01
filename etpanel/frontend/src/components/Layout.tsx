@@ -1,7 +1,8 @@
 import { useState, useEffect } from 'react';
 import { Link, Outlet, useNavigate, useLocation } from 'react-router-dom';
+import { useQuery } from '@tanstack/react-query';
 import { useAuthStore } from '../stores/auth';
-import { auth } from '../api/client';
+import { auth, sounds } from '../api/client';
 
 const navItems = [
   { path: '/', label: 'Dashboard', icon: '📊' },
@@ -29,6 +30,29 @@ export default function Layout() {
   const navigate = useNavigate();
   const location = useLocation();
   const [sidebarOpen, setSidebarOpen] = useState(false);
+
+  // Fetch counts for sidebar badges
+  const { data: mySoundsData } = useQuery({
+    queryKey: ['mySounds'],
+    queryFn: sounds.list,
+    staleTime: 30000, // Cache for 30 seconds
+  });
+
+  const { data: playlistsData } = useQuery({
+    queryKey: ['playlists'],
+    queryFn: sounds.playlists,
+    staleTime: 30000,
+  });
+
+  const { data: publicLibraryData } = useQuery({
+    queryKey: ['publicLibrary'],
+    queryFn: () => sounds.publicLibrary(),
+    staleTime: 30000,
+  });
+
+  const mySoundsCount = mySoundsData?.sounds?.length || 0;
+  const playlistsCount = playlistsData?.playlists?.length || 0;
+  const publicLibraryCount = publicLibraryData?.sounds?.length || 0;
 
   // Close sidebar on route change (mobile)
   useEffect(() => {
@@ -129,20 +153,37 @@ export default function Layout() {
             <div className="px-4 py-2 text-xs font-semibold text-gray-500 uppercase tracking-wider">
               Sounds
             </div>
-            {soundNavItems.map((item) => (
-              <Link
-                key={item.path}
-                to={item.path}
-                className={`flex items-center gap-3 px-4 py-3 md:py-2 rounded-lg transition-colors ${
-                  location.pathname === item.path
-                    ? 'bg-orange-600 text-white'
-                    : 'text-gray-300 hover:bg-gray-700'
-                }`}
-              >
-                <span className="text-lg md:text-base">{item.icon}</span>
-                <span>{item.label}</span>
-              </Link>
-            ))}
+            {soundNavItems.map((item) => {
+              // Get the count for each item
+              let count = 0;
+              if (item.path === '/sounds') count = mySoundsCount;
+              else if (item.path === '/sounds/playlists') count = playlistsCount;
+              else if (item.path === '/sounds/public') count = publicLibraryCount;
+
+              return (
+                <Link
+                  key={item.path}
+                  to={item.path}
+                  className={`flex items-center gap-3 px-4 py-3 md:py-2 rounded-lg transition-colors ${
+                    location.pathname === item.path
+                      ? 'bg-orange-600 text-white'
+                      : 'text-gray-300 hover:bg-gray-700'
+                  }`}
+                >
+                  <span className="text-lg md:text-base">{item.icon}</span>
+                  <span className="flex-1">{item.label}</span>
+                  {count > 0 && (
+                    <span className={`px-1.5 py-0.5 text-xs rounded-full ${
+                      location.pathname === item.path
+                        ? 'bg-orange-700 text-white'
+                        : 'bg-gray-600 text-gray-300'
+                    }`}>
+                      {count}
+                    </span>
+                  )}
+                </Link>
+              );
+            })}
           </div>
         </nav>
 

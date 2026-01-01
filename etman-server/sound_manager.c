@@ -1660,6 +1660,143 @@ void SoundMgr_HandlePacket(uint32_t clientId, struct sockaddr_in *clientAddr,
             break;
         }
 
+        case VOICE_CMD_MENU_NAVIGATE: {
+            /* Hierarchical menu navigation - get specific menu page */
+            printf("[DEBUG] MENU_NAVIGATE: received, payloadLen=%d\n", payloadLen);
+
+            if (!g_soundMgr.dbMode) {
+                sendResponseToClient(clientId, VOICE_RESP_ERROR, "Menus require database mode");
+                break;
+            }
+
+            char guid[SOUND_GUID_LEN + 1];
+            if (!getGuidByClientId(clientId, guid, sizeof(guid))) {
+                sendResponseToClient(clientId, VOICE_RESP_ERROR, "Not authenticated");
+                break;
+            }
+
+            printf("[DEBUG] MENU_NAVIGATE: clientId=%u, guid=%s\n", clientId, guid);
+
+            /* Parse menuId and pageOffset from payload
+             * Payload format: [guid:32][menuId:4][pageOffset:2]
+             * Total: 38 bytes minimum
+             */
+            if (payloadLen < SOUND_GUID_LEN + 6) {
+                printf("[DEBUG] MENU_NAVIGATE: payload too short (%d < %d)\n",
+                       payloadLen, SOUND_GUID_LEN + 6);
+                sendResponseToClient(clientId, VOICE_RESP_ERROR, "Invalid request");
+                break;
+            }
+
+            uint32_t menuIdNet;
+            uint16_t pageOffsetNet;
+            memcpy(&menuIdNet, payload + SOUND_GUID_LEN, 4);
+            memcpy(&pageOffsetNet, payload + SOUND_GUID_LEN + 4, 2);
+            int menuId = ntohl(menuIdNet);
+            int pageOffset = ntohs(pageOffsetNet);
+
+            printf("[DEBUG] MENU_NAVIGATE: menuId=%d, pageOffset=%d\n", menuId, pageOffset);
+
+            DBMenuPageResult result;
+            if (!DB_GetMenuPage(guid, menuId, pageOffset, &result)) {
+                sendResponseToClient(clientId, VOICE_RESP_ERROR, "Menu not found");
+                break;
+            }
+
+            /* Build hierarchical binary response:
+             * [menuId:4][totalItems:2][pageOffset:2][itemCount:1]
+             * per item: [position:1][itemType:1][nameLen:1][name][dataLen:1][data]
+             * For sounds: data = alias
+             * For menus: data = nestedMenuId[4]
+             */
+            uint8_t response[2048];
+            int offset = 0;
+
+            uint32_t menuIdResp = htonl(result.menu.menuId);
+            uint16_t totalItemsResp = htons(result.menu.totalItems);
+            uint16_t pageOffsetResp = htons(result.menu.pageOffset);
+
+            memcpy(response + offset, &menuIdResp, 4); offset += 4;
+            memcpy(response + offset, &totalItemsResp, 2); offset += 2;
+            memcpy(response + offset, &pageOffsetResp, 2); offset += 2;
+            response[offset++] = (uint8_t)result.menu.itemCount;
+
+            for (int i = 0; i < result.menu.itemCount && offset < 2000; i++) {
+                DBMenuItem *item = &result.menu.items[i];
+                int nameLen = strlen(item->name);
+
+                response[offset++] = (uint8_t)item->position;
+                response[offset++] = (uint8_t)item->itemType;
+                response[offset++] = (uint8_t)nameLen;
+                memcpy(response + offset, item->name, nameLen);
+                offset += nameLen;
+
+                if (item->itemType == DB_MENU_ITEM_MENU) {
+                    /* Menu: send nestedMenuId (4 bytes) */
+                    response[offset++] = 4;
+                    uint32_t nestedIdNet = htonl(item->nestedMenuId);
+                    memcpy(response + offset, &nestedIdNet, 4);
+                    offset += 4;
+                } else {
+                    /* Sound: send alias */
+                    int aliasLen = strlen(item->soundAlias);
+                    response[offset++] = (uint8_t)aliasLen;
+                    memcpy(response + offset, item->soundAlias, aliasLen);
+                    offset += aliasLen;
+                }
+            }
+
+            printf("[DEBUG] MENU_NAVIGATE: built response, offset=%d bytes\n", offset);
+            printf("[MENU] Sending menu page (id=%d, items=%d/%d, page=%d) to client %u\n",
+                   result.menu.menuId, result.menu.itemCount, result.menu.totalItems,
+                   pageOffset / 9 + 1, clientId);
+            sendBinaryToClient(clientId, VOICE_RESP_MENU_DATA, response, offset);
+            break;
+        }
+
+        case VOICE_CMD_SOUND_BY_ID: {
+            /* Play sound by database ID (user_sounds.id or public sound_files.id) */
+            if (!g_soundMgr.dbMode) {
+                sendResponseToClient(clientId, VOICE_RESP_ERROR, "Requires database mode");
+                break;
+            }
+
+            char guid[SOUND_GUID_LEN + 1];
+            if (!getGuidByClientId(clientId, guid, sizeof(guid))) {
+                sendResponseToClient(clientId, VOICE_RESP_ERROR, "Not authenticated");
+                break;
+            }
+
+            /* Parse soundId from payload (2 bytes for now, could be 4 for larger IDs) */
+            if (payloadLen < SOUND_GUID_LEN + 2) {
+                sendResponseToClient(clientId, VOICE_RESP_ERROR, "Invalid request");
+                break;
+            }
+
+            uint16_t soundIdNet;
+            memcpy(&soundIdNet, payload + SOUND_GUID_LEN, 2);
+            int soundId = ntohs(soundIdNet);
+
+            char filePath[512], soundName[64];
+            if (!DB_GetSoundById(guid, soundId, filePath, sizeof(filePath), soundName, sizeof(soundName))) {
+                char msg[64];
+                snprintf(msg, sizeof(msg), "Sound #%d not found", soundId);
+                sendResponseToClient(clientId, VOICE_RESP_ERROR, msg);
+                break;
+            }
+
+            printf("[PLAYID] Playing sound #%d (%s) for client %u\n", soundId, soundName, clientId);
+
+            if (SoundMgr_PlaySoundByPath(clientId, guid, soundName, filePath)) {
+                char msg[128];
+                snprintf(msg, sizeof(msg), "Playing #%d: %s", soundId, soundName);
+                sendResponseToClient(clientId, VOICE_RESP_SUCCESS, msg);
+            } else {
+                sendResponseToClient(clientId, VOICE_RESP_ERROR, "Failed to play sound");
+            }
+            break;
+        }
+
         default:
             sendResponseToClient(clientId, VOICE_RESP_ERROR, "Unknown command");
             break;
@@ -2621,9 +2758,9 @@ static bool decodeWAV(const char *filepath, int16_t **outPcm, int *outSamples) {
         return false;
     }
 
-    if (bitsPerSample != 16) {
+    if (bitsPerSample != 8 && bitsPerSample != 16) {
         fclose(f);
-        printf("SoundMgr: WAV - Only 16-bit supported (got %d-bit)\n", bitsPerSample);
+        printf("SoundMgr: WAV - Only 8-bit and 16-bit supported (got %d-bit)\n", bitsPerSample);
         return false;
     }
 
@@ -2633,15 +2770,15 @@ static bool decodeWAV(const char *filepath, int16_t **outPcm, int *outSamples) {
         return false;
     }
 
-    /* Seek to data and read PCM */
+    /* Seek to data and read raw audio */
     fseek(f, dataOffset, SEEK_SET);
-    int16_t *rawData = (int16_t*)malloc(dataSize);
-    if (!rawData) {
+    uint8_t *rawBytes = (uint8_t*)malloc(dataSize);
+    if (!rawBytes) {
         fclose(f);
         return false;
     }
 
-    size_t bytesRead = fread(rawData, 1, dataSize, f);
+    size_t bytesRead = fread(rawBytes, 1, dataSize, f);
     fclose(f);
 
     if (bytesRead < dataSize) {
@@ -2650,6 +2787,25 @@ static bool decodeWAV(const char *filepath, int16_t **outPcm, int *outSamples) {
     }
 
     int totalSamples = dataSize / (bitsPerSample / 8) / numChannels;
+
+    /* Convert to 16-bit if 8-bit */
+    int16_t *rawData;
+    if (bitsPerSample == 8) {
+        printf("SoundMgr: WAV - Converting 8-bit to 16-bit\n");
+        rawData = (int16_t*)malloc(totalSamples * numChannels * sizeof(int16_t));
+        if (!rawData) {
+            free(rawBytes);
+            return false;
+        }
+        /* 8-bit WAV is unsigned (0-255), center at 128. Convert to signed 16-bit. */
+        for (int i = 0; i < totalSamples * numChannels; i++) {
+            rawData[i] = ((int16_t)rawBytes[i] - 128) * 256;
+        }
+        free(rawBytes);
+    } else {
+        /* Already 16-bit */
+        rawData = (int16_t*)rawBytes;
+    }
 
     /* Convert to mono if stereo */
     int16_t *monoData;

@@ -939,12 +939,12 @@ static void processSoundPlayback(void) {
 }
 
 /*
- * Check if packet is a sound command (0x10-0x33 range)
+ * Check if packet is a sound command (0x10-0x36 range)
  */
 static bool isSoundCommand(uint8_t type) {
-    /* Sound commands: 0x10-0x27, account registration 0x30-0x31, menus 0x32-0x33 */
+    /* Sound commands: 0x10-0x27, account registration 0x30-0x31, menus 0x32-0x36 */
     return (type >= VOICE_CMD_SOUND_ADD && type <= VOICE_CMD_PLAYLIST_PUBLIC_SHOW) ||
-           (type >= VOICE_CMD_ACCOUNT_REGISTER && type <= VOICE_CMD_MENU_PLAY);
+           (type >= VOICE_CMD_ACCOUNT_REGISTER && type <= VOICE_CMD_SOUND_BY_ID);
 }
 
 /*

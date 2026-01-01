@@ -59,6 +59,10 @@
 #define VOICE_CMD_MENU_PLAY               0x33
 #define VOICE_RESP_MENU_DATA              0x34
 
+/* Hierarchical menu navigation */
+#define VOICE_CMD_MENU_NAVIGATE           0x35  /* Navigate to menu: <menuId:4><pageOffset:2> */
+#define VOICE_CMD_SOUND_BY_ID             0x36  /* Play sound by position ID: <position:2> */
+
 /*
  * Sound Response Packet Types (server -> client)
  */
@@ -75,28 +79,60 @@
 #define ETMAN_MAX_NAME_LEN      32
 #define ETMAN_MAX_MENUS         9
 #define ETMAN_MAX_MENU_ITEMS    9
+#define ETMAN_ITEMS_PER_PAGE    9
+#define ETMAN_MAX_MENU_DEPTH    10
 
 /*
- * Menu item structure
+ * Item types for hierarchical menus
+ */
+#define ETMAN_ITEM_SOUND        0   // Item is a playable sound
+#define ETMAN_ITEM_MENU         1   // Item is a nested menu/playlist
+
+/*
+ * Menu item structure (supports sounds and nested menus)
  */
 typedef struct
 {
-	int  position;                          // 1-9 position in menu
-	char name[ETMAN_MAX_NAME_LEN + 1];      // Display name
-	char soundAlias[ETMAN_MAX_NAME_LEN + 1]; // Sound alias to play
+	int      position;                          // 1-9 position in current page
+	char     name[ETMAN_MAX_NAME_LEN + 1];      // Display name
+	char     soundAlias[ETMAN_MAX_NAME_LEN + 1]; // Sound alias (if type=SOUND)
+	int      itemType;                          // ETMAN_ITEM_SOUND or ETMAN_ITEM_MENU
+	int      nestedMenuId;                      // Menu ID to navigate to (if type=MENU)
 } etmanMenuItem_t;
 
 /*
- * Menu structure
+ * Menu structure (now represents a single menu context with pagination)
  */
 typedef struct
 {
-	int             position;               // 1-9 position in root menu
+	int             menuId;                 // Database menu ID (0 = root)
+	int             position;               // 1-9 position in parent menu
 	char            name[ETMAN_MAX_NAME_LEN + 1];
-	qboolean        isPlaylist;             // Backed by playlist
-	int             itemCount;
+	qboolean        isPlaylist;             // Backed by playlist (auto-populated)
+	int             itemCount;              // Items in current page
+	int             totalItems;             // Total items in this menu
+	int             pageOffset;             // Current pagination offset
 	etmanMenuItem_t items[ETMAN_MAX_MENU_ITEMS];
 } etmanMenu_t;
+
+/*
+ * Navigation stack for hierarchical menu traversal
+ */
+typedef struct
+{
+	int menuId;                             // Menu ID at this level
+	int pageOffset;                         // Page offset at this level
+	char name[ETMAN_MAX_NAME_LEN + 1];      // Menu name for breadcrumb
+} etmanNavStackEntry_t;
+
+/*
+ * Navigation state
+ */
+typedef struct
+{
+	etmanNavStackEntry_t stack[ETMAN_MAX_MENU_DEPTH];
+	int                  depth;             // Current depth (0 = root)
+} etmanNavStack_t;
 
 /**
  * Initialize ETMan system.
@@ -164,6 +200,47 @@ void ETMan_RequestMenus(void);
 void CG_SoundMenu_f(void);      /* Toggle menu on/off */
 void CG_SoundMenuDown_f(void);  /* +soundmenu (open menu) */
 void CG_SoundMenuUp_f(void);    /* -soundmenu (currently does nothing) */
+
+/**
+ * Key handling for sound menu (called from CG_KeyEvent).
+ * This properly intercepts keys so weapon binds don't fire.
+ */
+void ETMan_SoundMenu_KeyHandling(int key, qboolean down);
+
+/**
+ * Navigate to a specific menu (for hierarchical navigation).
+ * @param menuId Target menu ID (0 = root)
+ * @param pageOffset Starting page offset
+ */
+void ETMan_NavigateToMenu(int menuId, int pageOffset);
+
+/**
+ * Navigate back to parent menu.
+ * @return qtrue if navigated back, qfalse if already at root
+ */
+qboolean ETMan_NavigateBack(void);
+
+/**
+ * Navigate to next page of current menu.
+ * @return qtrue if more pages available
+ */
+qboolean ETMan_NextPage(void);
+
+/**
+ * Play a sound by its position ID in user's library.
+ * @param positionId 1-based position (by added date order)
+ */
+void ETMan_PlaySoundById(int positionId);
+
+/**
+ * Toggle sound ID input mode (for quick-load).
+ */
+void ETMan_ToggleIdMode(void);
+
+/**
+ * Console command: /etman playid <number>
+ */
+void CG_SoundPlayId_f(void);
 
 #endif /* FEATURE_VOICE */
 

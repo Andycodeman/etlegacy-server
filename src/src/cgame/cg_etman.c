@@ -29,13 +29,24 @@ static struct
 	int      shareRequestTime;
 
 	/* Sound menu state */
-	qboolean      menuActive;          // Menu HUD visible
-	qboolean      menuDataLoaded;      // Have we received menu data from server
-	int           menuRequestTime;     // When we last requested menus
-	int           currentMenuLevel;    // 0 = root menu, 1+ = submenu
-	int           selectedMenu;        // Which menu is selected (1-9)
-	int           menuCount;           // Number of menus
-	etmanMenu_t   menus[ETMAN_MAX_MENUS];
+	qboolean        menuActive;          // Menu HUD visible
+	qboolean        menuDataLoaded;      // Have we received menu data from server
+	int             menuRequestTime;     // When we last requested menus
+
+	/* Hierarchical navigation state */
+	etmanMenu_t     currentMenu;         // Currently displayed menu
+	etmanNavStack_t navStack;            // Navigation history for back button
+
+	/* Legacy compatibility (kept for reference during transition) */
+	int             currentMenuLevel;    // 0 = root menu, 1+ = submenu (deprecated)
+	int             selectedMenu;        // Which menu is selected (deprecated)
+	int             menuCount;           // Number of menus (deprecated)
+	etmanMenu_t     menus[ETMAN_MAX_MENUS]; // (deprecated, kept for compat)
+
+	/* Sound ID quick-load mode */
+	qboolean        idModeActive;        // ID input mode active
+	char            idInputBuffer[8];    // Buffer for typing ID number
+	int             idInputLen;          // Current input length
 
 } etman;
 
@@ -46,6 +57,7 @@ static void ETMan_SendPacket(uint8_t *data, int len);
 static void ETMan_ShowHelp(void);
 static qboolean ETMan_GetGuid(char *outGuid, int outLen);
 static void ETMan_ParseMenuData(const uint8_t *data, int dataLen);
+static void ETMan_ParseHierarchicalMenuData(const uint8_t *data, int dataLen);
 static void ETMan_PlayMenuSound(const char *soundAlias);
 static void ETMan_DrawMenu(void);
 
@@ -99,6 +111,10 @@ static void ETMan_SendPacket(uint8_t *data, int len)
 	extern void Voice_SendRawPacket(const uint8_t *data, int len);
 	Voice_SendRawPacket(data, len);
 }
+
+/* Forward declarations for functions used before definition */
+static void ETMan_CmdPlayId(void);
+static void ETMan_RequestMenuPage(int menuId, int pageOffset);
 
 /**
  * Handle /etman add <url> <name>
@@ -1375,6 +1391,9 @@ static void ETMan_ShowHelp(void)
 	CG_Printf("^7  /etman getpublic <id> <alias> ^5- Add public sound to library\n");
 	CG_Printf("\n^5=== Account ===\n");
 	CG_Printf("^7  /etman register               ^5- Get ETPanel registration code\n");
+	CG_Printf("\n^5=== Quick Play by ID ===\n");
+	CG_Printf("^7  /etman playid <id>            ^5- Play sound by database ID\n");
+	CG_Printf("^7  ^3Example bind: bind F5 \"etman playid 42\"\n");
 	CG_Printf("\n^3Limits: ^7100 sounds, 5MB/file, 30 sec max\n");
 }
 
@@ -1496,6 +1515,11 @@ void ETMan_Cmd_f(void)
 	{
 		ETMan_CmdRegister();
 	}
+	/* Quick play by ID */
+	else if (Q_stricmp(subcmd, "playid") == 0)
+	{
+		ETMan_CmdPlayId();
+	}
 	else if (Q_stricmp(subcmd, "help") == 0)
 	{
 		ETMan_ShowHelp();
@@ -1551,8 +1575,8 @@ void ETMan_HandleResponse(const uint8_t *data, int dataLen)
 		break;
 
 	case VOICE_RESP_MENU_DATA:
-		/* Binary menu data from server */
-		ETMan_ParseMenuData(data + 1, dataLen - 1);
+		/* Binary menu data from server - use new hierarchical parser */
+		ETMan_ParseHierarchicalMenuData(data + 1, dataLen - 1);
 		break;
 
 	default:
@@ -1565,60 +1589,13 @@ void ETMan_HandleResponse(const uint8_t *data, int dataLen)
  */
 void ETMan_Frame(void)
 {
-	int i;
-	static int lastKeyTime[10] = {0};  /* Debounce for keys 0-9 */
-
 	if (!etman.initialized)
 	{
 		return;
 	}
 
-	/* Handle menu key input */
-	if (etman.menuActive)
-	{
-		/* Check ESC key */
-		if (trap_Key_IsDown(K_ESCAPE))
-		{
-			if (cg.time - lastKeyTime[0] > 200)
-			{
-				lastKeyTime[0] = cg.time;
-				if (etman.currentMenuLevel > 0)
-				{
-					etman.currentMenuLevel = 0;
-					etman.selectedMenu = 0;
-				}
-				else
-				{
-					etman.menuActive = qfalse;
-				}
-			}
-		}
-
-		/* Check number keys 1-9 */
-		for (i = 1; i <= 9; i++)
-		{
-			if (trap_Key_IsDown('0' + i))
-			{
-				if (cg.time - lastKeyTime[i] > 300)  /* 300ms debounce */
-				{
-					lastKeyTime[i] = cg.time;
-					CG_Printf("^3ETMan: Key %d pressed\n", i);
-					ETMan_MenuKeyEvent(i);
-				}
-			}
-		}
-
-		/* Check 0 key for back */
-		if (trap_Key_IsDown('0'))
-		{
-			if (cg.time - lastKeyTime[0] > 300)
-			{
-				lastKeyTime[0] = cg.time;
-				CG_Printf("^3ETMan: Key 0 pressed (back)\n");
-				ETMan_MenuKeyEvent(0);
-			}
-		}
-	}
+	/* Key handling is now done in ETMan_SoundMenu_KeyHandling via CG_KeyEvent
+	 * when KEYCATCH_CGAME is active - this prevents weapon binds from firing */
 
 	/* Check for expired share requests */
 	if (etman.hasShareRequest)
@@ -1804,6 +1781,42 @@ static void ETMan_ParseMenuData(const uint8_t *data, int dataLen)
 }
 
 /**
+ * Close the sound menu
+ */
+void ETMan_CloseMenu(void)
+{
+	etman.menuActive       = qfalse;
+	etman.currentMenuLevel = 0;
+	etman.selectedMenu     = 0;
+	cgs.eventHandling = CGAME_EVENT_NONE;
+	trap_Key_SetCatcher(trap_Key_GetCatcher() & ~KEYCATCH_CGAME);
+}
+
+/**
+ * Open the sound menu
+ */
+void ETMan_OpenMenu(void)
+{
+	etman.menuActive       = qtrue;
+	etman.currentMenuLevel = 0;
+	etman.selectedMenu     = 0;
+
+	/* Reset navigation stack and force data reload */
+	etman.navStack.depth = 0;
+	etman.menuDataLoaded = qfalse;
+	etman.currentMenu.itemCount = 0;
+
+	/* Capture keys so weapon binds don't fire, but allow mouse movement */
+	cgs.eventHandling = CGAME_EVENT_SOUNDMENU;
+	trap_Key_SetCatcher(KEYCATCH_CGAME);
+	trap_Cvar_Set("cl_bypassMouseInput", "0");  /* Don't capture mouse - allow view movement */
+
+	/* Always request fresh menu data */
+	CG_Printf("^3ETMan: Requesting menu data...\n");
+	ETMan_RequestMenuPage(0, 0);
+}
+
+/**
  * Toggle menu visibility
  */
 void ETMan_ToggleMenu(void)
@@ -1816,25 +1829,13 @@ void ETMan_ToggleMenu(void)
 
 	if (etman.menuActive)
 	{
-		/* Close menu */
 		CG_Printf("^3ETMan: Closing menu\n");
-		etman.menuActive       = qfalse;
-		etman.currentMenuLevel = 0;
-		etman.selectedMenu     = 0;
+		ETMan_CloseMenu();
 	}
 	else
 	{
-		/* Open menu */
-		CG_Printf("^3ETMan: Opening menu (menuCount=%d, dataLoaded=%d)\n", etman.menuCount, etman.menuDataLoaded);
-		etman.menuActive       = qtrue;
-		etman.currentMenuLevel = 0;
-		etman.selectedMenu     = 0;
-
-		/* Request fresh menu data if we haven't loaded or it's been a while */
-		if (!etman.menuDataLoaded || (cg.time - etman.menuRequestTime > 60000))
-		{
-			ETMan_RequestMenus();
-		}
+		CG_Printf("^3ETMan: Opening menu\n");
+		ETMan_OpenMenu();
 	}
 }
 
@@ -1847,81 +1848,62 @@ qboolean ETMan_IsMenuActive(void)
 }
 
 /**
- * Handle key event while menu is active
+ * Handle key event while menu is active (hierarchical version)
  * @param key - integer 0-9 representing the key pressed
+ *              0 = next page (pagination)
+ *              1-9 = select item
+ *              Use Backspace for back navigation
  */
 qboolean ETMan_MenuKeyEvent(int key)
 {
-	int selection;
 	int i;
-	etmanMenu_t *menu;
+	etmanMenuItem_t *item;
 
 	if (!etman.menuActive)
 	{
 		return qfalse;
 	}
 
-	/* 0 goes back or closes menu */
+	/* 0 = show next page (pagination) */
 	if (key == 0)
 	{
-		if (etman.currentMenuLevel > 0)
+		if (etman.currentMenu.totalItems > ETMAN_ITEMS_PER_PAGE)
 		{
-			/* Go back to root menu */
-			etman.currentMenuLevel = 0;
-			etman.selectedMenu     = 0;
+			ETMan_NextPage();
+			CG_Printf("^3ETMan: Loading next page...\n");
 		}
 		else
 		{
-			/* Close menu entirely */
-			etman.menuActive = qfalse;
+			CG_Printf("^3ETMan: No more pages\n");
 		}
 		return qtrue;
 	}
 
-	/* Number keys 1-9 */
+	/* Number keys 1-9: select item at position */
 	if (key >= 1 && key <= 9)
 	{
-		selection = key;
-
-		if (etman.currentMenuLevel == 0)
+		for (i = 0; i < etman.currentMenu.itemCount; i++)
 		{
-			/* Root menu - select a submenu */
-			for (i = 0; i < etman.menuCount; i++)
+			item = &etman.currentMenu.items[i];
+			if (item->position == key)
 			{
-				if (etman.menus[i].position == selection)
+				if (item->itemType == ETMAN_ITEM_MENU)
 				{
-					if (etman.menus[i].itemCount > 0)
-					{
-						etman.selectedMenu     = i;
-						etman.currentMenuLevel = 1;
-					}
-					else
-					{
-						CG_Printf("^3ETMan: Menu '%s' is empty\n", etman.menus[i].name);
-					}
-					return qtrue;
+					/* Navigate into nested menu/playlist */
+					CG_Printf("^3ETMan: Entering '%s'...\n", item->name);
+					ETMan_NavigateToMenu(item->nestedMenuId, 0);
 				}
-			}
-		}
-		else
-		{
-			/* Submenu - play a sound */
-			menu = &etman.menus[etman.selectedMenu];
-			CG_Printf("^3ETMan: In submenu, looking for position %d (itemCount=%d)\n", selection, menu->itemCount);
-			for (i = 0; i < menu->itemCount; i++)
-			{
-				CG_Printf("^3ETMan: Item %d position=%d alias='%s'\n", i, menu->items[i].position, menu->items[i].soundAlias);
-				if (menu->items[i].position == selection)
+				else
 				{
 					/* Play this sound */
-					CG_Printf("^2ETMan: Playing sound '%s'\n", menu->items[i].soundAlias);
-					ETMan_PlayMenuSound(menu->items[i].soundAlias);
-					etman.menuActive = qfalse;
-					return qtrue;
+					CG_Printf("^2ETMan: Playing '%s'\n", item->name);
+					ETMan_PlayMenuSound(item->soundAlias);
+					ETMan_CloseMenu();
 				}
+				return qtrue;
 			}
-			CG_Printf("^1ETMan: No item found at position %d\n", selection);
 		}
+		CG_Printf("^1ETMan: No item at position %d\n", key);
 	}
 
 	return qfalse;
@@ -1965,37 +1947,38 @@ static void ETMan_PlayMenuSound(const char *soundAlias)
 }
 
 /**
- * Draw the menu HUD
+ * Draw the menu HUD (hierarchical version with colors)
+ * - Cyan (^5) for playlists/menus
+ * - White (^7) for sounds
  */
 static void ETMan_DrawMenu(void)
 {
 	float   x, y, w, h;
-	float   lineHeight = 18;
-	float   padding    = 8;
+	float   lineHeight = 11;
+	float   padding    = 3;
 	int     i;
 	vec4_t  bgColor    = { 0.0f, 0.0f, 0.0f, 0.85f };
-	vec4_t  titleColor = { 1.0f, 0.8f, 0.2f, 1.0f };
+	vec4_t  titleColor = { 1.0f, 0.8f, 0.2f, 1.0f };  /* Yellow/gold for title */
 	float   textY;
-	etmanMenu_t *menu;
+	etmanMenuItem_t *item;
+	int     currentPage, totalPages;
+	char    titleText[64];
+	char    itemText[64];
 
-	/* Fixed position - center of screen */
-	w = 220;
-	x = (640 - w) / 2;  /* 640 is the virtual width */
-	y = 200;
+	/* Position centered horizontally, at top (uses widescreen coords) */
+	w = 240;
+	x = (Ccg_WideX(SCREEN_WIDTH) - w) / 2;
+	y = 10;
 
 	/* Calculate height based on content */
 	if (!etman.menuDataLoaded)
 	{
-		h = padding * 2 + lineHeight * 2;
-	}
-	else if (etman.currentMenuLevel == 0)
-	{
-		h = padding * 2 + lineHeight * (2 + (etman.menuCount > 0 ? etman.menuCount : 1));
+		h = padding * 2 + lineHeight * 3;
 	}
 	else
 	{
-		menu = &etman.menus[etman.selectedMenu];
-		h = padding * 2 + lineHeight * (2 + menu->itemCount);
+		/* Title + items + footer (with pagination info) */
+		h = padding * 2 + lineHeight * (2 + etman.currentMenu.itemCount + 1);
 	}
 
 	/* Draw background */
@@ -2010,49 +1993,75 @@ static void ETMan_DrawMenu(void)
 		CG_Text_Paint_Ext(x + padding, textY + 12, 0.22f, 0.22f, titleColor, "Sound Menu", 0, 0, 0, &cgs.media.limboFont2);
 		textY += lineHeight;
 		CG_Text_Paint_Ext(x + padding, textY + 12, 0.18f, 0.18f, colorWhite, "Loading...", 0, 0, 0, &cgs.media.limboFont2);
+		return;
 	}
-	else if (etman.currentMenuLevel == 0)
+
+	/* Title with breadcrumb if nested */
+	if (etman.navStack.depth > 0)
 	{
-		/* Root menu - show list of menus */
-		CG_Text_Paint_Ext(x + padding, textY + 12, 0.22f, 0.22f, titleColor, "Sound Menu", 0, 0, 0, &cgs.media.limboFont2);
-		textY += lineHeight;
-
-		if (etman.menuCount == 0)
-		{
-			CG_Text_Paint_Ext(x + padding, textY + 12, 0.18f, 0.18f, colorWhite, "No menus configured", 0, 0, 0, &cgs.media.limboFont2);
-			textY += lineHeight;
-		}
-		else
-		{
-			for (i = 0; i < etman.menuCount; i++)
-			{
-				CG_Text_Paint_Ext(x + padding, textY + 12, 0.18f, 0.18f, colorWhite,
-					va("^3%d. ^7%s", etman.menus[i].position, etman.menus[i].name),
-					0, 0, 0, &cgs.media.limboFont2);
-				textY += lineHeight;
-			}
-		}
-
-		CG_Text_Paint_Ext(x + padding, textY + 12, 0.15f, 0.15f, colorWhite, "^3ESC^7 to close", 0, 0, 0, &cgs.media.limboFont2);
+		Com_sprintf(titleText, sizeof(titleText), "%s", etman.currentMenu.name[0] ? etman.currentMenu.name : "Menu");
 	}
 	else
 	{
-		/* Submenu - show items */
-		menu = &etman.menus[etman.selectedMenu];
+		Q_strncpyz(titleText, "Sound Menu", sizeof(titleText));
+	}
+	CG_Text_Paint_Ext(x + padding, textY + 12, 0.22f, 0.22f, titleColor, titleText, 0, 0, 0, &cgs.media.limboFont2);
+	textY += lineHeight;
 
-		CG_Text_Paint_Ext(x + padding, textY + 12, 0.22f, 0.22f, titleColor, menu->name, 0, 0, 0, &cgs.media.limboFont2);
+	/* Draw separator line */
+	CG_FillRect(x + padding, textY, w - padding * 2, 1, colorWhite);
+	textY += 4;
+
+	if (etman.currentMenu.itemCount == 0)
+	{
+		CG_Text_Paint_Ext(x + padding, textY + 12, 0.18f, 0.18f, colorWhite, "No items", 0, 0, 0, &cgs.media.limboFont2);
 		textY += lineHeight;
-
-		for (i = 0; i < menu->itemCount; i++)
+	}
+	else
+	{
+		/* Draw menu items with color coding */
+		for (i = 0; i < etman.currentMenu.itemCount; i++)
 		{
-			CG_Text_Paint_Ext(x + padding, textY + 12, 0.18f, 0.18f, colorWhite,
-				va("^3%d. ^7%s", menu->items[i].position, menu->items[i].name),
-				0, 0, 0, &cgs.media.limboFont2);
+			item = &etman.currentMenu.items[i];
+
+			if (item->itemType == ETMAN_ITEM_MENU)
+			{
+				/* Cyan for playlists/menus - indicates drilling deeper */
+				Com_sprintf(itemText, sizeof(itemText), "^3%d. ^5%s ^7>", item->position, item->name);
+			}
+			else
+			{
+				/* White for sounds - indicates playable */
+				Com_sprintf(itemText, sizeof(itemText), "^3%d. ^7%s", item->position, item->name);
+			}
+
+			CG_Text_Paint_Ext(x + padding, textY + 12, 0.18f, 0.18f, colorWhite, itemText, 0, 0, 0, &cgs.media.limboFont2);
 			textY += lineHeight;
 		}
-
-		CG_Text_Paint_Ext(x + padding, textY + 12, 0.15f, 0.15f, colorWhite, "^30^7=back ^3ESC^7=close", 0, 0, 0, &cgs.media.limboFont2);
 	}
+
+	/* Footer with navigation hints and pagination */
+	textY += 2;
+	currentPage = (etman.currentMenu.pageOffset / ETMAN_ITEMS_PER_PAGE) + 1;
+	totalPages = ((etman.currentMenu.totalItems - 1) / ETMAN_ITEMS_PER_PAGE) + 1;
+
+	if (totalPages > 1)
+	{
+		/* Show pagination: "0=more (1/3)  BKSP=back" */
+		Com_sprintf(itemText, sizeof(itemText), "^30^7=more (%d/%d)  ^3BKSP^7=back", currentPage, totalPages);
+	}
+	else if (etman.navStack.depth > 0)
+	{
+		/* No pagination, but nested: "BKSP=back" */
+		Q_strncpyz(itemText, "^3BKSP^7=back", sizeof(itemText));
+	}
+	else
+	{
+		/* Root level, single page: "BKSP=close" */
+		Q_strncpyz(itemText, "^3BKSP^7=close", sizeof(itemText));
+	}
+
+	CG_Text_Paint_Ext(x + padding, textY + 12, 0.15f, 0.15f, colorWhite, itemText, 0, 0, 0, &cgs.media.limboFont2);
 }
 
 /**
@@ -2077,15 +2086,7 @@ void CG_SoundMenuDown_f(void)
 
 	if (!etman.menuActive)
 	{
-		etman.menuActive       = qtrue;
-		etman.currentMenuLevel = 0;
-		etman.selectedMenu     = 0;
-
-		/* Request fresh menu data if we haven't loaded or it's been a while */
-		if (!etman.menuDataLoaded || (cg.time - etman.menuRequestTime > 60000))
-		{
-			ETMan_RequestMenus();
-		}
+		ETMan_OpenMenu();
 	}
 }
 
@@ -2096,6 +2097,337 @@ void CG_SoundMenuDown_f(void)
 void CG_SoundMenuUp_f(void)
 {
 	/* Could close menu on key release if desired */
+}
+
+/*
+ * ============================================================================
+ * Hierarchical Menu Navigation Implementation
+ * ============================================================================
+ */
+
+/**
+ * Request menu data for a specific menu ID and page
+ */
+static void ETMan_RequestMenuPage(int menuId, int pageOffset)
+{
+	char     guid[ETMAN_GUID_LEN + 1];
+	uint8_t  packet[64];
+	int      offset = 0;
+	uint32_t clientId;
+	uint32_t menuIdNet;
+	uint16_t pageOffsetNet;
+
+	if (!ETMan_GetGuid(guid, sizeof(guid)))
+	{
+		return;
+	}
+
+	/* Build packet: [type:1][clientId:4][guid:32][menuId:4][pageOffset:2] */
+	packet[offset++] = VOICE_CMD_MENU_NAVIGATE;
+
+	clientId = htonl((uint32_t)cg.clientNum);
+	memcpy(packet + offset, &clientId, 4);
+	offset += 4;
+
+	memcpy(packet + offset, guid, ETMAN_GUID_LEN);
+	offset += ETMAN_GUID_LEN;
+
+	menuIdNet = htonl((uint32_t)menuId);
+	memcpy(packet + offset, &menuIdNet, 4);
+	offset += 4;
+
+	pageOffsetNet = htons((uint16_t)pageOffset);
+	memcpy(packet + offset, &pageOffsetNet, 2);
+	offset += 2;
+
+	ETMan_SendPacket(packet, offset);
+	etman.menuRequestTime = cg.time;
+}
+
+/**
+ * Navigate to a specific menu
+ */
+void ETMan_NavigateToMenu(int menuId, int pageOffset)
+{
+	/* Push current state onto navigation stack before navigating */
+	if (etman.navStack.depth < ETMAN_MAX_MENU_DEPTH - 1 && etman.currentMenu.menuId != menuId)
+	{
+		etman.navStack.stack[etman.navStack.depth].menuId = etman.currentMenu.menuId;
+		etman.navStack.stack[etman.navStack.depth].pageOffset = etman.currentMenu.pageOffset;
+		Q_strncpyz(etman.navStack.stack[etman.navStack.depth].name,
+		           etman.currentMenu.name, ETMAN_MAX_NAME_LEN + 1);
+		etman.navStack.depth++;
+	}
+
+	/* Request the new menu data */
+	ETMan_RequestMenuPage(menuId, pageOffset);
+}
+
+/**
+ * Navigate back to parent menu
+ */
+qboolean ETMan_NavigateBack(void)
+{
+	int parentMenuId;
+	int parentOffset;
+
+	if (etman.navStack.depth <= 0)
+	{
+		/* Already at root, close menu */
+		ETMan_CloseMenu();
+		return qfalse;
+	}
+
+	/* Pop from navigation stack */
+	etman.navStack.depth--;
+	parentMenuId = etman.navStack.stack[etman.navStack.depth].menuId;
+	parentOffset = etman.navStack.stack[etman.navStack.depth].pageOffset;
+
+	/* Request parent menu data */
+	ETMan_RequestMenuPage(parentMenuId, parentOffset);
+	return qtrue;
+}
+
+/**
+ * Navigate to next page of current menu
+ */
+qboolean ETMan_NextPage(void)
+{
+	int nextOffset = etman.currentMenu.pageOffset + ETMAN_ITEMS_PER_PAGE;
+
+	if (nextOffset >= etman.currentMenu.totalItems)
+	{
+		/* Wrap around to first page */
+		nextOffset = 0;
+	}
+
+	ETMan_RequestMenuPage(etman.currentMenu.menuId, nextOffset);
+	return qtrue;
+}
+
+/**
+ * Play a sound by its position ID in user's library
+ */
+void ETMan_PlaySoundById(int positionId)
+{
+	char     guid[ETMAN_GUID_LEN + 1];
+	uint8_t  packet[64];
+	int      offset = 0;
+	uint32_t clientId;
+	uint16_t posNet;
+
+	if (!ETMan_GetGuid(guid, sizeof(guid)))
+	{
+		return;
+	}
+
+	/* Build packet: [type:1][clientId:4][guid:32][position:2] */
+	packet[offset++] = VOICE_CMD_SOUND_BY_ID;
+
+	clientId = htonl((uint32_t)cg.clientNum);
+	memcpy(packet + offset, &clientId, 4);
+	offset += 4;
+
+	memcpy(packet + offset, guid, ETMAN_GUID_LEN);
+	offset += ETMAN_GUID_LEN;
+
+	posNet = htons((uint16_t)positionId);
+	memcpy(packet + offset, &posNet, 2);
+	offset += 2;
+
+	ETMan_SendPacket(packet, offset);
+	CG_Printf("^3ETMan: Playing sound #%d...\n", positionId);
+}
+
+/**
+ * Toggle sound ID input mode
+ */
+void ETMan_ToggleIdMode(void)
+{
+	etman.idModeActive = !etman.idModeActive;
+	etman.idInputLen = 0;
+	etman.idInputBuffer[0] = '\0';
+
+	if (etman.idModeActive)
+	{
+		CG_Printf("^3ETMan: ID mode ON - type sound number and press Enter\n");
+	}
+	else
+	{
+		CG_Printf("^3ETMan: ID mode OFF\n");
+	}
+}
+
+/**
+ * Handle /etman playid <number>
+ * Plays sound by database ID (shareable for public sounds)
+ * Example: /etman playid 42
+ * Bind example: bind F5 "etman playid 42"
+ */
+static void ETMan_CmdPlayId(void)
+{
+	char idStr[16];
+	int soundId;
+
+	if (trap_Argc() < 3)
+	{
+		CG_Printf("Usage: /etman playid <id>\n");
+		CG_Printf("  Plays sound by its database ID\n");
+		CG_Printf("  IDs are shown in /etman list output\n");
+		CG_Printf("  Public sound IDs work for all players!\n");
+		CG_Printf("  Example bind: ^3bind F5 \"etman playid 42\"\n");
+		return;
+	}
+
+	trap_Argv(2, idStr, sizeof(idStr));
+	soundId = atoi(idStr);
+
+	if (soundId < 1)
+	{
+		CG_Printf("^1ETMan: Invalid sound ID. Must be 1 or higher.\n");
+		return;
+	}
+
+	ETMan_PlaySoundById(soundId);
+}
+
+/**
+ * Parse new hierarchical menu data format from server
+ * Format: [menuId:4][totalItems:2][pageOffset:2][itemCount:1]
+ *         for each item: [position:1][itemType:1][nameLen:1][name][dataLen:1][data]
+ *         itemType 0 (sound): data = soundAlias
+ *         itemType 1 (menu): data = nestedMenuId[4]
+ */
+static void ETMan_ParseHierarchicalMenuData(const uint8_t *data, int dataLen)
+{
+	int offset = 0;
+	uint32_t menuIdNet;
+	uint16_t totalItemsNet, pageOffsetNet;
+	uint8_t itemCount;
+	int i;
+	etmanMenuItem_t *item;
+
+	if (dataLen < 9)
+	{
+		CG_Printf("^1ETMan: Invalid menu data (too short)\n");
+		return;
+	}
+
+	/* Parse header */
+	memcpy(&menuIdNet, data + offset, 4);
+	etman.currentMenu.menuId = ntohl(menuIdNet);
+	offset += 4;
+
+	memcpy(&totalItemsNet, data + offset, 2);
+	etman.currentMenu.totalItems = ntohs(totalItemsNet);
+	offset += 2;
+
+	memcpy(&pageOffsetNet, data + offset, 2);
+	etman.currentMenu.pageOffset = ntohs(pageOffsetNet);
+	offset += 2;
+
+	itemCount = data[offset++];
+	if (itemCount > ETMAN_MAX_MENU_ITEMS)
+	{
+		itemCount = ETMAN_MAX_MENU_ITEMS;
+	}
+	etman.currentMenu.itemCount = itemCount;
+
+	/* Parse items */
+	for (i = 0; i < itemCount && offset < dataLen; i++)
+	{
+		item = &etman.currentMenu.items[i];
+		Com_Memset(item, 0, sizeof(etmanMenuItem_t));
+
+		if (offset + 3 > dataLen) break;
+
+		item->position = data[offset++];
+		item->itemType = data[offset++];
+
+		uint8_t nameLen = data[offset++];
+		if (offset + nameLen + 1 > dataLen) break;
+
+		if (nameLen > ETMAN_MAX_NAME_LEN) nameLen = ETMAN_MAX_NAME_LEN;
+		memcpy(item->name, data + offset, nameLen);
+		item->name[nameLen] = '\0';
+		offset += nameLen;
+
+		uint8_t dataLen2 = data[offset++];
+		if (offset + dataLen2 > dataLen) break;
+
+		if (item->itemType == ETMAN_ITEM_SOUND)
+		{
+			/* Sound: data is the alias */
+			if (dataLen2 > ETMAN_MAX_NAME_LEN) dataLen2 = ETMAN_MAX_NAME_LEN;
+			memcpy(item->soundAlias, data + offset, dataLen2);
+			item->soundAlias[dataLen2] = '\0';
+		}
+		else
+		{
+			/* Menu: data is the nested menu ID (4 bytes) */
+			if (dataLen2 >= 4)
+			{
+				uint32_t nestedIdNet;
+				memcpy(&nestedIdNet, data + offset, 4);
+				item->nestedMenuId = ntohl(nestedIdNet);
+			}
+		}
+		offset += dataLen2;
+	}
+
+	etman.menuDataLoaded = qtrue;
+	CG_Printf("^2ETMan: Loaded menu (id=%d, items=%d/%d, page=%d)\n",
+	          etman.currentMenu.menuId, etman.currentMenu.itemCount,
+	          etman.currentMenu.totalItems, etman.currentMenu.pageOffset / ETMAN_ITEMS_PER_PAGE + 1);
+}
+
+/**
+ * Key handling for sound menu (called from CG_KeyEvent when CGAME_EVENT_SOUNDMENU)
+ * This properly intercepts keys so weapon binds don't fire
+ */
+void ETMan_SoundMenu_KeyHandling(int key, qboolean down)
+{
+	/* Only process key down events */
+	if (!down)
+	{
+		return;
+	}
+
+	if (!etman.menuActive)
+	{
+		return;
+	}
+
+	/* Escape - always close menu immediately */
+	if (key == K_ESCAPE)
+	{
+		ETMan_CloseMenu();
+		return;
+	}
+
+	/* Backspace - go back or close */
+	if (key == K_BACKSPACE)
+	{
+		ETMan_NavigateBack();
+		return;
+	}
+
+	/* Ignore weird high key values (Unicode/extended chars like 1074) */
+	if (key > 512)
+	{
+		return;
+	}
+
+	/* Number keys 0-9 using ASCII codes (48-57) */
+	if (key >= '0' && key <= '9')
+	{
+		int num = key - '0';
+		ETMan_MenuKeyEvent(num);
+		return;
+	}
+
+	/* Any other valid key - close menu */
+	ETMan_CloseMenu();
 }
 
 #endif /* FEATURE_VOICE */

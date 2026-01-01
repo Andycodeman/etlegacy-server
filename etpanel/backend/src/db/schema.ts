@@ -582,28 +582,31 @@ export const adminCommandLogRelations = relations(adminCommandLog, ({ one }) => 
 }));
 
 // ============================================================================
-// Dynamic Sound Menus (Per-Player Custom Menus)
+// Dynamic Sound Menus (Per-Player Custom Menus with Hierarchical Nesting)
 // ============================================================================
 
-// User's custom sound menus (root level categories)
+// User's custom sound menus (supports hierarchical nesting via parent_id)
 export const userSoundMenus = pgTable(
   'user_sound_menus',
   {
     id: serial('id').primaryKey(),
     userGuid: varchar('user_guid', { length: 32 }).notNull(), // Owner's ET GUID
     menuName: varchar('menu_name', { length: 32 }).notNull(), // Display name: "Taunts", "Music", etc.
-    menuPosition: integer('menu_position').notNull().default(0), // 1-9 position in root menu
-    playlistId: integer('playlist_id').references(() => soundPlaylists.id, { onDelete: 'set null' }), // If set, expand this playlist's sounds
+    menuPosition: integer('menu_position').notNull().default(0), // 1-9 position in parent menu
+    parentId: integer('parent_id'), // Self-referential for nesting (NULL = root level)
+    playlistId: integer('playlist_id').references(() => soundPlaylists.id, { onDelete: 'set null' }), // If set, auto-populate from playlist
     createdAt: timestamp('created_at').defaultNow().notNull(),
     updatedAt: timestamp('updated_at').defaultNow().notNull(),
   },
   (table) => ({
-    guidPositionIdx: uniqueIndex('user_sound_menus_guid_position_idx').on(table.userGuid, table.menuPosition),
+    // Unique position within same parent (COALESCE handles NULL parent_id)
+    guidParentPositionIdx: uniqueIndex('user_sound_menus_guid_parent_position_idx').on(table.userGuid, table.menuPosition),
     guidIdx: index('user_sound_menus_guid_idx').on(table.userGuid),
+    parentIdx: index('user_sound_menus_parent_idx').on(table.parentId),
   })
 );
 
-// Individual sound items in a menu (only used if playlist_id is NULL)
+// Individual items in a menu - can be sounds, nested menus, OR playlists
 export const userSoundMenuItems = pgTable(
   'user_sound_menu_items',
   {
@@ -611,11 +614,14 @@ export const userSoundMenuItems = pgTable(
     menuId: integer('menu_id')
       .references(() => userSoundMenus.id, { onDelete: 'cascade' })
       .notNull(),
-    soundId: integer('sound_id')
-      .references(() => userSounds.id, { onDelete: 'cascade' })
-      .notNull(),
     itemPosition: integer('item_position').notNull(), // 1-9 position in submenu
-    displayName: varchar('display_name', { length: 32 }), // Override name (NULL = use sound name)
+    itemType: varchar('item_type', { length: 10 }).notNull().default('sound'), // 'sound', 'menu', or 'playlist'
+    soundId: integer('sound_id')
+      .references(() => userSounds.id, { onDelete: 'cascade' }), // For itemType='sound'
+    nestedMenuId: integer('nested_menu_id'), // For itemType='menu' (references userSoundMenus.id)
+    playlistId: integer('playlist_id')
+      .references(() => soundPlaylists.id, { onDelete: 'cascade' }), // For itemType='playlist'
+    displayName: varchar('display_name', { length: 32 }), // Override name (NULL = use source name)
     createdAt: timestamp('created_at').defaultNow().notNull(),
   },
   (table) => ({
@@ -630,6 +636,12 @@ export const userSoundMenusRelations = relations(userSoundMenus, ({ one, many })
     fields: [userSoundMenus.playlistId],
     references: [soundPlaylists.id],
   }),
+  parent: one(userSoundMenus, {
+    fields: [userSoundMenus.parentId],
+    references: [userSoundMenus.id],
+    relationName: 'menuHierarchy',
+  }),
+  children: many(userSoundMenus, { relationName: 'menuHierarchy' }),
   items: many(userSoundMenuItems),
 }));
 
@@ -642,7 +654,41 @@ export const userSoundMenuItemsRelations = relations(userSoundMenuItems, ({ one 
     fields: [userSoundMenuItems.soundId],
     references: [userSounds.id],
   }),
+  nestedMenu: one(userSoundMenus, {
+    fields: [userSoundMenuItems.nestedMenuId],
+    references: [userSoundMenus.id],
+  }),
+  playlist: one(soundPlaylists, {
+    fields: [userSoundMenuItems.playlistId],
+    references: [soundPlaylists.id],
+  }),
 }));
+
+// ============================================================================
+// Unfinished Sounds (Multi-file Upload Staging Area)
+// ============================================================================
+
+// Unfinished sounds - temporary storage for multi-file uploads before editing/saving
+export const unfinishedSounds = pgTable(
+  'unfinished_sounds',
+  {
+    id: serial('id').primaryKey(),
+    userGuid: varchar('user_guid', { length: 32 }).notNull(), // Owner's ET GUID
+    tempId: varchar('temp_id', { length: 36 }).notNull().unique(), // UUID for temp file reference
+    alias: varchar('alias', { length: 32 }).notNull(), // Auto-generated or user-edited alias
+    originalName: varchar('original_name', { length: 255 }).notNull(), // Original uploaded filename
+    fileSize: integer('file_size').notNull(), // File size in bytes
+    durationSeconds: integer('duration_seconds'), // Duration (calculated on upload)
+    fileExtension: varchar('file_extension', { length: 10 }).notNull().default('.mp3'), // .mp3 or .wav
+    createdAt: timestamp('created_at').defaultNow().notNull(),
+  },
+  (table) => ({
+    guidIdx: index('unfinished_sounds_guid_idx').on(table.userGuid),
+    guidAliasIdx: uniqueIndex('unfinished_sounds_guid_alias_idx').on(table.userGuid, table.alias),
+  })
+);
+
+export const unfinishedSoundsRelations = relations(unfinishedSounds, () => ({}));
 
 // ============================================================================
 // Type exports
@@ -686,6 +732,10 @@ export type UserSoundMenu = typeof userSoundMenus.$inferSelect;
 export type NewUserSoundMenu = typeof userSoundMenus.$inferInsert;
 export type UserSoundMenuItem = typeof userSoundMenuItems.$inferSelect;
 export type NewUserSoundMenuItem = typeof userSoundMenuItems.$inferInsert;
+
+// Unfinished sound types
+export type UnfinishedSound = typeof unfinishedSounds.$inferSelect;
+export type NewUnfinishedSound = typeof unfinishedSounds.$inferInsert;
 
 // Admin system types
 export type AdminLevel = typeof adminLevels.$inferSelect;

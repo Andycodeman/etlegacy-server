@@ -678,21 +678,22 @@ export const sounds = {
   // Sound Menus (Dynamic Per-Player Menus)
   // ============================================================================
 
-  // List user's menus
-  listMenus: () => apiRequest<SoundMenusResponse>('/sounds/menus'),
+  // List user's menus (optionally filter by parentId)
+  listMenus: (parentId?: number | null) =>
+    apiRequest<SoundMenusResponse>(`/sounds/menus${parentId !== undefined ? `?parentId=${parentId ?? ''}` : ''}`),
 
   // Get a specific menu with its items
   getMenu: (menuId: number) => apiRequest<SoundMenuDetailResponse>(`/sounds/menus/${menuId}`),
 
   // Create a new menu
-  createMenu: (menuName: string, menuPosition: number, playlistId?: number | null) =>
+  createMenu: (menuName: string, menuPosition: number, playlistId?: number | null, parentId?: number | null) =>
     apiRequest<{ success: boolean; menu: SoundMenu }>('/sounds/menus', {
       method: 'POST',
-      body: { menuName, menuPosition, playlistId },
+      body: { menuName, menuPosition, playlistId, parentId },
     }),
 
   // Update a menu
-  updateMenu: (menuId: number, updates: { menuName?: string; menuPosition?: number; playlistId?: number | null }) =>
+  updateMenu: (menuId: number, updates: { menuName?: string; menuPosition?: number; playlistId?: number | null; parentId?: number | null }) =>
     apiRequest<{ success: boolean; menu: SoundMenu }>(`/sounds/menus/${menuId}`, {
       method: 'PUT',
       body: updates,
@@ -702,11 +703,25 @@ export const sounds = {
   deleteMenu: (menuId: number) =>
     apiRequest<{ success: boolean }>(`/sounds/menus/${menuId}`, { method: 'DELETE' }),
 
-  // Add item to a manual menu
+  // Add sound item to a manual menu
   addMenuItem: (menuId: number, soundAlias: string, itemPosition: number, displayName?: string | null) =>
     apiRequest<{ success: boolean; item: SoundMenuItem }>(`/sounds/menus/${menuId}/items`, {
       method: 'POST',
-      body: { soundAlias, itemPosition, displayName },
+      body: { itemType: 'sound', soundAlias, itemPosition, displayName },
+    }),
+
+  // Add nested menu item to a menu
+  addNestedMenuItem: (menuId: number, nestedMenuId: number, itemPosition: number, displayName?: string | null) =>
+    apiRequest<{ success: boolean; item: SoundMenuItem }>(`/sounds/menus/${menuId}/items`, {
+      method: 'POST',
+      body: { itemType: 'menu', nestedMenuId, itemPosition, displayName },
+    }),
+
+  // Add playlist item to a menu
+  addPlaylistMenuItem: (menuId: number, playlistId: number, itemPosition: number, displayName?: string | null) =>
+    apiRequest<{ success: boolean; item: SoundMenuItem }>(`/sounds/menus/${menuId}/items`, {
+      method: 'POST',
+      body: { itemType: 'playlist', playlistId, itemPosition, displayName },
     }),
 
   // Update a menu item
@@ -726,7 +741,120 @@ export const sounds = {
       method: 'PUT',
       body: { itemIds },
     }),
+
+  // ============================================================================
+  // Unfinished Sounds (Multi-file Upload Staging)
+  // ============================================================================
+
+  // List unfinished sounds
+  listUnfinished: () => apiRequest<UnfinishedSoundsResponse>('/sounds/unfinished'),
+
+  // Upload multiple files to unfinished sounds (100MB max per file)
+  uploadUnfinished: async (files: File[]): Promise<MultiUploadResponse> => {
+    const formData = new FormData();
+    files.forEach(file => {
+      formData.append('files', file);
+    });
+
+    const makeRequest = () => {
+      const token = localStorage.getItem('accessToken');
+      if (!token) throw new Error('Not authenticated');
+      return fetch(`${API_BASE}/sounds/upload-unfinished`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+        body: formData,
+      });
+    };
+
+    return handleUnauthorized(makeRequest, (res) => res.json());
+  },
+
+  // Rename unfinished sound alias
+  renameUnfinished: (tempId: string, newAlias: string) =>
+    apiRequest<{ success: boolean; alias: string }>(`/sounds/unfinished/${tempId}`, {
+      method: 'PATCH',
+      body: { newAlias },
+    }),
+
+  // Delete unfinished sound
+  deleteUnfinished: (tempId: string) =>
+    apiRequest<{ success: boolean }>(`/sounds/unfinished/${tempId}`, { method: 'DELETE' }),
+
+  // Save unfinished sound directly (no clipping) - moves to library as-is
+  saveUnfinished: (tempId: string) =>
+    apiRequest<SaveClipResponse>(`/sounds/unfinished/${tempId}/save`, {
+      method: 'POST',
+      body: {},
+    }),
+
+  // Get unfinished sound info for clip editor
+  getUnfinishedForEdit: (tempId: string) =>
+    apiRequest<UnfinishedEditResponse>(`/sounds/unfinished/${tempId}/edit`),
+
+  // Save clipped audio from unfinished sound
+  saveUnfinishedClip: (tempId: string, alias: string, startTime: number, endTime: number, isPublic: boolean = false) =>
+    apiRequest<SaveClipResponse>(`/sounds/unfinished/${tempId}/save-clip`, {
+      method: 'POST',
+      body: { alias, startTime, endTime, isPublic },
+    }),
+
+  // Get stream URL for unfinished sound preview
+  getUnfinishedStreamUrl: (tempId: string): string => {
+    return `${API_BASE}/sounds/unfinished/${tempId}/stream`;
+  },
+
+  // Get waveform data for unfinished sound
+  getUnfinishedWaveform: (tempId: string) =>
+    apiRequest<WaveformResponse>(`/sounds/temp/${tempId}/waveform`),
 };
+
+// Unfinished sound types
+export interface UnfinishedSound {
+  id: number;
+  userGuid: string;
+  tempId: string;
+  alias: string;
+  originalName: string;
+  fileSize: number;
+  durationSeconds: number | null;
+  fileExtension: string;
+  createdAt: string;
+}
+
+export interface UnfinishedSoundsResponse {
+  sounds: UnfinishedSound[];
+  count: number;
+}
+
+export interface MultiUploadResponse {
+  success: boolean;
+  uploaded: {
+    tempId: string;
+    alias: string;
+    originalName: string;
+    fileSize: number;
+    durationSeconds: number | null;
+  }[];
+  errors: {
+    filename: string;
+    error: string;
+  }[];
+  totalUploaded: number;
+  totalErrors: number;
+}
+
+export interface UnfinishedEditResponse {
+  success: boolean;
+  tempId: string;
+  alias: string;
+  originalName: string;
+  durationSeconds: number;
+  fileSize: number;
+  maxClipDuration: number;
+  format: string;
+}
 
 // Sound types
 export interface UserSound {
@@ -863,6 +991,7 @@ export interface SoundMenu {
   id: number;
   menuName: string;
   menuPosition: number;
+  parentId: number | null;  // For nested menus
   playlistId: number | null;
   playlistName?: string | null;
   itemCount: number;
@@ -877,9 +1006,15 @@ export interface SoundMenusResponse {
 export interface SoundMenuItem {
   id: number;
   itemPosition: number;
+  itemType: 'sound' | 'menu' | 'playlist';  // Type of item
   displayName: string;
-  soundAlias: string;
-  soundFileId: number;
+  soundAlias: string | null;   // For sound items
+  soundId: number | null;      // For sound items
+  nestedMenuId: number | null; // For menu items
+  nestedMenuName?: string;     // For menu items - display name
+  playlistId: number | null;   // For playlist items
+  playlistName?: string;       // For playlist items - display name
+  playlistSoundCount?: number; // For playlist items - number of sounds
   durationSeconds?: number;
   isFromPlaylist: boolean;
 }
@@ -889,6 +1024,7 @@ export interface SoundMenuDetailResponse {
     id: number;
     menuName: string;
     menuPosition: number;
+    parentId: number | null;
     playlistId: number | null;
     createdAt: string;
     updatedAt: string;

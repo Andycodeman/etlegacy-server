@@ -64,6 +64,10 @@
 #define VOICE_CMD_MENU_PLAY               0x33  /* Play from menu: <guid><menuPos><itemPos> */
 #define VOICE_RESP_MENU_DATA              0x34  /* Binary menu data response */
 
+/* Phase 9: Hierarchical menus and quick-play */
+#define VOICE_CMD_MENU_NAVIGATE           0x35  /* Navigate to menu: <guid><menuId:4><pageOffset:2> */
+#define VOICE_CMD_SOUND_BY_ID             0x36  /* Play sound by database ID: <guid><soundId:4> */
+
 /*
  * Sound Response Packet Types (server -> client)
  */
