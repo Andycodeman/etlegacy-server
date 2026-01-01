@@ -1789,6 +1789,7 @@ void ETMan_CloseMenu(void)
 	etman.currentMenuLevel = 0;
 	etman.selectedMenu     = 0;
 	cgs.eventHandling = CGAME_EVENT_NONE;
+	trap_Cvar_Set("cl_bypassmouseinput", "0");  /* Reset so other menus can capture mouse */
 	trap_Key_SetCatcher(trap_Key_GetCatcher() & ~KEYCATCH_CGAME);
 }
 
@@ -1808,8 +1809,9 @@ void ETMan_OpenMenu(void)
 
 	/* Capture keys so weapon binds don't fire, but allow mouse movement */
 	cgs.eventHandling = CGAME_EVENT_SOUNDMENU;
+	cgDC.cursorVisible = qfalse;  /* No cursor needed */
+	trap_Cvar_Set("cl_bypassmouseinput", "1");  /* Mouse goes to normal view movement, not cgame */
 	trap_Key_SetCatcher(KEYCATCH_CGAME);
-	trap_Cvar_Set("cl_bypassMouseInput", "0");  /* Don't capture mouse - allow view movement */
 
 	/* Always request fresh menu data */
 	CG_Printf("^3ETMan: Requesting menu data...\n");
@@ -1977,8 +1979,8 @@ static void ETMan_DrawMenu(void)
 	}
 	else
 	{
-		/* Title + items + footer (with pagination info) */
-		h = padding * 2 + lineHeight * (2 + etman.currentMenu.itemCount + 1);
+		/* Title + items + footer (with pagination info) + extra bottom padding */
+		h = padding * 2 + lineHeight * (2 + etman.currentMenu.itemCount + 1) + 4;
 	}
 
 	/* Draw background */
@@ -2006,11 +2008,11 @@ static void ETMan_DrawMenu(void)
 		Q_strncpyz(titleText, "Sound Menu", sizeof(titleText));
 	}
 	CG_Text_Paint_Ext(x + padding, textY + 12, 0.22f, 0.22f, titleColor, titleText, 0, 0, 0, &cgs.media.limboFont2);
-	textY += lineHeight;
+	textY += lineHeight + 6;  /* Extra space after title */
 
 	/* Draw separator line */
 	CG_FillRect(x + padding, textY, w - padding * 2, 1, colorWhite);
-	textY += 4;
+	textY += 3;
 
 	if (etman.currentMenu.itemCount == 0)
 	{
@@ -2382,18 +2384,58 @@ static void ETMan_ParseHierarchicalMenuData(const uint8_t *data, int dataLen)
 }
 
 /**
+ * Check if a key should be blocked from executing binds.
+ * Called from CG_CheckExecKey BEFORE engine processes key binds.
+ * This is how we prevent weapon switching when pressing number keys.
+ */
+qboolean ETMan_CheckExecKey(int key)
+{
+	if (!etman.menuActive)
+	{
+		return qfalse;
+	}
+
+	/* Block all keys when sound menu is open */
+	/* Number keys 0-9 */
+	if (key >= '0' && key <= '9')
+	{
+		return qtrue;
+	}
+
+	/* Escape and backspace */
+	if (key == K_ESCAPE || key == K_BACKSPACE)
+	{
+		return qtrue;
+	}
+
+	/* Block all other printable keys to prevent accidental actions */
+	if (key >= 32 && key <= 126)
+	{
+		return qtrue;
+	}
+
+	return qfalse;
+}
+
+/**
  * Key handling for sound menu (called from CG_KeyEvent when CGAME_EVENT_SOUNDMENU)
  * This properly intercepts keys so weapon binds don't fire
  */
 void ETMan_SoundMenu_KeyHandling(int key, qboolean down)
 {
-	/* Only process key down events */
+	if (!etman.menuActive)
+	{
+		return;
+	}
+
+	/* Only process key DOWN events */
 	if (!down)
 	{
 		return;
 	}
 
-	if (!etman.menuActive)
+	/* Ignore weird high key values (Unicode/extended chars like 1074) */
+	if (key > 512)
 	{
 		return;
 	}
@@ -2409,12 +2451,6 @@ void ETMan_SoundMenu_KeyHandling(int key, qboolean down)
 	if (key == K_BACKSPACE)
 	{
 		ETMan_NavigateBack();
-		return;
-	}
-
-	/* Ignore weird high key values (Unicode/extended chars like 1074) */
-	if (key > 512)
-	{
 		return;
 	}
 

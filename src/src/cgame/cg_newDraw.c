@@ -977,6 +977,15 @@ void CG_EventHandling(int type, qboolean fForced)
 		cg.fullScreenHudEditor = qfalse;
 		trap_Key_SetCatcher(KEYCATCH_CGAME);
 	}
+#ifdef FEATURE_VOICE
+	else if (type == CGAME_EVENT_SOUNDMENU)
+	{
+		/* Sound menu - capture keys but let mouse control view */
+		cgDC.cursorVisible = qfalse;
+		trap_Cvar_Set("cl_bypassmouseinput", "1");
+		trap_Key_SetCatcher(KEYCATCH_CGAME);
+	}
+#endif
 	else
 	{
 		trap_Key_SetCatcher(KEYCATCH_CGAME);

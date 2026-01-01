@@ -37,6 +37,7 @@
 #include "cg_cvars.h"
 #ifdef FEATURE_VOICE
 #include "cg_voice.h"
+#include "cg_etman.h"
 #endif
 
 displayContextDef_t cgDC;
@@ -2491,6 +2492,14 @@ void CG_Shutdown(void)
  */
 qboolean CG_CheckExecKey(int key)
 {
+#ifdef FEATURE_VOICE
+	/* Sound menu blocks keys before other menus */
+	if (ETMan_CheckExecKey(key))
+	{
+		return qtrue;
+	}
+#endif
+
 	if (cg.showFireteamMenu)
 	{
 		return CG_FireteamCheckExecKey(key, qfalse);

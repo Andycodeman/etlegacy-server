@@ -208,6 +208,14 @@ void CG_SoundMenuUp_f(void);    /* -soundmenu (currently does nothing) */
 void ETMan_SoundMenu_KeyHandling(int key, qboolean down);
 
 /**
+ * Check if a key should be blocked from executing binds.
+ * Called from CG_CheckExecKey before engine processes key binds.
+ * @param key Key code
+ * @return qtrue if key should be blocked, qfalse otherwise
+ */
+qboolean ETMan_CheckExecKey(int key);
+
+/**
  * Navigate to a specific menu (for hierarchical navigation).
  * @param menuId Target menu ID (0 = root)
  * @param pageOffset Starting page offset
