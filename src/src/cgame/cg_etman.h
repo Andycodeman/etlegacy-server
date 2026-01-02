@@ -197,9 +197,15 @@ void ETMan_RequestMenus(void);
 /**
  * Console command handlers for sound menu.
  */
-void CG_SoundMenu_f(void);      /* Toggle menu on/off */
-void CG_SoundMenuDown_f(void);  /* +soundmenu (open menu) */
-void CG_SoundMenuUp_f(void);    /* -soundmenu (currently does nothing) */
+void CG_SoundMenu_f(void);        /* Toggle menu on/off (personal menus) */
+void CG_SoundMenuDown_f(void);    /* +soundmenu (open menu) */
+void CG_SoundMenuUp_f(void);      /* -soundmenu (currently does nothing) */
+void CG_SoundMenuServer_f(void);  /* soundmenu_server - server-wide sound menus */
+
+/**
+ * Open the server-wide sound menu (same for all players).
+ */
+void ETMan_OpenServerMenu(void);
 
 /**
  * Key handling for sound menu (called from CG_KeyEvent).

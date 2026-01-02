@@ -15,6 +15,14 @@
 #endif
 
 /*
+ * Menu type enum - matches server-side definitions
+ */
+typedef enum {
+	ETMAN_MENU_PERSONAL = 0,    /* Player's personal menus */
+	ETMAN_MENU_SERVER = 1       /* Server-wide default menus */
+} etmanMenuType_t;
+
+/*
  * Module state
  */
 static struct
@@ -32,6 +40,7 @@ static struct
 	qboolean        menuActive;          // Menu HUD visible
 	qboolean        menuDataLoaded;      // Have we received menu data from server
 	int             menuRequestTime;     // When we last requested menus
+	etmanMenuType_t currentMenuType;     // Personal (0) or Server (1) menus
 
 	/* Hierarchical navigation state */
 	etmanMenu_t     currentMenu;         // Currently displayed menu
@@ -47,6 +56,10 @@ static struct
 	qboolean        idModeActive;        // ID input mode active
 	char            idInputBuffer[8];    // Buffer for typing ID number
 	int             idInputLen;          // Current input length
+
+	/* Pending URL to open (deferred to next frame) */
+	qboolean        pendingUrlOpen;
+	char            pendingUrl[256];
 
 } etman;
 
@@ -115,6 +128,7 @@ static void ETMan_SendPacket(uint8_t *data, int len)
 /* Forward declarations for functions used before definition */
 static void ETMan_CmdPlayId(void);
 static void ETMan_RequestMenuPage(int menuId, int pageOffset);
+static void ETMan_OpenMenuWithType(etmanMenuType_t menuType);
 
 /**
  * Handle /etman add <url> <name>
@@ -1568,11 +1582,37 @@ void ETMan_HandleResponse(const uint8_t *data, int dataLen)
 		break;
 
 	case VOICE_RESP_REGISTER_CODE:
-		/* Registration code response - display prominently */
+	{
+		/* Registration code response - store in cvar and show in console */
+		char url[256];
+		char code[16];
+
+		/* Message format from server: just the 6-char code */
+		Q_strncpyz(code, message, sizeof(code));
+
+		/* Store code in cvar so menu can use it */
+		trap_Cvar_Set("etman_regcode", code);
+
+		/* Construct URL with code */
+		Com_sprintf(url, sizeof(url), "https://etpanel.etman.dev/register?code=%s", code);
+
+		/* Store full URL in cvar for menu button */
+		trap_Cvar_Set("etman_regurl", url);
+
+		/* Set ui_finalURL - this is what uiScript validate_openURL uses when called with no args */
+		trap_Cvar_Set("ui_finalURL", url);
+
+		/* Set status text for the menu to display */
+		trap_Cvar_Set("etman_regstatus", va("^2Code ready: ^5%s ^7- Click REGISTER below!", code));
+
+		/* Show in console */
 		CG_Printf("\n^2========================================\n");
-		CG_Printf("^3%s\n", message);
+		CG_Printf("^3Registration code: ^5%s\n", code);
+		CG_Printf("^7Click REGISTER button or copy URL:\n");
+		CG_Printf("^5%s\n", url);
 		CG_Printf("^2========================================\n\n");
 		break;
+	}
 
 	case VOICE_RESP_MENU_DATA:
 		/* Binary menu data from server - use new hierarchical parser */
@@ -1617,6 +1657,8 @@ void ETMan_Draw(void)
 	{
 		return;
 	}
+
+	/* Note: trap_OpenURL crashes in Flatpak ET:Legacy, so browser auto-open is disabled */
 
 	/* Draw sound menu if active */
 	if (etman.menuActive)
@@ -1794,13 +1836,14 @@ void ETMan_CloseMenu(void)
 }
 
 /**
- * Open the sound menu
+ * Open the sound menu with a specific menu type
  */
-void ETMan_OpenMenu(void)
+static void ETMan_OpenMenuWithType(etmanMenuType_t menuType)
 {
 	etman.menuActive       = qtrue;
 	etman.currentMenuLevel = 0;
 	etman.selectedMenu     = 0;
+	etman.currentMenuType  = menuType;  /* Set the menu type before requesting */
 
 	/* Reset navigation stack and force data reload */
 	etman.navStack.depth = 0;
@@ -1814,8 +1857,25 @@ void ETMan_OpenMenu(void)
 	trap_Key_SetCatcher(KEYCATCH_CGAME);
 
 	/* Always request fresh menu data */
-	CG_Printf("^3ETMan: Requesting menu data...\n");
+	CG_Printf("^3ETMan: Requesting %s menu data...\n",
+	          menuType == ETMAN_MENU_SERVER ? "server" : "personal");
 	ETMan_RequestMenuPage(0, 0);
+}
+
+/**
+ * Open the sound menu (personal menus by default)
+ */
+void ETMan_OpenMenu(void)
+{
+	ETMan_OpenMenuWithType(ETMAN_MENU_PERSONAL);
+}
+
+/**
+ * Open the server sound menu
+ */
+void ETMan_OpenServerMenu(void)
+{
+	ETMan_OpenMenuWithType(ETMAN_MENU_SERVER);
 }
 
 /**
@@ -1930,7 +1990,7 @@ static void ETMan_PlayMenuSound(const char *soundAlias)
 	/* Build packet: [type:1][clientId:4][guid:32][name] */
 	packet[offset++] = VOICE_CMD_SOUND_PLAY;
 
-	clientId = htonl(0);
+	clientId = htonl((uint32_t)cg.clientNum);
 	memcpy(packet + offset, &clientId, 4);
 	offset += 4;
 
@@ -1949,11 +2009,10 @@ static void ETMan_PlayMenuSound(const char *soundAlias)
 }
 
 /**
- * Draw the menu HUD (hierarchical version with colors)
- * - Cyan (^5) for playlists/menus
- * - White (^7) for sounds
+ * Draw the menu HUD - CLASSIC STYLE (centered, top of screen)
+ * Backup style - use cg_soundMenuStyle 0 to enable
  */
-static void ETMan_DrawMenu(void)
+static void ETMan_DrawMenu_Classic(void)
 {
 	float   x, y, w, h;
 	float   lineHeight = 11;
@@ -2067,6 +2126,159 @@ static void ETMan_DrawMenu(void)
 }
 
 /**
+ * Draw the menu HUD - VSAY STYLE (matches native quickmessage look)
+ * Default style - use cg_soundMenuStyle 1 to enable
+ * Position: left side at y=100, same as wm_quickmessage.menu
+ */
+static void ETMan_DrawMenu_Vsay(void)
+{
+	float   x, y, w, h;
+	float   lineHeight   = 12;
+	float   titleHeight  = 14;
+	int     i;
+	vec4_t  bgColor      = { 0.0f, 0.0f, 0.0f, 0.75f };       /* Match vsay: backcolor 0 0 0 .75 */
+	vec4_t  borderColor  = { 0.5f, 0.5f, 0.5f, 0.5f };        /* Match vsay: bordercolor .5 .5 .5 .5 */
+	vec4_t  titleBgColor = { 0.16f, 0.2f, 0.17f, 0.8f };      /* Match vsay: backcolor .16 .2 .17 .8 */
+	vec4_t  titleFgColor = { 0.6f, 0.6f, 0.6f, 1.0f };        /* Match vsay: forecolor .6 .6 .6 1 */
+	vec4_t  itemColor    = { 0.6f, 0.6f, 0.6f, 1.0f };        /* Match vsay item color */
+	float   textY;
+	etmanMenuItem_t *item;
+	int     currentPage, totalPages;
+	char    titleText[64];
+	char    itemText[64];
+	int     itemCount;
+
+	/* Position matches wm_quickmessage: origin 10,10 + rect starts at y=19 within that
+	 * So effective position is x=10, y=100+10+19 = 129 for the box */
+	x = 10;
+	y = 100 + 10 + 19;  /* Match vsay menu position */
+	w = 204;            /* Match vsay: rect 0 19 204 136 */
+
+	/* Calculate item count for height */
+	itemCount = etman.menuDataLoaded ? etman.currentMenu.itemCount : 1;
+	if (itemCount == 0) itemCount = 1;
+
+	/* Height: title bar + items + footer */
+	h = titleHeight + 4 + (lineHeight * itemCount) + lineHeight + 8;
+
+	/* Draw main background */
+	CG_FillRect(x, y, w, h, bgColor);
+
+	/* Draw border */
+	CG_DrawRect_FixedBorder(x, y, w, h, 1, borderColor);
+
+	/* Draw title bar background */
+	CG_FillRect(x + 2, y + 2, w - 4, titleHeight, titleBgColor);
+
+	/* Title text */
+	if (!etman.menuDataLoaded)
+	{
+		Q_strncpyz(titleText, "SOUNDS", sizeof(titleText));
+	}
+	else if (etman.navStack.depth > 0)
+	{
+		Com_sprintf(titleText, sizeof(titleText), "%s",
+		            etman.currentMenu.name[0] ? etman.currentMenu.name : "SOUNDS");
+	}
+	else
+	{
+		Q_strncpyz(titleText, "SOUNDS", sizeof(titleText));
+	}
+
+	/* Draw title - match vsay style: textscale .19, textalignx 3, textaligny 10 */
+	CG_Text_Paint_Ext(x + 5, y + 2 + 10, 0.19f, 0.19f, titleFgColor, titleText, 0, 0, 0, &cgs.media.limboFont1);
+
+	textY = y + titleHeight + 6;
+
+	if (!etman.menuDataLoaded)
+	{
+		/* Loading state */
+		CG_Text_Paint_Ext(x + 6, textY + 8, 0.2f, 0.2f, itemColor, "Loading...", 0, 0, 0, &cgs.media.limboFont2);
+		return;
+	}
+
+	if (etman.currentMenu.itemCount == 0)
+	{
+		CG_Text_Paint_Ext(x + 6, textY + 8, 0.2f, 0.2f, itemColor, "No items", 0, 0, 0, &cgs.media.limboFont2);
+		textY += lineHeight;
+	}
+	else
+	{
+		/* Draw menu items - match vsay style: rect 6 $evalfloat(35 + (12*POS)) 128 10 */
+		for (i = 0; i < etman.currentMenu.itemCount; i++)
+		{
+			item = &etman.currentMenu.items[i];
+
+			if (item->itemType == ETMAN_ITEM_MENU)
+			{
+				/* Submenu indicator with > arrow */
+				Com_sprintf(itemText, sizeof(itemText), "%d. %s >", item->position, item->name);
+			}
+			else
+			{
+				/* Sound item */
+				Com_sprintf(itemText, sizeof(itemText), "%d. %s", item->position, item->name);
+			}
+
+			/* Draw item - match vsay: textscale .2, textaligny 8 */
+			CG_Text_Paint_Ext(x + 6, textY + 8, 0.2f, 0.2f, itemColor, itemText, 0, 0, 0, &cgs.media.limboFont2);
+			textY += lineHeight;
+		}
+	}
+
+	/* Footer with navigation hints */
+	textY += 4;
+	currentPage = (etman.currentMenu.pageOffset / ETMAN_ITEMS_PER_PAGE) + 1;
+	totalPages = ((etman.currentMenu.totalItems - 1) / ETMAN_ITEMS_PER_PAGE) + 1;
+
+	if (totalPages > 1)
+	{
+		Com_sprintf(itemText, sizeof(itemText), "0. More (%d/%d)  Bksp. Back", currentPage, totalPages);
+	}
+	else if (etman.navStack.depth > 0)
+	{
+		Q_strncpyz(itemText, "Bksp. Back", sizeof(itemText));
+	}
+	else
+	{
+		Q_strncpyz(itemText, "Bksp. Close", sizeof(itemText));
+	}
+
+	CG_Text_Paint_Ext(x + 6, textY + 8, 0.18f, 0.18f, itemColor, itemText, 0, 0, 0, &cgs.media.limboFont2);
+}
+
+/**
+ * Draw the menu HUD - dispatches to appropriate style
+ * cg_soundMenuStyle: 0 = classic (centered top), 1 = vsay style (default)
+ */
+static void ETMan_DrawMenu(void)
+{
+	char buf[8];
+	int  style;
+
+	trap_Cvar_VariableStringBuffer("cg_soundMenuStyle", buf, sizeof(buf));
+
+	/* Default to vsay style (1) if cvar not set or empty */
+	if (buf[0] == '\0')
+	{
+		style = 1;
+	}
+	else
+	{
+		style = atoi(buf);
+	}
+
+	if (style == 0)
+	{
+		ETMan_DrawMenu_Classic();
+	}
+	else
+	{
+		ETMan_DrawMenu_Vsay();
+	}
+}
+
+/**
  * Console command: soundmenu
  * Toggles the sound menu on/off
  */
@@ -2101,6 +2313,27 @@ void CG_SoundMenuUp_f(void)
 	/* Could close menu on key release if desired */
 }
 
+/**
+ * Console command: soundmenu_server
+ * Opens the server-wide sound menu (same for all players)
+ */
+void CG_SoundMenuServer_f(void)
+{
+	if (!etman.initialized)
+	{
+		return;
+	}
+
+	if (etman.menuActive)
+	{
+		ETMan_CloseMenu();
+	}
+	else
+	{
+		ETMan_OpenServerMenu();
+	}
+}
+
 /*
  * ============================================================================
  * Hierarchical Menu Navigation Implementation
@@ -2109,6 +2342,7 @@ void CG_SoundMenuUp_f(void)
 
 /**
  * Request menu data for a specific menu ID and page
+ * Uses the current menu type (personal or server) from etman.currentMenuType
  */
 static void ETMan_RequestMenuPage(int menuId, int pageOffset)
 {
@@ -2124,7 +2358,7 @@ static void ETMan_RequestMenuPage(int menuId, int pageOffset)
 		return;
 	}
 
-	/* Build packet: [type:1][clientId:4][guid:32][menuId:4][pageOffset:2] */
+	/* Build packet: [type:1][clientId:4][guid:32][menuId:4][pageOffset:2][menuType:1] */
 	packet[offset++] = VOICE_CMD_MENU_NAVIGATE;
 
 	clientId = htonl((uint32_t)cg.clientNum);
@@ -2141,6 +2375,9 @@ static void ETMan_RequestMenuPage(int menuId, int pageOffset)
 	pageOffsetNet = htons((uint16_t)pageOffset);
 	memcpy(packet + offset, &pageOffsetNet, 2);
 	offset += 2;
+
+	/* Add menu type byte: 0 = personal, 1 = server */
+	packet[offset++] = (uint8_t)etman.currentMenuType;
 
 	ETMan_SendPacket(packet, offset);
 	etman.menuRequestTime = cg.time;

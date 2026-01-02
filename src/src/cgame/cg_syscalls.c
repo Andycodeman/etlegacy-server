@@ -1917,6 +1917,15 @@ void trap_R_Finish(void)
 	SystemCall(CG_R_FINISH);
 }
 
+/**
+ * @brief trap_OpenURL
+ * @param[in] url
+ */
+void trap_OpenURL(const char *url)
+{
+	SystemCall(CG_OPENURL, url);
+}
+
 // extension interface
 
 /**

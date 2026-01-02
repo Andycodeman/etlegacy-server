@@ -281,6 +281,8 @@ typedef enum
 
 	CG_R_FINISH,                ///< 179
 
+	CG_OPENURL,                 ///< Open URL in system browser
+
 	///< engine extensions padding
 	CG_TRAP_GETVALUE = COM_TRAP_GETVALUE,
 

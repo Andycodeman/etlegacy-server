@@ -682,6 +682,80 @@ export const sounds = {
   listMenus: (parentId?: number | null) =>
     apiRequest<SoundMenusResponse>(`/sounds/menus${parentId !== undefined ? `?parentId=${parentId ?? ''}` : ''}`),
 
+  // ============================================================================
+  // Root Items (sounds/playlists/menus at vsay root level, not inside a menu)
+  // ============================================================================
+
+  // Get root-level items for user
+  getRootItems: () => apiRequest<{ items: SoundMenuItem[] }>('/sounds/root-items'),
+
+  // Add sound to root level
+  addRootSound: (soundAlias: string, itemPosition: number, displayName?: string | null) =>
+    apiRequest<{ success: boolean; item: SoundMenuItem }>('/sounds/root-items', {
+      method: 'POST',
+      body: { itemType: 'sound', soundAlias, itemPosition, displayName },
+    }),
+
+  // Add playlist to root level
+  addRootPlaylist: (playlistId: number, itemPosition: number, displayName?: string | null) =>
+    apiRequest<{ success: boolean; item: SoundMenuItem }>('/sounds/root-items', {
+      method: 'POST',
+      body: { itemType: 'playlist', playlistId, itemPosition, displayName },
+    }),
+
+  // Add menu to root level
+  addRootMenu: (menuId: number, itemPosition: number, displayName?: string | null) =>
+    apiRequest<{ success: boolean; item: SoundMenuItem }>('/sounds/root-items', {
+      method: 'POST',
+      body: { itemType: 'menu', menuId, itemPosition, displayName },
+    }),
+
+  // Update root item (position and/or displayName)
+  updateRootItem: (itemId: number, updates: { itemPosition?: number; displayName?: string | null }) =>
+    apiRequest<{ success: boolean }>(`/sounds/root-items/${itemId}`, {
+      method: 'PUT',
+      body: updates,
+    }),
+
+  // Remove item from root level
+  removeRootItem: (itemId: number) =>
+    apiRequest<{ success: boolean }>(`/sounds/root-items/${itemId}`, { method: 'DELETE' }),
+
+  // Get server root-level items (admin only)
+  getServerRootItems: () => apiRequest<{ items: SoundMenuItem[] }>('/sounds/server-root-items'),
+
+  // Add sound to server root level (admin only)
+  addServerRootSound: (soundId: number, itemPosition: number, displayName?: string | null) =>
+    apiRequest<{ success: boolean; item: SoundMenuItem }>('/sounds/server-root-items', {
+      method: 'POST',
+      body: { itemType: 'sound', soundId, itemPosition, displayName },
+    }),
+
+  // Add playlist to server root level (admin only)
+  addServerRootPlaylist: (playlistId: number, itemPosition: number, displayName?: string | null) =>
+    apiRequest<{ success: boolean; item: SoundMenuItem }>('/sounds/server-root-items', {
+      method: 'POST',
+      body: { itemType: 'playlist', playlistId, itemPosition, displayName },
+    }),
+
+  // Add menu to server root level (admin only)
+  addServerRootMenu: (menuId: number, itemPosition: number, displayName?: string | null) =>
+    apiRequest<{ success: boolean; item: SoundMenuItem }>('/sounds/server-root-items', {
+      method: 'POST',
+      body: { itemType: 'menu', menuId, itemPosition, displayName },
+    }),
+
+  // Update server root item (position and/or displayName) (admin only)
+  updateServerRootItem: (itemId: number, updates: { itemPosition?: number; displayName?: string | null }) =>
+    apiRequest<{ success: boolean }>(`/sounds/server-root-items/${itemId}`, {
+      method: 'PUT',
+      body: updates,
+    }),
+
+  // Remove item from server root level (admin only)
+  removeServerRootItem: (itemId: number) =>
+    apiRequest<{ success: boolean }>(`/sounds/server-root-items/${itemId}`, { method: 'DELETE' }),
+
   // Get a specific menu with its items
   getMenu: (menuId: number) => apiRequest<SoundMenuDetailResponse>(`/sounds/menus/${menuId}`),
 
@@ -741,6 +815,62 @@ export const sounds = {
       method: 'PUT',
       body: { itemIds },
     }),
+
+  // ============================================================================
+  // Server Sound Menus (admin-managed, visible to all players)
+  // ============================================================================
+
+  // List server menus
+  getServerMenus: (parentId?: number | null, flat?: boolean) =>
+    apiRequest<SoundMenusResponse>(
+      `/sounds/server-menus${parentId !== undefined || flat ? '?' : ''}${parentId !== undefined ? `parentId=${parentId ?? ''}` : ''}${flat ? `${parentId !== undefined ? '&' : ''}flat=true` : ''}`
+    ),
+
+  // Get server menu details
+  getServerMenu: (menuId: number) => apiRequest<SoundMenuDetailResponse>(`/sounds/server-menus/${menuId}`),
+
+  // Create server menu (admin only)
+  createServerMenu: (data: { menuName: string; menuPosition: number; parentId?: number; playlistId?: number }) =>
+    apiRequest<{ success: boolean; menu: SoundMenu }>('/sounds/server-menus', {
+      method: 'POST',
+      body: data,
+    }),
+
+  // Update server menu (admin only)
+  updateServerMenu: (menuId: number, data: { menuName?: string; menuPosition?: number; playlistId?: number }) =>
+    apiRequest<{ success: boolean; menu: SoundMenu }>(`/sounds/server-menus/${menuId}`, {
+      method: 'PUT',
+      body: data,
+    }),
+
+  // Delete server menu (admin only)
+  deleteServerMenu: (menuId: number) =>
+    apiRequest<{ success: boolean }>(`/sounds/server-menus/${menuId}`, { method: 'DELETE' }),
+
+  // Add sound to server menu (admin only)
+  addSoundToServerMenu: (menuId: number, soundId: number, position: number, displayName?: string) =>
+    apiRequest<{ success: boolean; item: SoundMenuItem }>(`/sounds/server-menus/${menuId}/items`, {
+      method: 'POST',
+      body: { itemType: 'sound', soundId, itemPosition: position, displayName },
+    }),
+
+  // Add nested menu to server menu (admin only)
+  addNestedServerMenu: (menuId: number, nestedMenuId: number, position: number, displayName?: string) =>
+    apiRequest<{ success: boolean; item: SoundMenuItem }>(`/sounds/server-menus/${menuId}/items`, {
+      method: 'POST',
+      body: { itemType: 'menu', nestedMenuId, itemPosition: position, displayName },
+    }),
+
+  // Add playlist to server menu (admin only)
+  addPlaylistToServerMenu: (menuId: number, playlistId: number, position: number, displayName?: string) =>
+    apiRequest<{ success: boolean; item: SoundMenuItem }>(`/sounds/server-menus/${menuId}/items`, {
+      method: 'POST',
+      body: { itemType: 'playlist', playlistId, itemPosition: position, displayName },
+    }),
+
+  // Remove item from server menu (admin only)
+  removeServerMenuItem: (menuId: number, itemId: number) =>
+    apiRequest<{ success: boolean }>(`/sounds/server-menus/${menuId}/items/${itemId}`, { method: 'DELETE' }),
 
   // ============================================================================
   // Unfinished Sounds (Multi-file Upload Staging)
@@ -1012,6 +1142,8 @@ export interface SoundMenuItem {
   soundId: number | null;      // For sound items
   nestedMenuId: number | null; // For menu items
   nestedMenuName?: string;     // For menu items - display name
+  menuName?: string;           // For menu items - name from nested menu
+  menuItemCount?: number;      // For menu items - count of items in nested menu
   playlistId: number | null;   // For playlist items
   playlistName?: string;       // For playlist items - display name
   playlistSoundCount?: number; // For playlist items - number of sounds

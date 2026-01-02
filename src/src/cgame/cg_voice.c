@@ -860,20 +860,22 @@ static void Voice_ProcessIncoming(void)
 			break;
 		}
 
-		// Relay packets from server use voiceRelayHeader_t (8 bytes)
+		/* Check for ETMan response packets FIRST (before size check) */
+		/* These can be smaller than voiceRelayHeader_t */
+		if (received >= 2 && ((buffer[0] >= 0x20 && buffer[0] <= 0x24) || buffer[0] == 0x31 || buffer[0] == 0x34))
+		{
+			CG_Printf("^6Voice: Received ETMan packet type 0x%02x, len=%d\n", buffer[0], received);
+			ETMan_HandleResponse(buffer, received);
+			continue;
+		}
+
+		// Relay packets from server use voiceRelayHeader_t (9+ bytes)
 		if (received < (int)sizeof(voiceRelayHeader_t))
 		{
 			continue;
 		}
 
 		relay = (voiceRelayHeader_t *)buffer;
-
-		/* Check for ETMan response packets (0x20-0x24, 0x31, 0x34) */
-		if ((buffer[0] >= 0x20 && buffer[0] <= 0x24) || buffer[0] == 0x31 || buffer[0] == 0x34)
-		{
-			ETMan_HandleResponse(buffer, received);
-			continue;
-		}
 
 		if (relay->type != VOICE_PKT_AUDIO)
 		{
@@ -1399,14 +1401,18 @@ void Voice_Disconnect(void)
  */
 void Voice_SendRawPacket(const uint8_t *data, int len)
 {
+	int sent;
+
 	if (voice.socket == VOICE_INVALID_SOCKET || !voice.connected)
 	{
 		CG_Printf("^1Voice: Not connected to voice server\n");
 		return;
 	}
 
-	sendto(voice.socket, (char *)data, len, 0,
+	sent = sendto(voice.socket, (char *)data, len, 0,
 	       (struct sockaddr *)&voice.serverAddr, sizeof(voice.serverAddr));
+
+	CG_Printf("^6Voice: Sent raw packet type=0x%02x len=%d result=%d\n", data[0], len, sent);
 }
 
 /*

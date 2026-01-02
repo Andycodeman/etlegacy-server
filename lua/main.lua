@@ -396,9 +396,20 @@ function et_ClientConnect(clientNum, firstTime, isBot)
         local name = et.gentity_get(clientNum, "pers.netname") or "Player"
         log("^7Player connected: ^3" .. name)
 
-        -- Welcome message
+        -- Welcome message with ETMan features
         et.trap_SendServerCommand(clientNum,
-            'cp "^3Welcome to ETMan\'s Server!\n^5Experimental RickRoll mode enabled\n^7Check back often as changes are daily. Enjoy!"')
+            'cp "^3Welcome to ETMan\'s Server!\n' ..
+            '^7Press ^2V ^7then ^28 ^7for custom sounds\n' ..
+            '^7Press ^2ESC ^7> ^2ETMAN ^7to register & more\n' ..
+            '^5Visit: ^7etpanel.etman.dev"')
+
+        -- Also show in console for reference
+        et.trap_SendServerCommand(clientNum,
+            'print "^3=== ETMan Custom Server ===\n' ..
+            '^7Custom sounds: Press V then 8, or /etman\n' ..
+            '^7Register: ESC > ETMAN > Register, or /etman register\n' ..
+            '^7Website: https://etpanel.etman.dev\n' ..
+            '^3=============================\n"')
 
         -- Schedule rocket mode welcome message
         if rocketModeEnabled and rocketMode then

@@ -88,6 +88,8 @@ QM_MENU_START( "wm_quickmessage" )
 	QM_MENU_ITEM( 		_("G. Global"),	 		close wm_quickmessage; 		open wm_quickglobal, 		"g", 4 )
 	QM_MENU_ITEM_TEAM( 	_("F. Function"), 		exec "wm_sayPlayerClass"; 	close wm_quickmessage,		"f", 5 )
 	QM_MENU_ITEM_TEAM( 	_("O. Objectives"), 	close wm_quickmessage; 		open wm_quickobjectives, 	"o", 6 )
+	QM_MENU_ITEM( 		_("V. Server Sounds"), 	exec "soundmenu_server"; 	close wm_quickmessage, 		"v", 7 )
+	QM_MENU_ITEM( 		_("E. ETMan Sounds"), 	exec "soundmenu"; 			close wm_quickmessage, 		"e", 8 )
 
 QM_MENU_END
 

@@ -174,15 +174,20 @@ static uint64_t g_totalPacketsReceived = 0;
 static uint64_t g_totalPacketsRouted = 0;
 static uint64_t g_totalBytesReceived = 0;
 
-/* Sound playback timing */
+/* Sound playback timing and state */
 static uint64_t g_lastSoundPacketTime = 0;
+static int g_soundPacketCount = 0;
+static uint32_t g_soundSeq = 0;
 #define SOUND_PACKET_INTERVAL_MS 20  /* 20ms between Opus packets */
 
 /*
  * Reset sound playback timing (called when new sound starts)
+ * This ensures clean state for each new sound - prevents sync issues
  */
 void resetSoundPlaybackTiming(void) {
     g_lastSoundPacketTime = 0;
+    g_soundPacketCount = 0;
+    g_soundSeq = 0;
 }
 
 /* Get current time in milliseconds */
@@ -778,13 +783,53 @@ static void printStats(void) {
 }
 
 /*
+ * Update client address (called when we receive packets from them)
+ * This handles NAT port changes
+ */
+void updateClientAddress(uint32_t clientId, struct sockaddr_in *addr) {
+    ClientInfo *client = findClientById(clientId);
+    if (client) {
+        /* Only update if port changed */
+        if (client->addr.sin_port != addr->sin_port) {
+            char ipStr[INET_ADDRSTRLEN];
+            inet_ntop(AF_INET, &addr->sin_addr, ipStr, sizeof(ipStr));
+            printf("[DEBUG] Client %u address updated: port %d -> %d\n",
+                   clientId, ntohs(client->addr.sin_port), ntohs(addr->sin_port));
+            client->addr = *addr;
+        }
+        client->lastSeen = time(NULL);
+    }
+}
+
+/*
  * Send response packet to a specific client
  * Called by sound_manager.c
  */
+/* Global variable to store current packet source address */
+static struct sockaddr_in g_currentPacketAddr;
+static int g_hasCurrentPacketAddr = 0;
+
+void setCurrentPacketAddress(struct sockaddr_in *addr) {
+    if (addr) {
+        g_currentPacketAddr = *addr;
+        g_hasCurrentPacketAddr = 1;
+    }
+}
+
 void sendResponseToClient(uint32_t clientId, uint8_t respType, const char *message) {
-    ClientInfo *client = findClientById(clientId);
-    if (!client) {
-        return;
+    struct sockaddr_in *targetAddr = NULL;
+
+    /* ALWAYS use the current packet address if available - this handles NAT correctly */
+    if (g_hasCurrentPacketAddr) {
+        targetAddr = &g_currentPacketAddr;
+    } else {
+        ClientInfo *client = findClientById(clientId);
+        if (client) {
+            targetAddr = &client->addr;
+        } else {
+            printf("[SOUND] WARNING: Cannot send response to client %u - not found and no packet address!\n", clientId);
+            return;
+        }
     }
 
     uint8_t packet[512];
@@ -797,10 +842,13 @@ void sendResponseToClient(uint32_t clientId, uint8_t respType, const char *messa
 
     int packetLen = 1 + msgLen + 1;
 
-    sendto(g_socket, (char *)packet, packetLen, 0,
-           (struct sockaddr *)&client->addr, sizeof(client->addr));
+    int sent = sendto(g_socket, (char *)packet, packetLen, 0,
+           (struct sockaddr *)targetAddr, sizeof(*targetAddr));
 
-    printf("[SOUND] Response to client %u: %s\n", clientId, message);
+    char ipStr[INET_ADDRSTRLEN];
+    inet_ntop(AF_INET, &targetAddr->sin_addr, ipStr, sizeof(ipStr));
+    printf("[SOUND] Response to client %u at %s:%d: type=0x%02x msg=%s (sent=%d bytes)\n",
+           clientId, ipStr, ntohs(targetAddr->sin_port), respType, message, sent);
 }
 
 /*
@@ -888,15 +936,14 @@ static void processSoundPlayback(void) {
     }
 
     uint64_t nowMs = getTimeMs();
-    static int packetCount = 0;
-    static uint32_t soundSeq = 0;
 
-    /* Initialize timing on first packet */
+    /* Initialize timing on first packet of new sound */
     if (g_lastSoundPacketTime == 0) {
-        printf("SoundMgr: Starting playback stream at time %lu\n", (unsigned long)nowMs);
+        printf("SoundMgr: Starting playback stream at time %lu (seq=%u, count=%d)\n",
+               (unsigned long)nowMs, g_soundSeq, g_soundPacketCount);
         g_lastSoundPacketTime = nowMs;
-        packetCount = 0;
-        soundSeq = 0;
+        /* Note: g_soundPacketCount and g_soundSeq are reset in resetSoundPlaybackTiming()
+         * which is called when a new sound starts. This ensures clean state. */
     }
 
     /* Calculate how many packets we should have sent by now */
@@ -919,17 +966,17 @@ static void processSoundPlayback(void) {
 
         if (SoundMgr_GetNextOpusPacket(opusBuffer, &opusLen)) {
             uint8_t initiatorId = (uint8_t)SoundMgr_GetPlaybackClientId();
-            broadcastOpusPacket(initiatorId, VOICE_CHAN_SOUND, soundSeq++, opusBuffer, opusLen);
-            packetCount++;
+            broadcastOpusPacket(initiatorId, VOICE_CHAN_SOUND, g_soundSeq++, opusBuffer, opusLen);
+            g_soundPacketCount++;
 
             /* Debug: log occasionally */
-            if (packetCount <= 5 || (packetCount % 100 == 0)) {
-                printf("SoundMgr: Packet %d (sent %d this frame)\n", packetCount, i + 1);
+            if (g_soundPacketCount <= 5 || (g_soundPacketCount % 100 == 0)) {
+                printf("SoundMgr: Packet %d (sent %d this frame)\n", g_soundPacketCount, i + 1);
             }
         } else {
-            /* Playback finished */
-            g_lastSoundPacketTime = 0;
-            printf("SoundMgr: Playback finished after %d packets\n", packetCount);
+            /* Playback finished - reset state for next sound */
+            printf("SoundMgr: Playback finished after %d packets\n", g_soundPacketCount);
+            resetSoundPlaybackTiming();
             return;
         }
     }

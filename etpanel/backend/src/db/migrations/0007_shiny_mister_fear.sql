@@ -1,0 +1,1 @@
+DROP INDEX "user_sound_menus_guid_parent_position_idx";

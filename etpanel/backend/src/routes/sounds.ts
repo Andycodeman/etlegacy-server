@@ -1,7 +1,7 @@
 import { FastifyPluginAsync } from 'fastify';
 import { z } from 'zod';
 import { db, schema } from '../db/index.js';
-import { eq, and, desc, asc, sql, ilike, or } from 'drizzle-orm';
+import { eq, and, desc, asc, sql, ilike, or, isNull } from 'drizzle-orm';
 import { authenticate, requireAdmin } from '../middleware/auth.js';
 import { createReadStream, existsSync, statSync, writeFileSync, mkdirSync, unlinkSync } from 'fs';
 import { join, extname } from 'path';
@@ -23,11 +23,11 @@ const SUPPORTED_EXTENSIONS = ['.mp3', '.wav'];
 const SUPPORTED_CONTENT_TYPES = ['audio/mpeg', 'audio/mp3', 'audio/wav', 'audio/wave', 'audio/x-wav'];
 
 // Validation schemas
-// Aliases allow: letters, numbers, underscores, and dashes (no spaces - used in commands)
-const aliasRegex = /^[a-zA-Z0-9_-]+$/;
-const aliasMessage = 'Only letters, numbers, underscores, and dashes allowed';
+// Sound aliases and playlist names allow: letters, numbers, underscores, dashes, and spaces
+const aliasRegex = /^[a-zA-Z0-9_\- ]+$/;
+const aliasMessage = 'Only letters, numbers, underscores, dashes, and spaces allowed';
 
-// Playlist names allow: letters, numbers, underscores, dashes, and spaces (display only)
+// Playlist names use same rules as sound aliases
 const playlistNameRegex = /^[a-zA-Z0-9_\- ]+$/;
 const playlistNameMessage = 'Only letters, numbers, underscores, dashes, and spaces allowed';
 
@@ -2127,7 +2127,17 @@ export const soundsRoutes: FastifyPluginAsync = async (fastify) => {
   const addMenuItemSchema = z.object({
     itemPosition: z.number().int().min(1).max(9),
     itemType: z.enum(['sound', 'menu', 'playlist']).default('sound'),
-    soundAlias: z.string().min(1).max(32).optional(), // Required if itemType='sound'
+    soundAlias: z.string().min(1).max(32).optional(), // Required if itemType='sound' (for personal menus)
+    nestedMenuId: z.number().int().optional().nullable(), // Required if itemType='menu'
+    playlistId: z.number().int().optional().nullable(), // Required if itemType='playlist'
+    displayName: z.string().max(32).optional().nullable(),
+  });
+
+  // Server menu items use soundId instead of soundAlias (admin can add any sound)
+  const addServerMenuItemSchema = z.object({
+    itemPosition: z.number().int().min(1).max(9),
+    itemType: z.enum(['sound', 'menu', 'playlist']).default('sound'),
+    soundId: z.number().int().optional().nullable(), // Required if itemType='sound' (for server menus)
     nestedMenuId: z.number().int().optional().nullable(), // Required if itemType='menu'
     playlistId: z.number().int().optional().nullable(), // Required if itemType='playlist'
     displayName: z.string().max(32).optional().nullable(),
@@ -2144,6 +2154,379 @@ export const soundsRoutes: FastifyPluginAsync = async (fastify) => {
 
   const reorderMenuItemsSchema = z.object({
     itemIds: z.array(z.number().int()),
+  });
+
+  // Schema for root items (sounds/playlists/menus at vsay root level)
+  const addRootItemSchema = z.object({
+    itemPosition: z.number().int().min(1).max(9),
+    itemType: z.enum(['sound', 'menu', 'playlist']),
+    soundAlias: z.string().min(1).max(32).optional(), // For itemType='sound'
+    menuId: z.number().int().optional(), // For itemType='menu'
+    playlistId: z.number().int().optional(), // For itemType='playlist'
+    displayName: z.string().max(32).optional().nullable(),
+  });
+
+  // GET /api/sounds/root-items - Get user's root-level items (sounds/playlists/menus at vsay slots)
+  fastify.get('/root-items', { preHandler: authenticate }, async (request, reply) => {
+    const guid = await getUserGuid(request.user.userId);
+    if (!guid) {
+      return reply.status(400).send({ error: 'No GUID linked to account. Use /etman register in-game.' });
+    }
+
+    const items = await db.execute(sql`
+      SELECT
+        i.id,
+        i.item_position as "itemPosition",
+        i.item_type as "itemType",
+        i.sound_id as "soundId",
+        i.nested_menu_id as "nestedMenuId",
+        i.playlist_id as "playlistId",
+        i.display_name as "displayName",
+        i.created_at as "createdAt",
+        s.alias as "soundAlias",
+        sf.duration_seconds as "durationSeconds",
+        m.menu_name as "menuName",
+        (SELECT COUNT(*) FROM user_sound_menu_items WHERE menu_id = i.nested_menu_id) as "menuItemCount",
+        p.name as "playlistName",
+        (SELECT COUNT(*) FROM sound_playlist_items WHERE playlist_id = i.playlist_id) as "playlistSoundCount"
+      FROM user_sound_menu_items i
+      LEFT JOIN user_sounds s ON i.sound_id = s.id
+      LEFT JOIN sound_files sf ON sf.id = s.sound_file_id
+      LEFT JOIN user_sound_menus m ON i.nested_menu_id = m.id
+      LEFT JOIN sound_playlists p ON i.playlist_id = p.id
+      WHERE i.menu_id IS NULL
+        AND i.user_guid = ${guid}
+        AND (i.is_server_default = false OR i.is_server_default IS NULL)
+      ORDER BY i.item_position
+    `);
+
+    return { items: items.rows };
+  });
+
+  // POST /api/sounds/root-items - Add item to root level
+  fastify.post('/root-items', { preHandler: authenticate }, async (request, reply) => {
+    const guid = await getUserGuid(request.user.userId);
+    if (!guid) {
+      return reply.status(400).send({ error: 'No GUID linked to account. Use /etman register in-game.' });
+    }
+
+    const body = addRootItemSchema.safeParse(request.body);
+    if (!body.success) {
+      return reply.status(400).send({ error: body.error.errors[0].message });
+    }
+
+    const { itemPosition, itemType, soundAlias, menuId, playlistId, displayName } = body.data;
+
+    // Check if position is already taken at root level for this user
+    const [existing] = await db
+      .select({ id: schema.userSoundMenuItems.id })
+      .from(schema.userSoundMenuItems)
+      .where(and(
+        isNull(schema.userSoundMenuItems.menuId),
+        eq(schema.userSoundMenuItems.userGuid, guid),
+        eq(schema.userSoundMenuItems.itemPosition, itemPosition),
+        or(
+          eq(schema.userSoundMenuItems.isServerDefault, false),
+          isNull(schema.userSoundMenuItems.isServerDefault)
+        )
+      ))
+      .limit(1);
+
+    if (existing) {
+      return reply.status(409).send({ error: `Position ${itemPosition} is already taken` });
+    }
+
+    // Resolve soundId from alias if needed
+    let soundId: number | null = null;
+    if (itemType === 'sound' && soundAlias) {
+      const [sound] = await db
+        .select({ id: schema.userSounds.id })
+        .from(schema.userSounds)
+        .where(and(
+          eq(schema.userSounds.guid, guid),
+          eq(schema.userSounds.alias, soundAlias)
+        ))
+        .limit(1);
+
+      if (!sound) {
+        return reply.status(404).send({ error: `Sound "${soundAlias}" not found` });
+      }
+      soundId = sound.id;
+    }
+
+    // Validate menu exists if assigning a menu
+    if (itemType === 'menu' && menuId) {
+      const [menu] = await db
+        .select({ id: schema.userSoundMenus.id })
+        .from(schema.userSoundMenus)
+        .where(and(
+          eq(schema.userSoundMenus.id, menuId),
+          eq(schema.userSoundMenus.userGuid, guid)
+        ))
+        .limit(1);
+
+      if (!menu) {
+        return reply.status(404).send({ error: 'Menu not found' });
+      }
+    }
+
+    // Validate playlist exists if assigning a playlist
+    if (itemType === 'playlist' && playlistId) {
+      const [playlist] = await db
+        .select({ id: schema.soundPlaylists.id })
+        .from(schema.soundPlaylists)
+        .where(eq(schema.soundPlaylists.id, playlistId))
+        .limit(1);
+
+      if (!playlist) {
+        return reply.status(404).send({ error: 'Playlist not found' });
+      }
+    }
+
+    const [item] = await db
+      .insert(schema.userSoundMenuItems)
+      .values({
+        menuId: null,
+        userGuid: guid,
+        isServerDefault: false,
+        itemPosition,
+        itemType,
+        soundId: itemType === 'sound' ? soundId : null,
+        nestedMenuId: itemType === 'menu' ? menuId : null,
+        playlistId: itemType === 'playlist' ? playlistId : null,
+        displayName: displayName || null,
+      })
+      .returning();
+
+    return { success: true, item };
+  });
+
+  // PUT /api/sounds/root-items/:id - Update root item position or displayName
+  fastify.put('/root-items/:id', { preHandler: authenticate }, async (request, reply) => {
+    const guid = await getUserGuid(request.user.userId);
+    if (!guid) {
+      return reply.status(400).send({ error: 'No GUID linked to account. Use /etman register in-game.' });
+    }
+
+    const { id } = request.params as { id: string };
+    const itemId = parseInt(id, 10);
+
+    const body = z.object({
+      itemPosition: z.number().int().min(0).max(9).optional(),
+      displayName: z.string().max(32).optional().nullable(),
+    }).safeParse(request.body);
+
+    if (!body.success) {
+      return reply.status(400).send({ error: body.error.errors[0].message });
+    }
+
+    // Check item exists and belongs to user at root level
+    const [item] = await db
+      .select({ id: schema.userSoundMenuItems.id })
+      .from(schema.userSoundMenuItems)
+      .where(and(
+        eq(schema.userSoundMenuItems.id, itemId),
+        isNull(schema.userSoundMenuItems.menuId),
+        eq(schema.userSoundMenuItems.userGuid, guid)
+      ))
+      .limit(1);
+
+    if (!item) {
+      return reply.status(404).send({ error: 'Root item not found' });
+    }
+
+    // Build update object
+    const updateData: { itemPosition?: number; displayName?: string | null } = {};
+    if (body.data.itemPosition !== undefined) updateData.itemPosition = body.data.itemPosition;
+    if (body.data.displayName !== undefined) updateData.displayName = body.data.displayName;
+
+    if (Object.keys(updateData).length > 0) {
+      await db
+        .update(schema.userSoundMenuItems)
+        .set(updateData)
+        .where(eq(schema.userSoundMenuItems.id, itemId));
+    }
+
+    return { success: true };
+  });
+
+  // DELETE /api/sounds/root-items/:id - Remove item from root level
+  fastify.delete('/root-items/:id', { preHandler: authenticate }, async (request, reply) => {
+    const guid = await getUserGuid(request.user.userId);
+    if (!guid) {
+      return reply.status(400).send({ error: 'No GUID linked to account. Use /etman register in-game.' });
+    }
+
+    const { id } = request.params as { id: string };
+    const itemId = parseInt(id, 10);
+
+    // Check item exists and belongs to user at root level
+    const [item] = await db
+      .select({ id: schema.userSoundMenuItems.id })
+      .from(schema.userSoundMenuItems)
+      .where(and(
+        eq(schema.userSoundMenuItems.id, itemId),
+        isNull(schema.userSoundMenuItems.menuId),
+        eq(schema.userSoundMenuItems.userGuid, guid)
+      ))
+      .limit(1);
+
+    if (!item) {
+      return reply.status(404).send({ error: 'Root item not found' });
+    }
+
+    await db.delete(schema.userSoundMenuItems).where(eq(schema.userSoundMenuItems.id, itemId));
+
+    return { success: true };
+  });
+
+  // GET /api/sounds/server-root-items - Get server's root-level items (admin only)
+  fastify.get('/server-root-items', { preHandler: [authenticate, requireAdmin] }, async (request, reply) => {
+    const items = await db.execute(sql`
+      SELECT
+        i.id,
+        i.item_position as "itemPosition",
+        i.item_type as "itemType",
+        i.sound_id as "soundId",
+        i.nested_menu_id as "nestedMenuId",
+        i.playlist_id as "playlistId",
+        i.display_name as "displayName",
+        i.created_at as "createdAt",
+        sf.original_name as "soundName",
+        sf.duration_seconds as "durationSeconds",
+        m.menu_name as "menuName",
+        (SELECT COUNT(*) FROM user_sound_menu_items WHERE menu_id = i.nested_menu_id) as "menuItemCount",
+        p.name as "playlistName",
+        (SELECT COUNT(*) FROM sound_playlist_items WHERE playlist_id = i.playlist_id) as "playlistSoundCount"
+      FROM user_sound_menu_items i
+      LEFT JOIN sound_files sf ON i.sound_id = sf.id
+      LEFT JOIN user_sound_menus m ON i.nested_menu_id = m.id
+      LEFT JOIN sound_playlists p ON i.playlist_id = p.id
+      WHERE i.menu_id IS NULL
+        AND i.is_server_default = true
+      ORDER BY i.item_position
+    `);
+
+    return { items: items.rows };
+  });
+
+  // POST /api/sounds/server-root-items - Add item to server root level (admin only)
+  fastify.post('/server-root-items', { preHandler: [authenticate, requireAdmin] }, async (request, reply) => {
+    const body = z.object({
+      itemPosition: z.number().int().min(1).max(9),
+      itemType: z.enum(['sound', 'menu', 'playlist']),
+      soundId: z.number().int().optional(), // For server items, use soundId directly
+      menuId: z.number().int().optional(),
+      playlistId: z.number().int().optional(),
+      displayName: z.string().max(32).optional().nullable(),
+    }).safeParse(request.body);
+
+    if (!body.success) {
+      return reply.status(400).send({ error: body.error.errors[0].message });
+    }
+
+    const { itemPosition, itemType, soundId, menuId, playlistId, displayName } = body.data;
+
+    // Check if position is already taken at server root level
+    const [existing] = await db
+      .select({ id: schema.userSoundMenuItems.id })
+      .from(schema.userSoundMenuItems)
+      .where(and(
+        isNull(schema.userSoundMenuItems.menuId),
+        eq(schema.userSoundMenuItems.isServerDefault, true),
+        eq(schema.userSoundMenuItems.itemPosition, itemPosition)
+      ))
+      .limit(1);
+
+    if (existing) {
+      return reply.status(409).send({ error: `Position ${itemPosition} is already taken` });
+    }
+
+    const [item] = await db
+      .insert(schema.userSoundMenuItems)
+      .values({
+        menuId: null,
+        userGuid: null,
+        isServerDefault: true,
+        itemPosition,
+        itemType,
+        soundId: itemType === 'sound' ? soundId : null,
+        nestedMenuId: itemType === 'menu' ? menuId : null,
+        playlistId: itemType === 'playlist' ? playlistId : null,
+        displayName: displayName || null,
+      })
+      .returning();
+
+    return { success: true, item };
+  });
+
+  // PUT /api/sounds/server-root-items/:id - Update server root item position or displayName (admin only)
+  fastify.put('/server-root-items/:id', { preHandler: [authenticate, requireAdmin] }, async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const itemId = parseInt(id, 10);
+
+    const body = z.object({
+      itemPosition: z.number().int().min(0).max(9).optional(),
+      displayName: z.string().max(32).optional().nullable(),
+    }).safeParse(request.body);
+
+    if (!body.success) {
+      return reply.status(400).send({ error: body.error.errors[0].message });
+    }
+
+    // Check item exists at server root level
+    const [item] = await db
+      .select({ id: schema.userSoundMenuItems.id })
+      .from(schema.userSoundMenuItems)
+      .where(and(
+        eq(schema.userSoundMenuItems.id, itemId),
+        isNull(schema.userSoundMenuItems.menuId),
+        eq(schema.userSoundMenuItems.isServerDefault, true)
+      ))
+      .limit(1);
+
+    if (!item) {
+      return reply.status(404).send({ error: 'Server root item not found' });
+    }
+
+    // Build update object
+    const updateData: { itemPosition?: number; displayName?: string | null } = {};
+    if (body.data.itemPosition !== undefined) updateData.itemPosition = body.data.itemPosition;
+    if (body.data.displayName !== undefined) updateData.displayName = body.data.displayName;
+
+    if (Object.keys(updateData).length > 0) {
+      await db
+        .update(schema.userSoundMenuItems)
+        .set(updateData)
+        .where(eq(schema.userSoundMenuItems.id, itemId));
+    }
+
+    return { success: true };
+  });
+
+  // DELETE /api/sounds/server-root-items/:id - Remove item from server root level (admin only)
+  fastify.delete('/server-root-items/:id', { preHandler: [authenticate, requireAdmin] }, async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const itemId = parseInt(id, 10);
+
+    // Check item exists at server root level
+    const [item] = await db
+      .select({ id: schema.userSoundMenuItems.id })
+      .from(schema.userSoundMenuItems)
+      .where(and(
+        eq(schema.userSoundMenuItems.id, itemId),
+        isNull(schema.userSoundMenuItems.menuId),
+        eq(schema.userSoundMenuItems.isServerDefault, true)
+      ))
+      .limit(1);
+
+    if (!item) {
+      return reply.status(404).send({ error: 'Server root item not found' });
+    }
+
+    await db.delete(schema.userSoundMenuItems).where(eq(schema.userSoundMenuItems.id, itemId));
+
+    return { success: true };
   });
 
   // GET /api/sounds/menus - List user's menus (supports ?parentId= for hierarchical browsing)
@@ -2274,26 +2657,29 @@ export const soundsRoutes: FastifyPluginAsync = async (fastify) => {
     }
 
     // Check if position is already taken within the same parent
-    const positionCheck = parentId
-      ? and(
-          eq(schema.userSoundMenus.userGuid, guid),
-          eq(schema.userSoundMenus.menuPosition, menuPosition),
-          eq(schema.userSoundMenus.parentId, parentId)
-        )
-      : and(
-          eq(schema.userSoundMenus.userGuid, guid),
-          eq(schema.userSoundMenus.menuPosition, menuPosition),
-          sql`${schema.userSoundMenus.parentId} IS NULL`
-        );
+    // Skip position check for position 0 (used as placeholder when menu will be added via root-items)
+    if (menuPosition > 0) {
+      const positionCheck = parentId
+        ? and(
+            eq(schema.userSoundMenus.userGuid, guid),
+            eq(schema.userSoundMenus.menuPosition, menuPosition),
+            eq(schema.userSoundMenus.parentId, parentId)
+          )
+        : and(
+            eq(schema.userSoundMenus.userGuid, guid),
+            eq(schema.userSoundMenus.menuPosition, menuPosition),
+            sql`${schema.userSoundMenus.parentId} IS NULL`
+          );
 
-    const [existing] = await db
-      .select({ id: schema.userSoundMenus.id })
-      .from(schema.userSoundMenus)
-      .where(positionCheck)
-      .limit(1);
+      const [existing] = await db
+        .select({ id: schema.userSoundMenus.id })
+        .from(schema.userSoundMenus)
+        .where(positionCheck)
+        .limit(1);
 
-    if (existing) {
-      return reply.status(409).send({ error: `Position ${menuPosition} is already in use` });
+      if (existing) {
+        return reply.status(409).send({ error: `Position ${menuPosition} is already in use` });
+      }
     }
 
     // If playlistId provided, verify it exists and belongs to user (or is public)
@@ -3534,5 +3920,417 @@ export const soundsRoutes: FastifyPluginAsync = async (fastify) => {
     reply.header('Accept-Ranges', 'bytes');
 
     return reply.send(createReadStream(tempFilePath));
+  });
+
+  // ============================================================================
+  // Server Sound Menus (admin-managed, visible to all players)
+  // ============================================================================
+
+  // GET /api/sounds/server-menus - List all server menus (available to all authenticated users)
+  fastify.get('/server-menus', { preHandler: authenticate }, async (request, reply) => {
+    const query = request.query as { parentId?: string; flat?: string };
+    const parentIdFilter = query.parentId ? parseInt(query.parentId, 10) : null;
+    const flat = query.flat === 'true';
+
+    // If flat=true, return all server menus for tree view
+    if (flat) {
+      const menus = await db.execute(sql`
+        SELECT m.id, m.menu_name as "menuName", m.menu_position as "menuPosition",
+               m.parent_id as "parentId", m.playlist_id as "playlistId", m.created_at as "createdAt",
+               m.updated_at as "updatedAt", sp.name as "playlistName",
+               CASE
+                 WHEN m.playlist_id IS NOT NULL THEN
+                   (SELECT COUNT(*) FROM sound_playlist_items pi WHERE pi.playlist_id = m.playlist_id)
+                 ELSE
+                   (SELECT COUNT(*) FROM user_sound_menu_items mi WHERE mi.menu_id = m.id)
+               END as "itemCount"
+        FROM user_sound_menus m
+        LEFT JOIN sound_playlists sp ON sp.id = m.playlist_id
+        WHERE m.is_server_default = true
+        ORDER BY m.parent_id NULLS FIRST, m.menu_position ASC
+      `);
+      return { menus: menus.rows };
+    }
+
+    // Return menus at specific level
+    if (parentIdFilter === null) {
+      // Root level server menus
+      const menus = await db.execute(sql`
+        SELECT m.id, m.menu_name as "menuName", m.menu_position as "menuPosition",
+               m.parent_id as "parentId", m.playlist_id as "playlistId", m.created_at as "createdAt",
+               m.updated_at as "updatedAt", sp.name as "playlistName",
+               CASE
+                 WHEN m.playlist_id IS NOT NULL THEN
+                   (SELECT COUNT(*) FROM sound_playlist_items pi WHERE pi.playlist_id = m.playlist_id)
+                 ELSE
+                   (SELECT COUNT(*) FROM user_sound_menu_items mi WHERE mi.menu_id = m.id)
+               END as "itemCount"
+        FROM user_sound_menus m
+        LEFT JOIN sound_playlists sp ON sp.id = m.playlist_id
+        WHERE m.is_server_default = true AND m.parent_id IS NULL
+        ORDER BY m.menu_position ASC
+      `);
+      return { menus: menus.rows };
+    } else {
+      // Child menus of specific parent
+      const menus = await db.execute(sql`
+        SELECT m.id, m.menu_name as "menuName", m.menu_position as "menuPosition",
+               m.parent_id as "parentId", m.playlist_id as "playlistId", m.created_at as "createdAt",
+               m.updated_at as "updatedAt", sp.name as "playlistName",
+               CASE
+                 WHEN m.playlist_id IS NOT NULL THEN
+                   (SELECT COUNT(*) FROM sound_playlist_items pi WHERE pi.playlist_id = m.playlist_id)
+                 ELSE
+                   (SELECT COUNT(*) FROM user_sound_menu_items mi WHERE mi.menu_id = m.id)
+               END as "itemCount"
+        FROM user_sound_menus m
+        LEFT JOIN sound_playlists sp ON sp.id = m.playlist_id
+        WHERE m.is_server_default = true AND m.parent_id = ${parentIdFilter}
+        ORDER BY m.menu_position ASC
+      `);
+      return { menus: menus.rows };
+    }
+  });
+
+  // POST /api/sounds/server-menus - Create a server menu (admin only)
+  fastify.post('/server-menus', { preHandler: [authenticate, requireAdmin] }, async (request, reply) => {
+    const body = createMenuSchema.safeParse(request.body);
+    if (!body.success) {
+      return reply.status(400).send({ error: 'Invalid input', details: body.error.flatten() });
+    }
+
+    const guid = await getUserGuid(request.user.userId);
+    if (!guid) {
+      return reply.status(400).send({ error: 'No GUID linked to account' });
+    }
+
+    const { menuName, menuPosition, parentId, playlistId } = body.data;
+
+    // If parentId provided, verify it exists and is a server menu
+    if (parentId) {
+      const [parentMenu] = await db
+        .select({ id: schema.userSoundMenus.id })
+        .from(schema.userSoundMenus)
+        .where(and(
+          eq(schema.userSoundMenus.id, parentId),
+          eq(schema.userSoundMenus.isServerDefault, true)
+        ))
+        .limit(1);
+
+      if (!parentMenu) {
+        return reply.status(404).send({ error: 'Parent server menu not found' });
+      }
+    }
+
+    // Check if position is already taken within the same parent (server menus only)
+    // Skip position check for position 0 (used as placeholder when menu will be added via root-items)
+    if (menuPosition > 0) {
+      const positionCheck = parentId
+        ? and(
+            eq(schema.userSoundMenus.isServerDefault, true),
+            eq(schema.userSoundMenus.menuPosition, menuPosition),
+            eq(schema.userSoundMenus.parentId, parentId)
+          )
+        : and(
+            eq(schema.userSoundMenus.isServerDefault, true),
+            eq(schema.userSoundMenus.menuPosition, menuPosition),
+            sql`${schema.userSoundMenus.parentId} IS NULL`
+          );
+
+      const [existing] = await db
+        .select({ id: schema.userSoundMenus.id })
+        .from(schema.userSoundMenus)
+        .where(positionCheck)
+        .limit(1);
+
+      if (existing) {
+        return reply.status(409).send({ error: `Position ${menuPosition} is already in use` });
+      }
+    }
+
+    const [menu] = await db
+      .insert(schema.userSoundMenus)
+      .values({
+        userGuid: guid, // Track who created it (for accountability)
+        menuName,
+        menuPosition,
+        parentId: parentId || null,
+        playlistId: playlistId || null,
+        isServerDefault: true,
+      })
+      .returning();
+
+    return { success: true, menu };
+  });
+
+  // GET /api/sounds/server-menus/:id - Get a specific server menu with items
+  fastify.get('/server-menus/:id', { preHandler: authenticate }, async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const menuId = parseInt(id, 10);
+
+    // Get the menu (server menus only)
+    const [menu] = await db
+      .select()
+      .from(schema.userSoundMenus)
+      .where(and(
+        eq(schema.userSoundMenus.id, menuId),
+        eq(schema.userSoundMenus.isServerDefault, true)
+      ))
+      .limit(1);
+
+    if (!menu) {
+      return reply.status(404).send({ error: 'Server menu not found' });
+    }
+
+    // Get menu items
+    const items = await db.execute(sql`
+      SELECT mi.id, mi.item_position as "itemPosition", mi.item_type as "itemType",
+             COALESCE(mi.display_name, us.alias, nm.menu_name, pl.name) as "displayName",
+             mi.sound_id as "soundId",
+             mi.nested_menu_id as "nestedMenuId", mi.playlist_id as "playlistId",
+             us.alias as "soundAlias",
+             sf.original_name as "originalName", sf.duration_seconds as "durationSeconds",
+             nm.menu_name as "nestedMenuName",
+             pl.name as "playlistName",
+             (SELECT COUNT(*) FROM sound_playlist_items spi WHERE spi.playlist_id = mi.playlist_id)::int as "playlistSoundCount"
+      FROM user_sound_menu_items mi
+      LEFT JOIN user_sounds us ON us.id = mi.sound_id
+      LEFT JOIN sound_files sf ON sf.id = us.sound_file_id
+      LEFT JOIN user_sound_menus nm ON nm.id = mi.nested_menu_id
+      LEFT JOIN sound_playlists pl ON pl.id = mi.playlist_id
+      WHERE mi.menu_id = ${menuId}
+      ORDER BY mi.item_position ASC
+    `);
+
+    return { menu, items: items.rows, totalItems: items.rows.length };
+  });
+
+  // PUT /api/sounds/server-menus/:id - Update a server menu (admin only)
+  fastify.put('/server-menus/:id', { preHandler: [authenticate, requireAdmin] }, async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const menuId = parseInt(id, 10);
+    const body = updateMenuSchema.safeParse(request.body);
+    if (!body.success) {
+      return reply.status(400).send({ error: 'Invalid input', details: body.error.flatten() });
+    }
+
+    // Verify menu exists and is a server menu
+    const [menu] = await db
+      .select({ id: schema.userSoundMenus.id, parentId: schema.userSoundMenus.parentId })
+      .from(schema.userSoundMenus)
+      .where(and(
+        eq(schema.userSoundMenus.id, menuId),
+        eq(schema.userSoundMenus.isServerDefault, true)
+      ))
+      .limit(1);
+
+    if (!menu) {
+      return reply.status(404).send({ error: 'Server menu not found' });
+    }
+
+    const { menuName, menuPosition, playlistId } = body.data;
+    const updateData: Record<string, unknown> = { updatedAt: new Date() };
+
+    if (menuName !== undefined) {
+      updateData.menuName = menuName;
+    }
+    if (menuPosition !== undefined) {
+      // Check if new position conflicts (only if changing position)
+      const positionCheck = menu.parentId
+        ? and(
+            eq(schema.userSoundMenus.isServerDefault, true),
+            eq(schema.userSoundMenus.menuPosition, menuPosition),
+            eq(schema.userSoundMenus.parentId, menu.parentId),
+            sql`${schema.userSoundMenus.id} != ${menuId}`
+          )
+        : and(
+            eq(schema.userSoundMenus.isServerDefault, true),
+            eq(schema.userSoundMenus.menuPosition, menuPosition),
+            sql`${schema.userSoundMenus.parentId} IS NULL`,
+            sql`${schema.userSoundMenus.id} != ${menuId}`
+          );
+
+      const [conflict] = await db
+        .select({ id: schema.userSoundMenus.id })
+        .from(schema.userSoundMenus)
+        .where(positionCheck)
+        .limit(1);
+
+      if (conflict) {
+        return reply.status(409).send({ error: `Position ${menuPosition} is already in use` });
+      }
+      updateData.menuPosition = menuPosition;
+    }
+    if (playlistId !== undefined) updateData.playlistId = playlistId;
+
+    const [updated] = await db
+      .update(schema.userSoundMenus)
+      .set(updateData)
+      .where(eq(schema.userSoundMenus.id, menuId))
+      .returning();
+
+    return { success: true, menu: updated };
+  });
+
+  // DELETE /api/sounds/server-menus/:id - Delete a server menu (admin only)
+  fastify.delete('/server-menus/:id', { preHandler: [authenticate, requireAdmin] }, async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const menuId = parseInt(id, 10);
+
+    // Verify menu exists and is a server menu
+    const [menu] = await db
+      .select({ id: schema.userSoundMenus.id })
+      .from(schema.userSoundMenus)
+      .where(and(
+        eq(schema.userSoundMenus.id, menuId),
+        eq(schema.userSoundMenus.isServerDefault, true)
+      ))
+      .limit(1);
+
+    if (!menu) {
+      return reply.status(404).send({ error: 'Server menu not found' });
+    }
+
+    // Delete cascades via FK
+    await db.delete(schema.userSoundMenus).where(eq(schema.userSoundMenus.id, menuId));
+
+    return { success: true };
+  });
+
+  // POST /api/sounds/server-menus/:id/items - Add item to server menu (admin only)
+  fastify.post('/server-menus/:id/items', { preHandler: [authenticate, requireAdmin] }, async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const menuId = parseInt(id, 10);
+    const body = addServerMenuItemSchema.safeParse(request.body);
+    if (!body.success) {
+      return reply.status(400).send({ error: 'Invalid input', details: body.error.flatten() });
+    }
+
+    // Verify menu exists and is a server menu
+    const [menu] = await db
+      .select({ id: schema.userSoundMenus.id, playlistId: schema.userSoundMenus.playlistId })
+      .from(schema.userSoundMenus)
+      .where(and(
+        eq(schema.userSoundMenus.id, menuId),
+        eq(schema.userSoundMenus.isServerDefault, true)
+      ))
+      .limit(1);
+
+    if (!menu) {
+      return reply.status(404).send({ error: 'Server menu not found' });
+    }
+
+    if (menu.playlistId) {
+      return reply.status(400).send({ error: 'Cannot add items to playlist-backed menu' });
+    }
+
+    const { itemType, itemPosition, displayName, soundId, nestedMenuId, playlistId } = body.data;
+
+    // Check position conflict
+    const [existing] = await db
+      .select({ id: schema.userSoundMenuItems.id })
+      .from(schema.userSoundMenuItems)
+      .where(and(
+        eq(schema.userSoundMenuItems.menuId, menuId),
+        eq(schema.userSoundMenuItems.itemPosition, itemPosition)
+      ))
+      .limit(1);
+
+    if (existing) {
+      return reply.status(409).send({ error: `Position ${itemPosition} is already in use` });
+    }
+
+    // Validate references based on item type
+    if (itemType === 'sound' && soundId) {
+      // Verify sound exists (any user's sound can be used for server menus)
+      const [sound] = await db
+        .select({ id: schema.userSounds.id })
+        .from(schema.userSounds)
+        .where(eq(schema.userSounds.id, soundId))
+        .limit(1);
+
+      if (!sound) {
+        return reply.status(404).send({ error: 'Sound not found' });
+      }
+    } else if (itemType === 'menu' && nestedMenuId) {
+      // Verify nested menu exists and is also a server menu
+      const [nestedMenu] = await db
+        .select({ id: schema.userSoundMenus.id })
+        .from(schema.userSoundMenus)
+        .where(and(
+          eq(schema.userSoundMenus.id, nestedMenuId),
+          eq(schema.userSoundMenus.isServerDefault, true)
+        ))
+        .limit(1);
+
+      if (!nestedMenu) {
+        return reply.status(404).send({ error: 'Nested server menu not found' });
+      }
+    } else if (itemType === 'playlist' && playlistId) {
+      // Verify playlist exists
+      const [playlist] = await db
+        .select({ id: schema.soundPlaylists.id })
+        .from(schema.soundPlaylists)
+        .where(eq(schema.soundPlaylists.id, playlistId))
+        .limit(1);
+
+      if (!playlist) {
+        return reply.status(404).send({ error: 'Playlist not found' });
+      }
+    }
+
+    const [item] = await db
+      .insert(schema.userSoundMenuItems)
+      .values({
+        menuId,
+        itemType,
+        itemPosition,
+        displayName: displayName || null,
+        soundId: itemType === 'sound' ? soundId : null,
+        nestedMenuId: itemType === 'menu' ? nestedMenuId : null,
+        playlistId: itemType === 'playlist' ? playlistId : null,
+      })
+      .returning();
+
+    return { success: true, item };
+  });
+
+  // DELETE /api/sounds/server-menus/:id/items/:itemId - Remove item from server menu (admin only)
+  fastify.delete('/server-menus/:id/items/:itemId', { preHandler: [authenticate, requireAdmin] }, async (request, reply) => {
+    const { id, itemId } = request.params as { id: string; itemId: string };
+    const menuId = parseInt(id, 10);
+    const menuItemId = parseInt(itemId, 10);
+
+    // Verify menu exists and is a server menu
+    const [menu] = await db
+      .select({ id: schema.userSoundMenus.id })
+      .from(schema.userSoundMenus)
+      .where(and(
+        eq(schema.userSoundMenus.id, menuId),
+        eq(schema.userSoundMenus.isServerDefault, true)
+      ))
+      .limit(1);
+
+    if (!menu) {
+      return reply.status(404).send({ error: 'Server menu not found' });
+    }
+
+    // Verify item exists
+    const [item] = await db
+      .select({ id: schema.userSoundMenuItems.id })
+      .from(schema.userSoundMenuItems)
+      .where(and(
+        eq(schema.userSoundMenuItems.id, menuItemId),
+        eq(schema.userSoundMenuItems.menuId, menuId)
+      ))
+      .limit(1);
+
+    if (!item) {
+      return reply.status(404).send({ error: 'Menu item not found' });
+    }
+
+    await db.delete(schema.userSoundMenuItems).where(eq(schema.userSoundMenuItems.id, menuItemId));
+
+    return { success: true };
   });
 };

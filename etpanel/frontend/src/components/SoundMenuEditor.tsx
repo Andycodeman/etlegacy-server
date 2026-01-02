@@ -3,8 +3,11 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { sounds } from '../api/client';
 import type { SoundMenu, SoundMenuItem, UserSound } from '../api/client';
 
+type MenuMode = 'personal' | 'server';
+
 interface SoundMenuEditorProps {
   userSounds: UserSound[];
+  mode?: MenuMode;
 }
 
 function formatDuration(seconds?: number): string {
@@ -14,372 +17,409 @@ function formatDuration(seconds?: number): string {
   return `${mins}:${secs.toString().padStart(2, '0')}`;
 }
 
-// DnD types
-interface DragItem {
-  id: number;
-  index: number;
+// Breadcrumb item for navigation
+interface BreadcrumbItem {
+  id: number | null; // null for root
+  name: string;
 }
 
-// Add item mode
-type AddItemMode = 'sound' | 'menu' | 'playlist' | null;
-
-export default function SoundMenuEditor({ userSounds }: SoundMenuEditorProps) {
+export default function SoundMenuEditor({ userSounds, mode = 'personal' }: SoundMenuEditorProps) {
   const queryClient = useQueryClient();
+  const isServerMode = mode === 'server';
+  const queryKey = isServerMode ? ['serverSoundMenus'] : ['soundMenus'];
 
-  // State
-  const [editingMenu, setEditingMenu] = useState<SoundMenu | null>(null);
-  const [isCreating, setIsCreating] = useState(false);
-  const [deleteConfirm, setDeleteConfirm] = useState<number | null>(null);
+  // Navigation state - breadcrumb path
+  const [menuPath, setMenuPath] = useState<BreadcrumbItem[]>([{ id: null, name: 'Root' }]);
+  const currentParentId = menuPath[menuPath.length - 1].id;
+
+  // Edit slot state
+  const [editingSlot, setEditingSlot] = useState<number | null>(null);
+  const [editingSlotItem, setEditingSlotItem] = useState<SoundMenuItem | SoundMenu | null>(null);
+  const [editMode, setEditMode] = useState<'view' | 'pick-type' | 'pick-sound' | 'pick-playlist' | 'pick-menu' | 'create-menu'>('view');
+  const [searchQuery, setSearchQuery] = useState('');
+  const [newMenuName, setNewMenuName] = useState('');
+
+  // Error state
   const [error, setError] = useState('');
 
-  // Form state for create/edit dialog
-  const [menuName, setMenuName] = useState('');
-  const [menuPosition, setMenuPosition] = useState(1);
+  // Inline rename state (for renaming items directly in the slot view)
+  // For menus: renamingItemId is the menu ID. For sounds/playlists at root: it's the root item ID.
+  const [renamingItemId, setRenamingItemId] = useState<number | null>(null);
+  const [renamingItemType, setRenamingItemType] = useState<'menu' | 'root-item' | 'menu-item' | null>(null);
+  const [renamingItemName, setRenamingItemName] = useState('');
 
-  // Items for menu editing
-  const [menuItems, setMenuItems] = useState<SoundMenuItem[]>([]);
-
-  // Add item state - can be 'sound' or 'menu'
-  const [addingItemMode, setAddingItemMode] = useState<AddItemMode>(null);
-  const [addingItemPosition, setAddingItemPosition] = useState<number | null>(null);
-  const [searchQuery, setSearchQuery] = useState('');
-
-  // Drag and drop state for menu items
-  const [draggedItem, setDraggedItem] = useState<DragItem | null>(null);
-  const [dragOverIndex, setDragOverIndex] = useState<number | null>(null);
-
-  // Drag and drop state for menus themselves
-  const [draggedMenu, setDraggedMenu] = useState<SoundMenu | null>(null);
-  const [dragOverPosition, setDragOverPosition] = useState<number | null>(null);
-
-  // Fetch all menus (we filter locally now)
-  const { data: menusData, isLoading: menusLoading } = useQuery({
-    queryKey: ['soundMenus'],
-    queryFn: () => sounds.listMenus(),
+  // Fetch all menus (used for navigating into menus from root items)
+  const { isLoading: menusLoading } = useQuery({
+    queryKey: queryKey,
+    queryFn: () => isServerMode ? sounds.getServerMenus() : sounds.listMenus(),
   });
 
-  // Use the same data for nested menu picker
-  const allMenusData = menusData;
-
-  // Fetch playlists for dropdown
+  // Fetch playlists
   const { data: playlistsData } = useQuery({
     queryKey: ['playlists'],
     queryFn: sounds.playlists,
   });
 
-  const menus = menusData?.menus || [];
-  const allMenus = allMenusData?.menus || [];
+  // Fetch root items (when at root level)
+  const { data: rootItemsData } = useQuery({
+    queryKey: [...queryKey, 'rootItems'],
+    queryFn: () => isServerMode ? sounds.getServerRootItems() : sounds.getRootItems(),
+  });
+
+  // Fetch items for current parent menu (if navigated into a menu)
+  const { data: currentMenuData } = useQuery({
+    queryKey: [...queryKey, 'items', currentParentId],
+    queryFn: async () => {
+      if (currentParentId === null) return null;
+      return isServerMode
+        ? sounds.getServerMenu(currentParentId)
+        : sounds.getMenu(currentParentId);
+    },
+    enabled: currentParentId !== null,
+  });
+
   const playlists = playlistsData?.playlists || [];
+  const rootItems = rootItemsData?.items || [];
+  const currentMenuItems = currentMenuData?.items || [];
 
-  // Get available positions (1-9 minus already taken, plus 0 for unassigned)
-  const getAvailablePositions = useCallback((excludeMenuId?: number) => {
-    const taken = new Set(
-      menus
-        .filter((m) => m.id !== excludeMenuId && m.parentId === null && m.menuPosition > 0)
-        .map((m) => m.menuPosition)
-    );
-    return [1, 2, 3, 4, 5, 6, 7, 8, 9].filter((p) => !taken.has(p));
-  }, [menus]);
+  // Get menus/items for current view
+  const getSlotContent = useCallback((position: number): { type: 'menu' | 'sound' | 'playlist' | 'empty'; item?: SoundMenu | SoundMenuItem } => {
+    if (currentParentId === null) {
+      // At root - show root items at this position
+      const item = rootItems.find((i: SoundMenuItem) => i.itemPosition === position);
+      if (item) {
+        if (item.itemType === 'sound') {
+          return { type: 'sound', item };
+        } else if (item.itemType === 'playlist') {
+          return { type: 'playlist', item };
+        } else if (item.itemType === 'menu') {
+          return { type: 'menu', item };
+        }
+      }
+    } else {
+      // Inside a menu - show items at this position
+      const item = currentMenuItems.find(i => i.itemPosition === position);
+      if (item) {
+        if (item.itemType === 'sound') {
+          return { type: 'sound', item };
+        } else if (item.itemType === 'playlist') {
+          return { type: 'playlist', item };
+        } else if (item.itemType === 'menu') {
+          return { type: 'menu', item };
+        }
+      }
+    }
+    return { type: 'empty' };
+  }, [rootItems, currentMenuItems, currentParentId]);
 
-  // Get assigned menus (position 1-9, no parent)
-  const assignedMenus = menus.filter(m => m.parentId === null && m.menuPosition > 0);
+  // Helper to remove existing content at a position before adding new content
+  // Pass existingItem to avoid stale closure issues
+  const removeExistingContent = async (existingItem: SoundMenu | SoundMenuItem | null, parentId: number | null) => {
+    if (!existingItem) return;
 
-  // Get unassigned menus (position 0 or null parent with position 0)
-  const unassignedMenus = menus.filter(m => m.menuPosition === 0 || m.menuPosition === null);
+    if (parentId === null) {
+      // At root - delete the root item
+      const item = existingItem as SoundMenuItem;
+      if (isServerMode) {
+        await sounds.removeServerRootItem(item.id);
+      } else {
+        await sounds.removeRootItem(item.id);
+      }
+    } else {
+      // Inside a menu - remove the item
+      const item = existingItem as SoundMenuItem;
+      if (isServerMode) {
+        await sounds.removeServerMenuItem(parentId, item.id);
+      } else {
+        await sounds.removeMenuItem(parentId, item.id);
+      }
+    }
+  };
 
   // Mutations
   const createMenuMutation = useMutation({
-    mutationFn: () =>
-      sounds.createMenu(
-        menuName,
-        menuPosition,
-        null, // No longer using playlist-backed menus
-        null  // Always create at root level
-      ),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['soundMenus'] });
-      closeDialog();
-    },
-    onError: (err: Error) => setError(err.message),
-  });
-
-  const updateMenuMutation = useMutation({
-    mutationFn: (menuId: number) =>
-      sounds.updateMenu(menuId, {
-        menuName,
-        menuPosition,
-      }),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['soundMenus'] });
-      closeDialog();
-    },
-    onError: (err: Error) => setError(err.message),
-  });
-
-  const deleteMenuMutation = useMutation({
-    mutationFn: (menuId: number) => sounds.deleteMenu(menuId),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['soundMenus'] });
-      setDeleteConfirm(null);
-    },
-    onError: (err: Error) => {
-      setError(err.message);
-      setDeleteConfirm(null);
-    },
-  });
-
-  const moveMenuMutation = useMutation({
-    mutationFn: ({ menuId, newPosition }: { menuId: number; newPosition: number }) =>
-      sounds.updateMenu(menuId, { menuPosition: newPosition }),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['soundMenus'] });
-    },
-    onError: (err: Error) => setError(err.message),
-  });
-
-  const addSoundItemMutation = useMutation({
-    mutationFn: ({ menuId, soundAlias, position }: { menuId: number; soundAlias: string; position: number }) =>
-      sounds.addMenuItem(menuId, soundAlias, position),
-    onSuccess: () => {
-      if (editingMenu) {
-        fetchMenuItems(editingMenu.id);
+    mutationFn: async ({ name, position, parentId, existingItem }: { name: string; position: number; parentId: number | null; existingItem?: SoundMenu | SoundMenuItem | null }) => {
+      // First remove any existing content at this position
+      if (existingItem) {
+        await removeExistingContent(existingItem, parentId);
       }
-      setAddingItemMode(null);
-      setAddingItemPosition(null);
-      setSearchQuery('');
-    },
-    onError: (err: Error) => setError(err.message),
-  });
 
-  const addNestedMenuItemMutation = useMutation({
-    mutationFn: ({ menuId, nestedMenuId, position }: { menuId: number; nestedMenuId: number; position: number }) =>
-      sounds.addNestedMenuItem(menuId, nestedMenuId, position),
-    onSuccess: () => {
-      if (editingMenu) {
-        fetchMenuItems(editingMenu.id);
+      if (parentId === null) {
+        // At root - create a menu and add it as a root item
+        const menuResult = isServerMode
+          ? await sounds.createServerMenu({ menuName: name, menuPosition: 0 }) // position 0 = not directly assigned
+          : await sounds.createMenu(name, 0, null, null);
+        const menuId = menuResult.menu.id;
+        // Now add the menu as a root item at the specified position
+        if (isServerMode) {
+          await sounds.addServerRootMenu(menuId, position, name);
+        } else {
+          await sounds.addRootMenu(menuId, position, name);
+        }
+        return menuResult;
+      } else {
+        // Inside a menu - create nested menu
+        if (isServerMode) {
+          return sounds.createServerMenu({ menuName: name, menuPosition: position });
+        }
+        return sounds.createMenu(name, position, null, parentId);
       }
-      setAddingItemMode(null);
-      setAddingItemPosition(null);
-      setSearchQuery('');
     },
-    onError: (err: Error) => setError(err.message),
-  });
-
-  const addPlaylistItemMutation = useMutation({
-    mutationFn: ({ menuId, playlistId, position }: { menuId: number; playlistId: number; position: number }) =>
-      sounds.addPlaylistMenuItem(menuId, playlistId, position),
     onSuccess: () => {
-      if (editingMenu) {
-        fetchMenuItems(editingMenu.id);
+      queryClient.invalidateQueries({ queryKey });
+      queryClient.invalidateQueries({ queryKey: [...queryKey, 'rootItems'] });
+      if (currentParentId !== null) {
+        queryClient.invalidateQueries({ queryKey: [...queryKey, 'items', currentParentId] });
       }
-      setAddingItemMode(null);
-      setAddingItemPosition(null);
-      setSearchQuery('');
+      closeEditSlot();
     },
     onError: (err: Error) => setError(err.message),
   });
 
+  // Inline rename menu mutation (updates the menu's actual name)
+  const renameMenuMutation = useMutation({
+    mutationFn: async ({ menuId, menuName }: { menuId: number; menuName: string }) => {
+      if (isServerMode) {
+        return sounds.updateServerMenu(menuId, { menuName });
+      }
+      return sounds.updateMenu(menuId, { menuName });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey });
+      queryClient.invalidateQueries({ queryKey: [...queryKey, 'rootItems'] });
+      if (currentParentId !== null) {
+        queryClient.invalidateQueries({ queryKey: [...queryKey, 'items', currentParentId] });
+      }
+      setRenamingItemId(null);
+      setRenamingItemType(null);
+      setRenamingItemName('');
+    },
+    onError: (err: Error) => setError(err.message),
+  });
+
+  // Inline rename root item mutation (updates displayName for sounds/playlists at root)
+  const renameRootItemMutation = useMutation({
+    mutationFn: async ({ itemId, displayName }: { itemId: number; displayName: string }) => {
+      if (isServerMode) {
+        return sounds.updateServerRootItem(itemId, { displayName });
+      }
+      return sounds.updateRootItem(itemId, { displayName });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey });
+      queryClient.invalidateQueries({ queryKey: [...queryKey, 'rootItems'] });
+      setRenamingItemId(null);
+      setRenamingItemType(null);
+      setRenamingItemName('');
+    },
+    onError: (err: Error) => setError(err.message),
+  });
+
+  // Inline rename menu item mutation (updates displayName for sounds/playlists inside a menu)
+  const renameMenuItemMutation = useMutation({
+    mutationFn: async ({ menuId, itemId, displayName }: { menuId: number; itemId: number; displayName: string }) => {
+      return sounds.updateMenuItem(menuId, itemId, { displayName });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey });
+      if (currentParentId !== null) {
+        queryClient.invalidateQueries({ queryKey: [...queryKey, 'items', currentParentId] });
+      }
+      setRenamingItemId(null);
+      setRenamingItemType(null);
+      setRenamingItemName('');
+    },
+    onError: (err: Error) => setError(err.message),
+  });
+
+  // Add sound to current menu or root
+  const addSoundMutation = useMutation({
+    mutationFn: async ({ soundId, soundAlias, position, existingItem }: { soundId: number; soundAlias: string; position: number; existingItem?: SoundMenu | SoundMenuItem | null }) => {
+      // First remove any existing content at this position
+      if (existingItem) {
+        await removeExistingContent(existingItem, currentParentId);
+      }
+
+      if (currentParentId === null) {
+        // At root - add sound directly as root item
+        if (isServerMode) {
+          await sounds.addServerRootSound(soundId, position, soundAlias);
+        } else {
+          await sounds.addRootSound(soundAlias, position);
+        }
+        return { success: true };
+      } else {
+        // Inside a menu - add sound item
+        if (isServerMode) {
+          await sounds.addSoundToServerMenu(currentParentId, soundId, position);
+        } else {
+          await sounds.addMenuItem(currentParentId, soundAlias, position);
+        }
+        return { success: true };
+      }
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey });
+      queryClient.invalidateQueries({ queryKey: [...queryKey, 'rootItems'] });
+      if (currentParentId !== null) {
+        queryClient.invalidateQueries({ queryKey: [...queryKey, 'items', currentParentId] });
+      }
+      closeEditSlot();
+    },
+    onError: (err: Error) => setError(err.message),
+  });
+
+  // Add playlist to current menu or root
+  const addPlaylistMutation = useMutation({
+    mutationFn: async ({ playlistId, playlistName, position, existingItem }: { playlistId: number; playlistName: string; position: number; existingItem?: SoundMenu | SoundMenuItem | null }) => {
+      // First remove any existing content at this position
+      if (existingItem) {
+        await removeExistingContent(existingItem, currentParentId);
+      }
+
+      if (currentParentId === null) {
+        // At root - add playlist directly as root item
+        if (isServerMode) {
+          await sounds.addServerRootPlaylist(playlistId, position, playlistName);
+        } else {
+          await sounds.addRootPlaylist(playlistId, position, playlistName);
+        }
+      } else {
+        // Inside a menu - add playlist item
+        if (isServerMode) {
+          await sounds.addPlaylistToServerMenu(currentParentId, playlistId, position);
+        } else {
+          await sounds.addPlaylistMenuItem(currentParentId, playlistId, position);
+        }
+      }
+      return { success: true };
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey });
+      queryClient.invalidateQueries({ queryKey: [...queryKey, 'rootItems'] });
+      if (currentParentId !== null) {
+        queryClient.invalidateQueries({ queryKey: [...queryKey, 'items', currentParentId] });
+      }
+      closeEditSlot();
+    },
+    onError: (err: Error) => setError(err.message),
+  });
+
+  // Remove item from menu
   const removeItemMutation = useMutation({
     mutationFn: ({ menuId, itemId }: { menuId: number; itemId: number }) =>
-      sounds.removeMenuItem(menuId, itemId),
+      isServerMode
+        ? sounds.removeServerMenuItem(menuId, itemId)
+        : sounds.removeMenuItem(menuId, itemId),
     onSuccess: () => {
-      if (editingMenu) {
-        fetchMenuItems(editingMenu.id);
+      queryClient.invalidateQueries({ queryKey });
+      if (currentParentId !== null) {
+        queryClient.invalidateQueries({ queryKey: [...queryKey, 'items', currentParentId] });
+      }
+      closeEditSlot();
+    },
+    onError: (err: Error) => setError(err.message),
+  });
+
+  // Swap two items/menus positions
+  const swapPositionsMutation = useMutation({
+    mutationFn: async ({ fromPos, toPos }: { fromPos: number; toPos: number }) => {
+      const fromContent = getSlotContent(fromPos);
+      const toContent = getSlotContent(toPos);
+
+      if (currentParentId === null) {
+        // At root level - swapping root items
+        const fromItem = fromContent.item as SoundMenuItem | undefined;
+        const toItem = toContent.item as SoundMenuItem | undefined;
+
+        // Move "from" to a temp position (0), move "to" to "from", move temp to "to"
+        if (fromItem && toItem) {
+          // Both slots have items - swap them
+          if (isServerMode) {
+            await sounds.updateServerRootItem(fromItem.id, { itemPosition: 0 });
+            await sounds.updateServerRootItem(toItem.id, { itemPosition: fromPos });
+            await sounds.updateServerRootItem(fromItem.id, { itemPosition: toPos });
+          } else {
+            await sounds.updateRootItem(fromItem.id, { itemPosition: 0 });
+            await sounds.updateRootItem(toItem.id, { itemPosition: fromPos });
+            await sounds.updateRootItem(fromItem.id, { itemPosition: toPos });
+          }
+        } else if (fromItem) {
+          // Only from has an item - just move it
+          if (isServerMode) {
+            await sounds.updateServerRootItem(fromItem.id, { itemPosition: toPos });
+          } else {
+            await sounds.updateRootItem(fromItem.id, { itemPosition: toPos });
+          }
+        }
+      } else {
+        // Inside a menu - swapping items
+        const fromItem = fromContent.item as SoundMenuItem | undefined;
+        const toItem = toContent.item as SoundMenuItem | undefined;
+
+        if (fromItem && toItem) {
+          // Both slots have items - swap them
+          await sounds.updateMenuItem(currentParentId, fromItem.id, { itemPosition: 0 });
+          await sounds.updateMenuItem(currentParentId, toItem.id, { itemPosition: fromPos });
+          await sounds.updateMenuItem(currentParentId, fromItem.id, { itemPosition: toPos });
+        } else if (fromItem) {
+          // Only from has an item - just move it
+          await sounds.updateMenuItem(currentParentId, fromItem.id, { itemPosition: toPos });
+        }
+      }
+      return { success: true };
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey });
+      queryClient.invalidateQueries({ queryKey: [...queryKey, 'rootItems'] });
+      if (currentParentId !== null) {
+        queryClient.invalidateQueries({ queryKey: [...queryKey, 'items', currentParentId] });
       }
     },
     onError: (err: Error) => setError(err.message),
   });
 
-  const reorderItemsMutation = useMutation({
-    mutationFn: ({ menuId, itemIds }: { menuId: number; itemIds: number[] }) =>
-      sounds.reorderMenuItems(menuId, itemIds),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['soundMenus'] });
-    },
-    onError: (err: Error) => setError(err.message),
-  });
-
-  // Fetch menu items when editing
-  const fetchMenuItems = async (menuId: number) => {
-    try {
-      const data = await sounds.getMenu(menuId);
-      setMenuItems(data.items);
-    } catch (err) {
-      setError((err as Error).message);
+  // Navigation handlers
+  const navigateToMenu = (menu: SoundMenu | SoundMenuItem) => {
+    const menuId = 'nestedMenuId' in menu ? menu.nestedMenuId : menu.id;
+    const menuName = 'displayName' in menu ? menu.displayName : menu.menuName;
+    if (menuId) {
+      setMenuPath([...menuPath, { id: menuId, name: menuName }]);
     }
   };
 
-  // Dialog handlers
-  const openCreateDialog = () => {
-    setIsCreating(true);
-    setEditingMenu(null);
-    setMenuName('');
-    setMenuPosition(0); // Default to unassigned
-    setMenuItems([]);
+  const navigateToBreadcrumb = (index: number) => {
+    setMenuPath(menuPath.slice(0, index + 1));
+  };
+
+  // Edit slot handlers
+  const openEditSlot = (position: number) => {
+    const content = getSlotContent(position);
+    setEditingSlot(position);
+    setEditingSlotItem(content.item || null);
+    setEditMode(content.type === 'empty' ? 'pick-type' : 'view');
+    setSearchQuery('');
+    setNewMenuName('');
     setError('');
   };
 
-  const openEditDialog = async (menu: SoundMenu) => {
-    setIsCreating(false);
-    setEditingMenu(menu);
-    setMenuName(menu.menuName);
-    setMenuPosition(menu.menuPosition);
+  const closeEditSlot = () => {
+    setEditingSlot(null);
+    setEditingSlotItem(null);
+    setEditMode('view');
+    setSearchQuery('');
+    setNewMenuName('');
     setError('');
-    await fetchMenuItems(menu.id);
   };
 
-  const closeDialog = () => {
-    setIsCreating(false);
-    setEditingMenu(null);
-    setMenuName('');
-    setMenuItems([]);
-    setError('');
-    setAddingItemMode(null);
-    setAddingItemPosition(null);
-  };
-
-  const handleSave = () => {
-    if (!menuName.trim()) {
-      setError('Menu name is required');
-      return;
-    }
-
-    if (isCreating) {
-      createMenuMutation.mutate();
-    } else if (editingMenu) {
-      updateMenuMutation.mutate(editingMenu.id);
-    }
-  };
-
-  // Drag handlers
-  const handleDragStart = (e: React.DragEvent, item: SoundMenuItem, index: number) => {
-    setDraggedItem({ id: item.id, index });
-    e.dataTransfer.effectAllowed = 'move';
-  };
-
-  const handleDragOver = (e: React.DragEvent, index: number) => {
-    e.preventDefault();
-    if (draggedItem && draggedItem.index !== index) {
-      setDragOverIndex(index);
-    }
-  };
-
-  const handleDragLeave = () => {
-    setDragOverIndex(null);
-  };
-
-  const handleDrop = (e: React.DragEvent, targetIndex: number) => {
-    e.preventDefault();
-    if (!draggedItem || !editingMenu) return;
-
-    const newItems = [...menuItems];
-    const [movedItem] = newItems.splice(draggedItem.index, 1);
-    newItems.splice(targetIndex, 0, movedItem);
-
-    setMenuItems(newItems);
-    setDraggedItem(null);
-    setDragOverIndex(null);
-
-    // Save new order
-    const itemIds = newItems.map((item) => item.id);
-    reorderItemsMutation.mutate({ menuId: editingMenu.id, itemIds });
-  };
-
-  const handleDragEnd = () => {
-    setDraggedItem(null);
-    setDragOverIndex(null);
-  };
-
-  // Menu drag handlers (for reordering menus in the list)
-  const handleMenuDragStart = (e: React.DragEvent, menu: SoundMenu) => {
-    setDraggedMenu(menu);
-    e.dataTransfer.effectAllowed = 'move';
-  };
-
-  const handleMenuDragOver = (e: React.DragEvent, position: number) => {
-    e.preventDefault();
-    if (draggedMenu && draggedMenu.menuPosition !== position) {
-      setDragOverPosition(position);
-    }
-  };
-
-  const handleMenuDragLeave = () => {
-    setDragOverPosition(null);
-  };
-
-  const handleMenuDrop = (e: React.DragEvent, targetPosition: number) => {
-    e.preventDefault();
-    if (!draggedMenu) return;
-
-    // Check if there's already a menu at the target position
-    const existingMenu = assignedMenus.find(m => m.menuPosition === targetPosition);
-
-    if (existingMenu) {
-      // Swap positions: move existing to dragged's old position, then move dragged to target
-      // First move existing menu to the dragged menu's old position
-      moveMenuMutation.mutate(
-        { menuId: existingMenu.id, newPosition: draggedMenu.menuPosition },
-        {
-          onSuccess: () => {
-            // Then move dragged menu to target position
-            moveMenuMutation.mutate({ menuId: draggedMenu.id, newPosition: targetPosition });
-          }
-        }
-      );
-    } else {
-      // Target is empty, just move the menu there
-      moveMenuMutation.mutate({ menuId: draggedMenu.id, newPosition: targetPosition });
-    }
-
-    setDraggedMenu(null);
-    setDragOverPosition(null);
-  };
-
-  const handleMenuDragEnd = () => {
-    setDraggedMenu(null);
-    setDragOverPosition(null);
-  };
-
-  // Filter sounds/menus for adding
-  const filteredSounds = userSounds.filter((s) =>
+  // Filter helpers
+  const filteredSounds = userSounds.filter(s =>
     s.alias.toLowerCase().includes(searchQuery.toLowerCase())
   );
 
-  // Get menus available to add as nested (exclude current menu and its parents)
-  const getAvailableNestedMenus = useCallback(() => {
-    if (!editingMenu) return allMenus;
-
-    // Exclude current menu and any menu that would create a cycle
-    const excludeIds = new Set<number>([editingMenu.id]);
-
-    // Also exclude menus that already contain this menu
-    // For simplicity, just exclude all ancestors
-    let current = editingMenu;
-    while (current.parentId) {
-      excludeIds.add(current.parentId);
-      current = allMenus.find(m => m.id === current.parentId) as SoundMenu;
-      if (!current) break;
-    }
-
-    return allMenus.filter(m =>
-      !excludeIds.has(m.id) &&
-      m.menuName.toLowerCase().includes(searchQuery.toLowerCase())
-    );
-  }, [allMenus, editingMenu, searchQuery]);
-
-  // Filter playlists for adding
-  const filteredPlaylists = playlists.filter((p) =>
+  const filteredPlaylists = playlists.filter(p =>
     p.name.toLowerCase().includes(searchQuery.toLowerCase())
   );
-
-  // Get next available position in menu
-  const getNextItemPosition = () => {
-    const usedPositions = new Set(menuItems.map((item) => item.itemPosition));
-    for (let i = 1; i <= 9; i++) {
-      if (!usedPositions.has(i)) return i;
-    }
-    return null;
-  };
 
   if (menusLoading) {
     return (
@@ -392,227 +432,329 @@ export default function SoundMenuEditor({ userSounds }: SoundMenuEditorProps) {
   return (
     <div className="space-y-6">
       {/* Header */}
-      <div className="flex items-center justify-between">
-        <div>
-          <h2 className="text-lg font-semibold">Sound Menus</h2>
-          <p className="text-sm text-gray-400">
-            Configure in-game sound menus. Click Edit to add sounds, playlists, or sub-menus.
-          </p>
-        </div>
-        <button
-          onClick={openCreateDialog}
-          className="px-4 py-2 bg-orange-600 hover:bg-orange-500 rounded font-medium transition-colors flex items-center gap-2"
-        >
-          <span>+</span> New Menu
-        </button>
+      <div>
+        <h2 className="text-lg font-semibold">{isServerMode ? 'Server Sound Menus' : 'Sound Menus'}</h2>
+        <p className="text-sm text-gray-400">
+          Click a slot to assign sounds, playlists, or menus. Click 📁 to navigate into menus.
+        </p>
       </div>
 
-      {error && !editingMenu && !isCreating && (
+      {/* Breadcrumb Navigation */}
+      {menuPath.length > 1 && (
+        <div className="flex items-center gap-2 text-sm bg-gray-800 rounded-lg p-3">
+          {menuPath.map((crumb, index) => (
+            <div key={index} className="flex items-center gap-2">
+              {index > 0 && <span className="text-gray-500">→</span>}
+              <button
+                onClick={() => navigateToBreadcrumb(index)}
+                className={`px-2 py-1 rounded transition-colors ${
+                  index === menuPath.length - 1
+                    ? 'bg-orange-600 text-white'
+                    : 'text-gray-400 hover:text-white hover:bg-gray-700'
+                }`}
+              >
+                {crumb.name}
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {error && !editingSlot && (
         <div className="bg-red-900/30 border border-red-600 rounded-lg p-4">
           <p className="text-red-400">{error}</p>
         </div>
       )}
 
-      {/* Menu List */}
-      <div className="grid gap-4">
-        {/* Show all 9 positions */}
+      {/* 9 Slots Grid */}
+      <div className="grid gap-3">
         {[1, 2, 3, 4, 5, 6, 7, 8, 9].map((position) => {
-          const menu = assignedMenus.find((m) => m.menuPosition === position);
+          const content = getSlotContent(position);
+          const isMenu = content.type === 'menu';
+          const isSound = content.type === 'sound';
+          const isPlaylist = content.type === 'playlist';
+          const isEmpty = content.type === 'empty';
 
-          if (menu) {
-            return (
-              <div
-                key={position}
-                draggable
-                onDragStart={(e) => handleMenuDragStart(e, menu)}
-                onDragOver={(e) => handleMenuDragOver(e, position)}
-                onDragLeave={handleMenuDragLeave}
-                onDrop={(e) => handleMenuDrop(e, position)}
-                onDragEnd={handleMenuDragEnd}
-                className={`bg-gray-800 rounded-lg p-4 flex items-center justify-between cursor-grab active:cursor-grabbing transition-all ${
-                  dragOverPosition === position ? 'ring-2 ring-orange-500 bg-orange-600/20' : ''
-                } ${draggedMenu?.id === menu.id ? 'opacity-50' : ''}`}
-              >
-                <div className="flex items-center gap-4">
-                  <div className="flex items-center gap-2">
-                    <span className="text-gray-500 text-xs">⋮⋮</span>
-                    <div className="w-8 h-8 bg-orange-600 rounded-lg flex items-center justify-center font-bold text-lg">
-                      {position}
-                    </div>
-                  </div>
-                  <div>
-                    <div className="font-medium">{menu.menuName}</div>
-                    <div className="text-sm text-gray-400">
-                      {menu.itemCount > 0 ? (
-                        <span>{menu.itemCount} item{menu.itemCount !== 1 ? 's' : ''}</span>
-                      ) : (
-                        <span className="text-gray-500">Empty</span>
-                      )}
-                    </div>
-                  </div>
-                </div>
-                <div className="flex items-center gap-2">
-                  <button
-                    onClick={() => openEditDialog(menu)}
-                    className="px-3 py-1.5 bg-gray-700 hover:bg-gray-600 rounded text-sm transition-colors"
-                  >
-                    Edit
-                  </button>
-                  {deleteConfirm === menu.id ? (
-                    <div className="flex gap-1">
-                      <button
-                        onClick={() => deleteMenuMutation.mutate(menu.id)}
-                        disabled={deleteMenuMutation.isPending}
-                        className="px-2 py-1 bg-red-600 hover:bg-red-500 rounded text-xs"
-                      >
-                        Yes
-                      </button>
-                      <button
-                        onClick={() => setDeleteConfirm(null)}
-                        className="px-2 py-1 bg-gray-600 hover:bg-gray-500 rounded text-xs"
-                      >
-                        No
-                      </button>
-                    </div>
-                  ) : (
-                    <button
-                      onClick={() => setDeleteConfirm(menu.id)}
-                      className="px-3 py-1.5 bg-red-600/20 hover:bg-red-600/40 text-red-400 rounded text-sm transition-colors"
-                    >
-                      Delete
-                    </button>
-                  )}
-                </div>
-              </div>
-            );
-          }
-
-          // Empty position
           return (
             <div
               key={position}
-              onDragOver={(e) => handleMenuDragOver(e, position)}
-              onDragLeave={handleMenuDragLeave}
-              onDrop={(e) => handleMenuDrop(e, position)}
-              className={`bg-gray-800/50 border border-dashed rounded-lg p-4 flex items-center justify-between transition-all ${
-                dragOverPosition === position
-                  ? 'border-orange-500 bg-orange-600/20 ring-2 ring-orange-500'
-                  : 'border-gray-700'
+              className={`bg-gray-800 rounded-lg p-4 flex items-center justify-between transition-all ${
+                isEmpty ? 'bg-gray-800/50 border border-dashed border-gray-700' : ''
               }`}
             >
               <div className="flex items-center gap-4">
-                <div className="w-8 h-8 bg-gray-700 rounded-lg flex items-center justify-center font-bold text-lg text-gray-500">
+                {/* Slot number */}
+                <div className={`w-8 h-8 rounded-lg flex items-center justify-center font-bold text-lg ${
+                  isEmpty ? 'bg-gray-700 text-gray-500' : 'bg-orange-600'
+                }`}>
                   {position}
                 </div>
-                <span className="text-gray-500">
-                  {dragOverPosition === position ? 'Drop here' : 'Empty slot'}
-                </span>
+
+                {/* Content display */}
+                {isEmpty ? (
+                  <span className="text-gray-500">Empty slot</span>
+                ) : isSound ? (
+                  <div className="flex items-center gap-2">
+                    <span className="text-xl">🔊</span>
+                    <div>
+                      {/* Inline rename for sounds */}
+                      {(() => {
+                        const item = content.item as SoundMenuItem;
+                        const itemId = item.id;
+                        const currentName = item.displayName || item.soundAlias || 'Sound';
+                        const isRenaming = renamingItemId === itemId && (renamingItemType === 'root-item' || renamingItemType === 'menu-item');
+
+                        if (isRenaming) {
+                          return (
+                            <input
+                              type="text"
+                              value={renamingItemName}
+                              onChange={(e) => setRenamingItemName(e.target.value.slice(0, 32))}
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter' && renamingItemName.trim()) {
+                                  if (currentParentId === null) {
+                                    renameRootItemMutation.mutate({ itemId, displayName: renamingItemName.trim() });
+                                  } else {
+                                    renameMenuItemMutation.mutate({ menuId: currentParentId, itemId, displayName: renamingItemName.trim() });
+                                  }
+                                } else if (e.key === 'Escape') {
+                                  setRenamingItemId(null);
+                                  setRenamingItemType(null);
+                                  setRenamingItemName('');
+                                }
+                              }}
+                              onBlur={() => {
+                                if (renamingItemName.trim() && renamingItemName !== currentName) {
+                                  if (currentParentId === null) {
+                                    renameRootItemMutation.mutate({ itemId, displayName: renamingItemName.trim() });
+                                  } else {
+                                    renameMenuItemMutation.mutate({ menuId: currentParentId, itemId, displayName: renamingItemName.trim() });
+                                  }
+                                } else {
+                                  setRenamingItemId(null);
+                                  setRenamingItemType(null);
+                                  setRenamingItemName('');
+                                }
+                              }}
+                              className="bg-gray-700 border border-orange-500 rounded px-2 py-0.5 text-orange-300 font-medium focus:outline-none w-40"
+                              autoFocus
+                            />
+                          );
+                        }
+                        return (
+                          <button
+                            onClick={() => {
+                              setRenamingItemId(itemId);
+                              setRenamingItemType(currentParentId === null ? 'root-item' : 'menu-item');
+                              setRenamingItemName(currentName);
+                            }}
+                            className="font-medium text-orange-300 hover:text-orange-200 hover:underline cursor-pointer text-left"
+                            title="Click to rename"
+                          >
+                            {currentName}
+                          </button>
+                        );
+                      })()}
+                      <div className="text-xs text-gray-500">Sound • {formatDuration((content.item as SoundMenuItem).durationSeconds)}</div>
+                    </div>
+                  </div>
+                ) : isPlaylist ? (
+                  <div className="flex items-center gap-2">
+                    <span className="text-xl">📋</span>
+                    <div>
+                      {/* Inline rename for playlists */}
+                      {(() => {
+                        const item = content.item as SoundMenuItem;
+                        const itemId = item.id;
+                        const currentName = item.displayName || item.playlistName || 'Playlist';
+                        const isRenaming = renamingItemId === itemId && (renamingItemType === 'root-item' || renamingItemType === 'menu-item');
+
+                        if (isRenaming) {
+                          return (
+                            <input
+                              type="text"
+                              value={renamingItemName}
+                              onChange={(e) => setRenamingItemName(e.target.value.slice(0, 32))}
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter' && renamingItemName.trim()) {
+                                  if (currentParentId === null) {
+                                    renameRootItemMutation.mutate({ itemId, displayName: renamingItemName.trim() });
+                                  } else {
+                                    renameMenuItemMutation.mutate({ menuId: currentParentId, itemId, displayName: renamingItemName.trim() });
+                                  }
+                                } else if (e.key === 'Escape') {
+                                  setRenamingItemId(null);
+                                  setRenamingItemType(null);
+                                  setRenamingItemName('');
+                                }
+                              }}
+                              onBlur={() => {
+                                if (renamingItemName.trim() && renamingItemName !== currentName) {
+                                  if (currentParentId === null) {
+                                    renameRootItemMutation.mutate({ itemId, displayName: renamingItemName.trim() });
+                                  } else {
+                                    renameMenuItemMutation.mutate({ menuId: currentParentId, itemId, displayName: renamingItemName.trim() });
+                                  }
+                                } else {
+                                  setRenamingItemId(null);
+                                  setRenamingItemType(null);
+                                  setRenamingItemName('');
+                                }
+                              }}
+                              className="bg-gray-700 border border-blue-500 rounded px-2 py-0.5 text-blue-300 font-medium focus:outline-none w-40"
+                              autoFocus
+                            />
+                          );
+                        }
+                        return (
+                          <button
+                            onClick={() => {
+                              setRenamingItemId(itemId);
+                              setRenamingItemType(currentParentId === null ? 'root-item' : 'menu-item');
+                              setRenamingItemName(currentName);
+                            }}
+                            className="font-medium text-blue-300 hover:text-blue-200 hover:underline cursor-pointer text-left"
+                            title="Click to rename"
+                          >
+                            {currentName}
+                          </button>
+                        );
+                      })()}
+                      <div className="text-xs text-gray-500">
+                        Playlist • {(content.item as SoundMenuItem).playlistSoundCount || 0} sounds
+                      </div>
+                    </div>
+                  </div>
+                ) : isMenu ? (
+                  <div className="flex items-center gap-2">
+                    <span className="text-xl">📁</span>
+                    <div>
+                      {/* Inline rename for menus */}
+                      {(() => {
+                        const item = content.item as SoundMenuItem;
+                        const menuId = item.nestedMenuId;
+                        const currentName = item.displayName || item.menuName || 'Menu';
+                        const isRenaming = renamingItemId === menuId && renamingItemType === 'menu';
+
+                        if (isRenaming && menuId) {
+                          return (
+                            <input
+                              type="text"
+                              value={renamingItemName}
+                              onChange={(e) => setRenamingItemName(e.target.value.slice(0, 32))}
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter' && renamingItemName.trim()) {
+                                  renameMenuMutation.mutate({ menuId, menuName: renamingItemName.trim() });
+                                } else if (e.key === 'Escape') {
+                                  setRenamingItemId(null);
+                                  setRenamingItemType(null);
+                                  setRenamingItemName('');
+                                }
+                              }}
+                              onBlur={() => {
+                                if (renamingItemName.trim() && renamingItemName !== currentName) {
+                                  renameMenuMutation.mutate({ menuId, menuName: renamingItemName.trim() });
+                                } else {
+                                  setRenamingItemId(null);
+                                  setRenamingItemType(null);
+                                  setRenamingItemName('');
+                                }
+                              }}
+                              className="bg-gray-700 border border-cyan-500 rounded px-2 py-0.5 text-cyan-300 font-medium focus:outline-none w-40"
+                              autoFocus
+                            />
+                          );
+                        }
+                        return (
+                          <button
+                            onClick={() => {
+                              if (menuId) {
+                                setRenamingItemId(menuId);
+                                setRenamingItemType('menu');
+                                setRenamingItemName(currentName);
+                              }
+                            }}
+                            className="font-medium text-cyan-300 hover:text-cyan-200 hover:underline cursor-pointer text-left"
+                            title="Click to rename"
+                          >
+                            {currentName}
+                          </button>
+                        );
+                      })()}
+                      <div className="text-xs text-gray-500">
+                        Menu • {(content.item as SoundMenuItem).menuItemCount || 0} items
+                      </div>
+                    </div>
+                  </div>
+                ) : null}
               </div>
-              <button
-                onClick={() => {
-                  openCreateDialog();
-                  setMenuPosition(position);
-                }}
-                className="px-3 py-1.5 bg-gray-700 hover:bg-gray-600 rounded text-sm transition-colors"
-              >
-                + Add Menu
-              </button>
+
+              {/* Action buttons */}
+              <div className="flex items-center gap-2">
+                {/* Up/Down arrows for non-empty slots */}
+                {!isEmpty && (
+                  <div className="flex flex-col gap-0.5">
+                    <button
+                      onClick={() => swapPositionsMutation.mutate({ fromPos: position, toPos: position - 1 })}
+                      disabled={position === 1 || swapPositionsMutation.isPending}
+                      className="px-1.5 py-0.5 bg-gray-700 hover:bg-gray-600 disabled:bg-gray-800 disabled:text-gray-600 rounded text-xs transition-colors"
+                      title="Move up"
+                    >
+                      ▲
+                    </button>
+                    <button
+                      onClick={() => swapPositionsMutation.mutate({ fromPos: position, toPos: position + 1 })}
+                      disabled={position === 9 || swapPositionsMutation.isPending}
+                      className="px-1.5 py-0.5 bg-gray-700 hover:bg-gray-600 disabled:bg-gray-800 disabled:text-gray-600 rounded text-xs transition-colors"
+                      title="Move down"
+                    >
+                      ▼
+                    </button>
+                  </div>
+                )}
+                {isMenu && (
+                  <button
+                    onClick={() => navigateToMenu(content.item!)}
+                    className="px-3 py-1.5 bg-cyan-600/30 hover:bg-cyan-600/50 text-cyan-300 rounded text-sm transition-colors"
+                    title="Navigate into this menu"
+                  >
+                    Enter →
+                  </button>
+                )}
+                <button
+                  onClick={() => openEditSlot(position)}
+                  className="px-3 py-1.5 bg-gray-700 hover:bg-gray-600 rounded text-sm transition-colors"
+                >
+                  {isEmpty ? 'Assign' : 'Edit'}
+                </button>
+              </div>
             </div>
           );
         })}
       </div>
 
-      {/* Unassigned Menus */}
-      {unassignedMenus.length > 0 && (
-        <div className="mt-6">
-          <h3 className="text-sm font-medium text-gray-400 mb-3">
-            Unassigned Menus ({unassignedMenus.length})
-          </h3>
-          <div className="grid gap-2">
-            {unassignedMenus.map((menu) => (
-              <div
-                key={menu.id}
-                draggable
-                onDragStart={(e) => handleMenuDragStart(e, menu)}
-                onDragEnd={handleMenuDragEnd}
-                className={`bg-gray-800/50 border border-dashed border-gray-600 rounded-lg p-3 flex items-center justify-between cursor-grab active:cursor-grabbing ${
-                  draggedMenu?.id === menu.id ? 'opacity-50' : ''
-                }`}
-              >
-                <div className="flex items-center gap-3">
-                  <span className="text-gray-500 text-xs">⋮⋮</span>
-                  <div>
-                    <div className="font-medium text-gray-300">{menu.menuName}</div>
-                    <div className="text-xs text-gray-500">
-                      {menu.itemCount > 0 ? (
-                        <span>{menu.itemCount} item{menu.itemCount !== 1 ? 's' : ''}</span>
-                      ) : (
-                        <span>Empty - click Edit to add items</span>
-                      )}
-                    </div>
-                  </div>
-                </div>
-                <div className="flex items-center gap-2">
-                  <button
-                    onClick={() => openEditDialog(menu)}
-                    className="px-3 py-1.5 bg-gray-700 hover:bg-gray-600 rounded text-sm transition-colors"
-                  >
-                    Edit
-                  </button>
-                  {deleteConfirm === menu.id ? (
-                    <div className="flex gap-1">
-                      <button
-                        onClick={() => deleteMenuMutation.mutate(menu.id)}
-                        disabled={deleteMenuMutation.isPending}
-                        className="px-2 py-1 bg-red-600 hover:bg-red-500 rounded text-xs"
-                      >
-                        Yes
-                      </button>
-                      <button
-                        onClick={() => setDeleteConfirm(null)}
-                        className="px-2 py-1 bg-gray-600 hover:bg-gray-500 rounded text-xs"
-                      >
-                        No
-                      </button>
-                    </div>
-                  ) : (
-                    <button
-                      onClick={() => setDeleteConfirm(menu.id)}
-                      className="px-3 py-1.5 bg-red-600/20 hover:bg-red-600/40 text-red-400 rounded text-sm transition-colors"
-                    >
-                      Delete
-                    </button>
-                  )}
-                </div>
-              </div>
-            ))}
-          </div>
-          <p className="text-xs text-gray-500 mt-2">
-            Drag unassigned menus to an empty slot above to activate them.
-          </p>
-        </div>
-      )}
-
-      {/* Menu Preview */}
+      {/* In-Game Preview */}
       <div className="bg-gray-800 rounded-lg p-4">
         <h3 className="font-medium mb-3">In-Game Preview</h3>
         <div className="inline-block bg-black/80 rounded-lg border border-gray-600 p-3 font-mono text-sm">
           <div className="text-orange-400 mb-2 border-b border-gray-600 pb-1">
-            ♪ Sound Menu
+            ♪ {menuPath.length > 1 ? menuPath[menuPath.length - 1].name : 'Sound Menu'}
           </div>
-          {menus.filter(m => m.parentId === null && m.menuPosition > 0).length === 0 ? (
-            <div className="text-gray-500 italic">No menus configured</div>
-          ) : (
-            menus
-              .filter(m => m.parentId === null && m.menuPosition > 0)
-              .sort((a, b) => a.menuPosition - b.menuPosition)
-              .map((menu) => (
-                <div key={menu.id} className="flex items-center gap-2 py-0.5">
-                  <span className="text-yellow-400">{menu.menuPosition}.</span>
-                  <span className="text-cyan-400">{menu.menuName}</span>
-                  <span className="text-gray-400 ml-auto">→</span>
-                </div>
-              ))
+          {[1, 2, 3, 4, 5, 6, 7, 8, 9].map((pos) => {
+            const content = getSlotContent(pos);
+            if (content.type === 'empty') return null;
+            const name = content.item && ('menuName' in content.item ? content.item.menuName : content.item.displayName);
+            const isMenuType = content.type === 'menu';
+            return (
+              <div key={pos} className="flex items-center gap-2 py-0.5">
+                <span className="text-yellow-400">{pos}.</span>
+                <span className={isMenuType ? 'text-cyan-400' : 'text-white'}>{name}</span>
+                {isMenuType && <span className="text-gray-400 ml-auto">→</span>}
+              </div>
+            );
+          })}
+          {[1, 2, 3, 4, 5, 6, 7, 8, 9].every(p => getSlotContent(p).type === 'empty') && (
+            <div className="text-gray-500 italic">No items configured</div>
           )}
           <div className="text-gray-500 text-xs mt-2 border-t border-gray-600 pt-1">
             1-9 select, 0 next page, BKSP back
@@ -620,339 +762,335 @@ export default function SoundMenuEditor({ userSounds }: SoundMenuEditorProps) {
         </div>
       </div>
 
-      {/* Create/Edit Dialog */}
-      {(isCreating || editingMenu) && (
-        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4 overflow-y-auto">
-          <div className="bg-gray-800 rounded-lg p-6 max-w-2xl w-full my-8">
+      {/* Edit Slot Dialog */}
+      {editingSlot !== null && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
+          <div className="bg-gray-800 rounded-lg p-6 max-w-md w-full">
             <h3 className="text-lg font-semibold mb-4">
-              {isCreating ? 'Create New Menu' : `Edit Menu: ${editingMenu?.menuName}`}
+              Slot {editingSlot} - {menuPath.length > 1 ? menuPath[menuPath.length - 1].name : 'Root'}
             </h3>
 
-            <div className="space-y-4">
-              {/* Menu Name */}
-              <div>
-                <label className="block text-sm text-gray-400 mb-1">Menu Name</label>
-                <input
-                  type="text"
-                  value={menuName}
-                  onChange={(e) => setMenuName(e.target.value.slice(0, 32))}
-                  placeholder="e.g., Taunts, Music, Memes"
-                  className="w-full bg-gray-700 border border-gray-600 rounded px-4 py-2 text-white placeholder-gray-400 focus:outline-none focus:border-orange-500"
-                />
+            {error && (
+              <div className="bg-red-900/30 border border-red-600 rounded-lg p-3 mb-4">
+                <p className="text-red-400 text-sm">{error}</p>
               </div>
+            )}
 
-              {/* Position */}
-              <div>
-                <label className="block text-sm text-gray-400 mb-1">Position</label>
-                <select
-                  value={menuPosition}
-                  onChange={(e) => setMenuPosition(parseInt(e.target.value))}
-                  className="w-full bg-gray-700 border border-gray-600 rounded px-4 py-2 text-white focus:outline-none focus:border-orange-500"
-                >
-                  <option value={0}>Unassigned (save for later)</option>
-                  {getAvailablePositions(editingMenu?.id).map((pos) => (
-                    <option key={pos} value={pos}>
-                      Position {pos}
-                    </option>
-                  ))}
-                  {editingMenu && editingMenu.menuPosition > 0 && (
-                    <option value={editingMenu.menuPosition}>
-                      Position {editingMenu.menuPosition} (current)
-                    </option>
-                  )}
-                </select>
-                <p className="text-xs text-gray-500 mt-1">
-                  Unassigned menus can be populated and then dragged to a slot later.
-                </p>
-              </div>
+            {/* View mode - show current assignment */}
+            {editMode === 'view' && editingSlotItem && (
+              <div className="space-y-4">
+                <div className="bg-gray-900 rounded-lg p-4">
+                  {(() => {
+                    // Determine item type - SoundMenuItem has itemType, SoundMenu has menuName
+                    const isSoundMenu = 'menuName' in editingSlotItem && !('itemType' in editingSlotItem);
 
-              {/* Menu Items - can add sounds, playlists, or nested menus */}
-              {editingMenu && (
-                <div>
-                  <div className="flex items-center justify-between mb-2">
-                    <label className="block text-sm text-gray-400">
-                      Menu Items
-                    </label>
-                    {menuItems.length < 9 && (
-                      <div className="flex gap-2">
-                        <button
-                          onClick={() => {
-                            setAddingItemMode('sound');
-                            setAddingItemPosition(getNextItemPosition());
-                          }}
-                          className="text-sm text-orange-400 hover:text-orange-300"
-                        >
-                          + Sound
-                        </button>
-                        <button
-                          onClick={() => {
-                            setAddingItemMode('playlist');
-                            setAddingItemPosition(getNextItemPosition());
-                          }}
-                          className="text-sm text-blue-400 hover:text-blue-300"
-                        >
-                          + Playlist
-                        </button>
-                        <button
-                          onClick={() => {
-                            setAddingItemMode('menu');
-                            setAddingItemPosition(getNextItemPosition());
-                          }}
-                          className="text-sm text-cyan-400 hover:text-cyan-300"
-                        >
-                          + Sub-Menu
-                        </button>
-                      </div>
-                    )}
-                  </div>
+                    if (isSoundMenu) {
+                      // It's a SoundMenu object
+                      const menu = editingSlotItem as SoundMenu;
+                      if (menu.playlistId) {
+                        return (
+                          <div className="flex items-center gap-3">
+                            <span className="text-3xl">📋</span>
+                            <div className="flex-1">
+                              <div className="text-blue-300 font-medium">{menu.menuName}</div>
+                              <div className="text-sm text-gray-500">Playlist • {menu.itemCount || 0} sounds</div>
+                            </div>
+                          </div>
+                        );
+                      } else {
+                        return (
+                          <div className="flex items-center gap-3">
+                            <span className="text-3xl">📁</span>
+                            <div className="flex-1">
+                              <div className="text-cyan-300 font-medium">{menu.menuName}</div>
+                              <div className="text-sm text-gray-500">Menu • {menu.itemCount || 0} items</div>
+                            </div>
+                          </div>
+                        );
+                      }
+                    } else {
+                      // It's a SoundMenuItem object (from root-items or menu items)
+                      const item = editingSlotItem as SoundMenuItem;
+                      const itemType = item.itemType || 'sound';
 
-                  {/* Items list with drag-drop */}
-                  <div className="space-y-1 bg-gray-900 rounded-lg p-2">
-                    {menuItems.length === 0 ? (
-                      <div className="text-gray-500 text-center py-4">
-                        No items added yet. Add sounds, playlists, or sub-menus above.
-                      </div>
-                    ) : (
-                      menuItems.map((item, index) => (
-                        <div
-                          key={item.id}
-                          draggable
-                          onDragStart={(e) => handleDragStart(e, item, index)}
-                          onDragOver={(e) => handleDragOver(e, index)}
-                          onDragLeave={handleDragLeave}
-                          onDrop={(e) => handleDrop(e, index)}
-                          onDragEnd={handleDragEnd}
-                          className={`flex items-center gap-2 p-2 rounded transition-colors cursor-grab active:cursor-grabbing ${
-                            dragOverIndex === index
-                              ? 'bg-orange-600/30 border-2 border-orange-500'
-                              : 'bg-gray-800 hover:bg-gray-700'
-                          }`}
-                        >
-                          <span className="text-gray-500 text-xs">⋮⋮</span>
-                          <span className="w-6 text-center font-bold text-orange-400">
-                            {index + 1}
+                      // Get display name with proper fallbacks
+                      const displayName = item.displayName
+                        || item.soundAlias
+                        || item.playlistName
+                        || item.menuName  // For nested menus
+                        || 'Unknown';
+
+                      // Get count for playlists/menus
+                      const playlistCount = item.playlistSoundCount || 0;
+                      const menuCount = item.menuItemCount || 0;
+
+                      return (
+                        <div className="flex items-center gap-3">
+                          <span className="text-3xl">
+                            {itemType === 'sound' ? '🔊' : itemType === 'playlist' ? '📋' : '📁'}
                           </span>
-                          {item.itemType === 'menu' ? (
-                            <>
-                              <span className="text-cyan-400">📁</span>
-                              <span className="flex-1 text-cyan-400">{item.displayName}</span>
-                              <span className="text-xs text-gray-500">sub-menu</span>
-                            </>
-                          ) : item.itemType === 'playlist' ? (
-                            <>
-                              <span className="text-blue-400">📋</span>
-                              <span className="flex-1 text-blue-400">{item.displayName}</span>
-                              <span className="text-xs text-gray-500">
-                                {item.playlistSoundCount || 0} sounds
-                              </span>
-                            </>
-                          ) : (
-                            <>
-                              <span className="text-white">🔊</span>
-                              <span className="flex-1">{item.displayName}</span>
-                              <span className="text-xs text-gray-500">
-                                {formatDuration(item.durationSeconds)}
-                              </span>
-                            </>
-                          )}
-                          <button
-                            onClick={() =>
-                              editingMenu &&
-                              removeItemMutation.mutate({ menuId: editingMenu.id, itemId: item.id })
-                            }
-                            className="text-red-400 hover:text-red-300 text-xs"
-                          >
-                            ✕
-                          </button>
+                          <div className="flex-1">
+                            <div className={`font-medium ${
+                              itemType === 'sound' ? 'text-orange-300' :
+                              itemType === 'playlist' ? 'text-blue-300' : 'text-cyan-300'
+                            }`}>
+                              {displayName}
+                            </div>
+                            <div className="text-sm text-gray-500">
+                              {itemType === 'sound' && `Sound • ${formatDuration(item.durationSeconds)}`}
+                              {itemType === 'playlist' && `Playlist • ${playlistCount} sounds`}
+                              {itemType === 'menu' && `Menu • ${menuCount} items`}
+                            </div>
+                          </div>
                         </div>
-                      ))
-                    )}
-                  </div>
+                      );
+                    }
+                  })()}
+                </div>
 
-                  {/* Add sound picker */}
-                  {addingItemMode === 'sound' && addingItemPosition !== null && (
-                    <div className="mt-2 bg-gray-700 rounded-lg p-3">
-                      <div className="flex items-center gap-2 mb-2">
-                        <span className="text-sm text-gray-400">Add sound at position {menuItems.length + 1}:</span>
-                        <button
-                          onClick={() => {
-                            setAddingItemMode(null);
-                            setAddingItemPosition(null);
-                          }}
-                          className="text-gray-400 hover:text-white ml-auto"
-                        >
-                          ✕
-                        </button>
-                      </div>
-                      <input
-                        type="text"
-                        value={searchQuery}
-                        onChange={(e) => setSearchQuery(e.target.value)}
-                        placeholder="Search your sounds..."
-                        className="w-full bg-gray-600 border border-gray-500 rounded px-3 py-1.5 text-sm text-white placeholder-gray-400 focus:outline-none focus:border-orange-500 mb-2"
-                        autoFocus
-                      />
-                      <div className="max-h-40 overflow-y-auto space-y-1">
-                        {filteredSounds.slice(0, 20).map((sound) => (
-                          <button
-                            key={sound.id}
-                            onClick={() => {
-                              if (editingMenu && addingItemPosition !== null) {
-                                addSoundItemMutation.mutate({
-                                  menuId: editingMenu.id,
-                                  soundAlias: sound.alias,
-                                  position: addingItemPosition,
-                                });
-                              }
-                            }}
-                            className="w-full text-left px-2 py-1.5 rounded hover:bg-gray-600 flex items-center justify-between"
-                          >
-                            <span>{sound.alias}</span>
-                            <span className="text-xs text-gray-500">
-                              {formatDuration(sound.durationSeconds)}
-                            </span>
-                          </button>
-                        ))}
-                        {filteredSounds.length === 0 && (
-                          <div className="text-gray-500 text-sm text-center py-2">
-                            No sounds found
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Add nested menu picker */}
-                  {addingItemMode === 'menu' && addingItemPosition !== null && (
-                    <div className="mt-2 bg-gray-700 rounded-lg p-3">
-                      <div className="flex items-center gap-2 mb-2">
-                        <span className="text-sm text-gray-400">Add sub-menu at position {menuItems.length + 1}:</span>
-                        <button
-                          onClick={() => {
-                            setAddingItemMode(null);
-                            setAddingItemPosition(null);
-                          }}
-                          className="text-gray-400 hover:text-white ml-auto"
-                        >
-                          ✕
-                        </button>
-                      </div>
-                      <input
-                        type="text"
-                        value={searchQuery}
-                        onChange={(e) => setSearchQuery(e.target.value)}
-                        placeholder="Search menus..."
-                        className="w-full bg-gray-600 border border-gray-500 rounded px-3 py-1.5 text-sm text-white placeholder-gray-400 focus:outline-none focus:border-orange-500 mb-2"
-                        autoFocus
-                      />
-                      <div className="max-h-40 overflow-y-auto space-y-1">
-                        {getAvailableNestedMenus().slice(0, 20).map((menu) => (
-                          <button
-                            key={menu.id}
-                            onClick={() => {
-                              if (editingMenu && addingItemPosition !== null) {
-                                addNestedMenuItemMutation.mutate({
-                                  menuId: editingMenu.id,
-                                  nestedMenuId: menu.id,
-                                  position: addingItemPosition,
-                                });
-                              }
-                            }}
-                            className="w-full text-left px-2 py-1.5 rounded hover:bg-gray-600 flex items-center justify-between"
-                          >
-                            <span className="text-cyan-400">📁 {menu.menuName}</span>
-                            <span className="text-xs text-gray-500">
-                              {menu.itemCount} item{menu.itemCount !== 1 ? 's' : ''}
-                            </span>
-                          </button>
-                        ))}
-                        {getAvailableNestedMenus().length === 0 && (
-                          <div className="text-gray-500 text-sm text-center py-2">
-                            No menus available
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Add playlist picker */}
-                  {addingItemMode === 'playlist' && addingItemPosition !== null && (
-                    <div className="mt-2 bg-gray-700 rounded-lg p-3">
-                      <div className="flex items-center gap-2 mb-2">
-                        <span className="text-sm text-gray-400">Add playlist at position {menuItems.length + 1}:</span>
-                        <button
-                          onClick={() => {
-                            setAddingItemMode(null);
-                            setAddingItemPosition(null);
-                          }}
-                          className="text-gray-400 hover:text-white ml-auto"
-                        >
-                          ✕
-                        </button>
-                      </div>
-                      <input
-                        type="text"
-                        value={searchQuery}
-                        onChange={(e) => setSearchQuery(e.target.value)}
-                        placeholder="Search playlists..."
-                        className="w-full bg-gray-600 border border-gray-500 rounded px-3 py-1.5 text-sm text-white placeholder-gray-400 focus:outline-none focus:border-orange-500 mb-2"
-                        autoFocus
-                      />
-                      <div className="max-h-40 overflow-y-auto space-y-1">
-                        {filteredPlaylists.slice(0, 20).map((playlist) => (
-                          <button
-                            key={playlist.id}
-                            onClick={() => {
-                              if (editingMenu && addingItemPosition !== null) {
-                                addPlaylistItemMutation.mutate({
-                                  menuId: editingMenu.id,
-                                  playlistId: playlist.id,
-                                  position: addingItemPosition,
-                                });
-                              }
-                            }}
-                            className="w-full text-left px-2 py-1.5 rounded hover:bg-gray-600 flex items-center justify-between"
-                          >
-                            <span className="text-blue-400">📋 {playlist.name}</span>
-                            <span className="text-xs text-gray-500">
-                              {playlist.soundCount || 0} sound{(playlist.soundCount || 0) !== 1 ? 's' : ''}
-                            </span>
-                          </button>
-                        ))}
-                        {filteredPlaylists.length === 0 && (
-                          <div className="text-gray-500 text-sm text-center py-2">
-                            No playlists found
-                          </div>
-                        )}
-                      </div>
-                    </div>
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => setEditMode('pick-type')}
+                    className="flex-1 px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded transition-colors"
+                  >
+                    Change
+                  </button>
+                  {currentParentId === null ? (
+                    // At root level - remove root item (and delete menu if it's a menu type)
+                    <button
+                      onClick={async () => {
+                        const item = editingSlotItem as SoundMenuItem;
+                        if (item.itemType === 'menu' && item.nestedMenuId) {
+                          if (confirm('Delete this menu and all its contents?')) {
+                            // First remove the root item, then delete the menu
+                            if (isServerMode) {
+                              await sounds.removeServerRootItem(item.id);
+                              await sounds.deleteServerMenu(item.nestedMenuId);
+                            } else {
+                              await sounds.removeRootItem(item.id);
+                              await sounds.deleteMenu(item.nestedMenuId);
+                            }
+                            queryClient.invalidateQueries({ queryKey });
+                            queryClient.invalidateQueries({ queryKey: [...queryKey, 'rootItems'] });
+                            closeEditSlot();
+                          }
+                        } else {
+                          // Just remove the root item (sound or playlist)
+                          if (isServerMode) {
+                            await sounds.removeServerRootItem(item.id);
+                          } else {
+                            await sounds.removeRootItem(item.id);
+                          }
+                          queryClient.invalidateQueries({ queryKey });
+                          queryClient.invalidateQueries({ queryKey: [...queryKey, 'rootItems'] });
+                          closeEditSlot();
+                        }
+                      }}
+                      className="flex-1 px-4 py-2 bg-red-600/30 hover:bg-red-600/50 text-red-300 rounded transition-colors"
+                    >
+                      {(editingSlotItem as SoundMenuItem)?.itemType === 'menu' ? 'Delete' : 'Remove'}
+                    </button>
+                  ) : (
+                    // Inside a menu - just remove the item
+                    <button
+                      onClick={() => {
+                        if (currentParentId !== null) {
+                          removeItemMutation.mutate({ menuId: currentParentId, itemId: editingSlotItem!.id });
+                        }
+                      }}
+                      className="flex-1 px-4 py-2 bg-red-600/30 hover:bg-red-600/50 text-red-300 rounded transition-colors"
+                    >
+                      Remove
+                    </button>
                   )}
                 </div>
-              )}
+              </div>
+            )}
 
-              {error && (
-                <p className="text-red-400 text-sm">{error}</p>
-              )}
-            </div>
+            {/* Pick type mode */}
+            {editMode === 'pick-type' && (
+              <div className="space-y-3">
+                <p className="text-sm text-gray-400 mb-4">What do you want to assign to this slot?</p>
+                <button
+                  onClick={() => { setEditMode('pick-sound'); setSearchQuery(''); }}
+                  className="w-full p-4 bg-orange-600/20 hover:bg-orange-600/30 border border-orange-500/50 rounded-lg text-left flex items-center gap-3 transition-colors"
+                >
+                  <span className="text-2xl">🔊</span>
+                  <div>
+                    <div className="font-medium text-orange-300">Sound</div>
+                    <div className="text-sm text-gray-400">Play a single sound</div>
+                  </div>
+                </button>
+                <button
+                  onClick={() => { setEditMode('pick-playlist'); setSearchQuery(''); }}
+                  className="w-full p-4 bg-blue-600/20 hover:bg-blue-600/30 border border-blue-500/50 rounded-lg text-left flex items-center gap-3 transition-colors"
+                >
+                  <span className="text-2xl">📋</span>
+                  <div>
+                    <div className="font-medium text-blue-300">Playlist</div>
+                    <div className="text-sm text-gray-400">Cycle through playlist sounds</div>
+                  </div>
+                </button>
+                <button
+                  onClick={() => { setEditMode('pick-menu'); setSearchQuery(''); }}
+                  className="w-full p-4 bg-cyan-600/20 hover:bg-cyan-600/30 border border-cyan-500/50 rounded-lg text-left flex items-center gap-3 transition-colors"
+                >
+                  <span className="text-2xl">📁</span>
+                  <div>
+                    <div className="font-medium text-cyan-300">Menu</div>
+                    <div className="text-sm text-gray-400">Navigate into a sub-menu</div>
+                  </div>
+                </button>
+              </div>
+            )}
 
-            <div className="flex justify-end gap-3 mt-6">
+            {/* Pick sound mode */}
+            {editMode === 'pick-sound' && (
+              <div className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <button
+                    onClick={() => setEditMode('pick-type')}
+                    className="text-sm text-gray-400 hover:text-white"
+                  >
+                    ← Back
+                  </button>
+                  <span className="text-sm text-gray-400">Select a sound</span>
+                </div>
+                <input
+                  type="text"
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  placeholder="Search sounds..."
+                  className="w-full bg-gray-700 border border-gray-600 rounded px-4 py-2 text-white placeholder-gray-400 focus:outline-none focus:border-orange-500"
+                  autoFocus
+                />
+                <div className="max-h-60 overflow-y-auto space-y-1">
+                  {filteredSounds.slice(0, 30).map((sound) => (
+                    <button
+                      key={sound.id}
+                      onClick={() => {
+                        addSoundMutation.mutate({
+                          soundId: sound.id,
+                          soundAlias: sound.alias,
+                          position: editingSlot!,
+                          existingItem: editingSlotItem,
+                        });
+                      }}
+                      className="w-full text-left px-3 py-2 rounded hover:bg-gray-700 flex items-center justify-between"
+                    >
+                      <span>🔊 {sound.alias}</span>
+                      <span className="text-xs text-gray-500">{formatDuration(sound.durationSeconds)}</span>
+                    </button>
+                  ))}
+                  {filteredSounds.length === 0 && (
+                    <div className="text-gray-500 text-center py-4">No sounds found</div>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* Pick playlist mode */}
+            {editMode === 'pick-playlist' && (
+              <div className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <button
+                    onClick={() => setEditMode('pick-type')}
+                    className="text-sm text-gray-400 hover:text-white"
+                  >
+                    ← Back
+                  </button>
+                  <span className="text-sm text-gray-400">Select a playlist</span>
+                </div>
+                <input
+                  type="text"
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  placeholder="Search playlists..."
+                  className="w-full bg-gray-700 border border-gray-600 rounded px-4 py-2 text-white placeholder-gray-400 focus:outline-none focus:border-blue-500"
+                  autoFocus
+                />
+                <div className="max-h-60 overflow-y-auto space-y-1">
+                  {filteredPlaylists.slice(0, 30).map((playlist) => (
+                    <button
+                      key={playlist.id}
+                      onClick={() => {
+                        addPlaylistMutation.mutate({
+                          playlistId: playlist.id,
+                          playlistName: playlist.name,
+                          position: editingSlot!,
+                          existingItem: editingSlotItem,
+                        });
+                      }}
+                      className="w-full text-left px-3 py-2 rounded hover:bg-gray-700 flex items-center justify-between"
+                    >
+                      <span>📋 {playlist.name}</span>
+                      <span className="text-xs text-gray-500">{playlist.soundCount || 0} sounds</span>
+                    </button>
+                  ))}
+                  {filteredPlaylists.length === 0 && (
+                    <div className="text-gray-500 text-center py-4">No playlists found</div>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* Create menu mode (simplified - no menu picker, just create) */}
+            {(editMode === 'pick-menu' || editMode === 'create-menu') && (
+              <div className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <button
+                    onClick={() => setEditMode('pick-type')}
+                    className="text-sm text-gray-400 hover:text-white"
+                  >
+                    ← Back
+                  </button>
+                  <span className="text-sm text-gray-400">Create new menu</span>
+                </div>
+                <p className="text-sm text-gray-400">
+                  Enter a name for the new menu. You can add sounds and playlists to it after creating.
+                </p>
+                <input
+                  type="text"
+                  value={newMenuName}
+                  onChange={(e) => setNewMenuName(e.target.value.slice(0, 32))}
+                  placeholder="Menu name (e.g., Taunts, Music)"
+                  className="w-full bg-gray-700 border border-gray-600 rounded px-4 py-2 text-white placeholder-gray-400 focus:outline-none focus:border-orange-500"
+                  autoFocus
+                />
+                <button
+                  onClick={() => {
+                    if (!newMenuName.trim()) {
+                      setError('Menu name is required');
+                      return;
+                    }
+                    createMenuMutation.mutate({
+                      name: newMenuName,
+                      position: editingSlot!,
+                      parentId: currentParentId,
+                      existingItem: editingSlotItem,
+                    });
+                  }}
+                  disabled={!newMenuName.trim() || createMenuMutation.isPending}
+                  className="w-full px-4 py-2 bg-orange-600 hover:bg-orange-500 disabled:bg-gray-600 disabled:cursor-not-allowed rounded font-medium transition-colors"
+                >
+                  {createMenuMutation.isPending ? 'Creating...' : 'Create Menu'}
+                </button>
+              </div>
+            )}
+
+            {/* Close button */}
+            <div className="mt-6 pt-4 border-t border-gray-700">
               <button
-                onClick={closeDialog}
-                className="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded transition-colors"
+                onClick={closeEditSlot}
+                className="w-full px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded transition-colors"
               >
-                Cancel
-              </button>
-              <button
-                onClick={handleSave}
-                disabled={createMenuMutation.isPending || updateMenuMutation.isPending}
-                className="px-4 py-2 bg-orange-600 hover:bg-orange-500 disabled:bg-gray-600 disabled:cursor-not-allowed rounded font-medium transition-colors"
-              >
-                {createMenuMutation.isPending || updateMenuMutation.isPending ? 'Saving...' : 'Save'}
+                {editMode === 'view' ? 'Done' : 'Cancel'}
               </button>
             </div>
           </div>
         </div>
       )}
+
     </div>
   );
 }

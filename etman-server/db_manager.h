@@ -642,13 +642,15 @@ bool DB_GetMenuItemSound(const char *guid, int menuPos, int itemPos,
 
 /**
  * Get a page of menu items for hierarchical navigation.
- * @param guid Player GUID
+ * @param guid Player GUID (used for personal menus, ignored for server menus)
  * @param menuId Menu ID (0 = root level menus)
  * @param pageOffset Starting offset (0, 9, 18, ...)
+ * @param isServerMenu If true, return server default menus (is_server_default=true)
+ *                     If false, return player's personal menus (is_server_default=false)
  * @param outResult Output result with menu data
  * @return true if menu found
  */
-bool DB_GetMenuPage(const char *guid, int menuId, int pageOffset, DBMenuPageResult *outResult);
+bool DB_GetMenuPage(const char *guid, int menuId, int pageOffset, bool isServerMenu, DBMenuPageResult *outResult);
 
 /**
  * Get sound file path by user_sounds.id or sound_files.id.

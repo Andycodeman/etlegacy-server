@@ -130,6 +130,8 @@ static bool SoundMgr_PlaySoundByPath(uint32_t clientId, const char *guid,
                                      const char *name, const char *filepath);
 extern void sendResponseToClient(uint32_t clientId, uint8_t respType,
                                  const char *message);
+extern void updateClientAddress(uint32_t clientId, struct sockaddr_in *addr);
+extern void setCurrentPacketAddress(struct sockaddr_in *addr);
 extern void sendBinaryToClient(uint32_t clientId, uint8_t respType,
                                const uint8_t *data, int dataLen);
 extern void broadcastOpusPacket(uint8_t fromClient, uint8_t channel,
@@ -400,6 +402,12 @@ void SoundMgr_HandlePacket(uint32_t clientId, struct sockaddr_in *clientAddr,
                g_soundMgr.initialized, dataLen);
         return;
     }
+
+    /* Update client address in case NAT port changed */
+    updateClientAddress(clientId, clientAddr);
+
+    /* Store address for responses in case client doesn't exist yet */
+    setCurrentPacketAddress(clientAddr);
 
     uint8_t cmdType = data[0];
     printf("[DEBUG] SoundMgr_HandlePacket: cmdType=0x%02X, dataLen=%d, clientId=%u\n",
@@ -1431,13 +1439,8 @@ void SoundMgr_HandlePacket(uint32_t clientId, struct sockaddr_in *clientAddr,
 
             char code[7];
             if (DB_CreateVerificationCode(guid, playerName, code)) {
-                char msg[256];
-                snprintf(msg, sizeof(msg),
-                    "Your registration code: %s\n"
-                    "Visit ETPanel to link your account:\n"
-                    "https://etpanel.etman.dev\n"
-                    "Code expires in 10 minutes.", code);
-                sendResponseToClient(clientId, VOICE_RESP_REGISTER_CODE, msg);
+                /* Send just the code - client will construct URL and open browser */
+                sendResponseToClient(clientId, VOICE_RESP_REGISTER_CODE, code);
             } else {
                 sendResponseToClient(clientId, VOICE_RESP_ERROR, DB_GetLastError());
             }
@@ -1661,7 +1664,10 @@ void SoundMgr_HandlePacket(uint32_t clientId, struct sockaddr_in *clientAddr,
         }
 
         case VOICE_CMD_MENU_NAVIGATE: {
-            /* Hierarchical menu navigation - get specific menu page */
+            /* Hierarchical menu navigation - get specific menu page
+             * Payload format: [guid:32][menuId:4][pageOffset:2][menuType:1]
+             * menuType: 0 = personal menus, 1 = server menus
+             */
             printf("[DEBUG] MENU_NAVIGATE: received, payloadLen=%d\n", payloadLen);
 
             if (!g_soundMgr.dbMode) {
@@ -1677,9 +1683,9 @@ void SoundMgr_HandlePacket(uint32_t clientId, struct sockaddr_in *clientAddr,
 
             printf("[DEBUG] MENU_NAVIGATE: clientId=%u, guid=%s\n", clientId, guid);
 
-            /* Parse menuId and pageOffset from payload
-             * Payload format: [guid:32][menuId:4][pageOffset:2]
-             * Total: 38 bytes minimum
+            /* Parse menuId, pageOffset, and menuType from payload
+             * Payload format: [guid:32][menuId:4][pageOffset:2][menuType:1]
+             * Total: 39 bytes minimum (menuType is optional, defaults to 0)
              */
             if (payloadLen < SOUND_GUID_LEN + 6) {
                 printf("[DEBUG] MENU_NAVIGATE: payload too short (%d < %d)\n",
@@ -1695,10 +1701,18 @@ void SoundMgr_HandlePacket(uint32_t clientId, struct sockaddr_in *clientAddr,
             int menuId = ntohl(menuIdNet);
             int pageOffset = ntohs(pageOffsetNet);
 
-            printf("[DEBUG] MENU_NAVIGATE: menuId=%d, pageOffset=%d\n", menuId, pageOffset);
+            /* Menu type: 0 = personal (default), 1 = server */
+            bool isServerMenu = false;
+            if (payloadLen >= SOUND_GUID_LEN + 7) {
+                uint8_t menuType = payload[SOUND_GUID_LEN + 6];
+                isServerMenu = (menuType == ETMAN_MENU_SERVER);
+            }
+
+            printf("[DEBUG] MENU_NAVIGATE: menuId=%d, pageOffset=%d, isServerMenu=%d\n",
+                   menuId, pageOffset, isServerMenu);
 
             DBMenuPageResult result;
-            if (!DB_GetMenuPage(guid, menuId, pageOffset, &result)) {
+            if (!DB_GetMenuPage(guid, menuId, pageOffset, isServerMenu, &result)) {
                 sendResponseToClient(clientId, VOICE_RESP_ERROR, "Menu not found");
                 break;
             }

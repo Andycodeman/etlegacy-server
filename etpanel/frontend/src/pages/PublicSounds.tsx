@@ -284,7 +284,7 @@ export default function PublicSounds() {
 
   const openAddModal = (sound: PublicSound) => {
     setAddModal(sound);
-    setCustomAlias(sound.originalName.replace(/\.(mp3|wav)$/i, '').replace(/\s+/g, '_').replace(/[^a-zA-Z0-9_-]/g, ''));
+    setCustomAlias(sound.originalName.replace(/\.(mp3|wav)$/i, '').replace(/[^a-zA-Z0-9_\- ]/g, ''));
     setSelectedPlaylist('');
   };
 
@@ -607,12 +607,12 @@ export default function PublicSounds() {
                 <input
                   type="text"
                   value={customAlias}
-                  onChange={(e) => setCustomAlias(e.target.value.replace(/[^a-zA-Z0-9_-]/g, ''))}
+                  onChange={(e) => setCustomAlias(e.target.value.replace(/[^a-zA-Z0-9_\- ]/g, ''))}
                   placeholder="sound_alias"
                   className="w-full bg-gray-700 border border-gray-600 rounded px-4 py-2 text-white placeholder-gray-400 focus:outline-none focus:border-blue-500"
                 />
                 <p className="text-xs text-gray-500 mt-1">
-                  Only letters, numbers, and underscores allowed
+                  Letters, numbers, spaces, underscores, and dashes allowed
                 </p>
               </div>
 

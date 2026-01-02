@@ -65,8 +65,13 @@
 #define VOICE_RESP_MENU_DATA              0x34  /* Binary menu data response */
 
 /* Phase 9: Hierarchical menus and quick-play */
-#define VOICE_CMD_MENU_NAVIGATE           0x35  /* Navigate to menu: <guid><menuId:4><pageOffset:2> */
+#define VOICE_CMD_MENU_NAVIGATE           0x35  /* Navigate to menu: <guid><menuId:4><pageOffset:2><menuType:1> */
 #define VOICE_CMD_SOUND_BY_ID             0x36  /* Play sound by database ID: <guid><soundId:4> */
+
+/* Phase 10: Server sound menus (separate from personal menus) */
+/* Menu types for VOICE_CMD_MENU_NAVIGATE */
+#define ETMAN_MENU_PERSONAL               0     /* Player's personal menus (is_server_default=false) */
+#define ETMAN_MENU_SERVER                 1     /* Server default menus (is_server_default=true) */
 
 /*
  * Sound Response Packet Types (server -> client)

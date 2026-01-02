@@ -586,34 +586,38 @@ export const adminCommandLogRelations = relations(adminCommandLog, ({ one }) => 
 // ============================================================================
 
 // User's custom sound menus (supports hierarchical nesting via parent_id)
+// Also supports server-wide default menus (is_server_default = true) that all players see
 export const userSoundMenus = pgTable(
   'user_sound_menus',
   {
     id: serial('id').primaryKey(),
-    userGuid: varchar('user_guid', { length: 32 }).notNull(), // Owner's ET GUID
+    userGuid: varchar('user_guid', { length: 32 }).notNull(), // Owner's ET GUID (or admin who created server menu)
     menuName: varchar('menu_name', { length: 32 }).notNull(), // Display name: "Taunts", "Music", etc.
     menuPosition: integer('menu_position').notNull().default(0), // 1-9 position in parent menu
     parentId: integer('parent_id'), // Self-referential for nesting (NULL = root level)
     playlistId: integer('playlist_id').references(() => soundPlaylists.id, { onDelete: 'set null' }), // If set, auto-populate from playlist
+    isServerDefault: boolean('is_server_default').notNull().default(false), // Server-wide menus (all players see)
     createdAt: timestamp('created_at').defaultNow().notNull(),
     updatedAt: timestamp('updated_at').defaultNow().notNull(),
   },
   (table) => ({
-    // Unique position within same parent (COALESCE handles NULL parent_id)
-    guidParentPositionIdx: uniqueIndex('user_sound_menus_guid_parent_position_idx').on(table.userGuid, table.menuPosition),
+    // Note: No unique constraint on position - menus are now placed via user_sound_menu_items (root items)
+    // menu_position is only used for nested menus within a parent, and position 0 = unassigned
     guidIdx: index('user_sound_menus_guid_idx').on(table.userGuid),
     parentIdx: index('user_sound_menus_parent_idx').on(table.parentId),
   })
 );
 
 // Individual items in a menu - can be sounds, nested menus, OR playlists
+// menuId = NULL means root level (vsay 8/9 slots directly)
 export const userSoundMenuItems = pgTable(
   'user_sound_menu_items',
   {
     id: serial('id').primaryKey(),
     menuId: integer('menu_id')
-      .references(() => userSoundMenus.id, { onDelete: 'cascade' })
-      .notNull(),
+      .references(() => userSoundMenus.id, { onDelete: 'cascade' }), // NULL = root level item
+    userGuid: varchar('user_guid', { length: 32 }), // Required for root items (menuId=NULL)
+    isServerDefault: boolean('is_server_default').default(false), // For server root items
     itemPosition: integer('item_position').notNull(), // 1-9 position in submenu
     itemType: varchar('item_type', { length: 10 }).notNull().default('sound'), // 'sound', 'menu', or 'playlist'
     soundId: integer('sound_id')
@@ -627,6 +631,8 @@ export const userSoundMenuItems = pgTable(
   (table) => ({
     menuPositionIdx: uniqueIndex('user_sound_menu_items_menu_position_idx').on(table.menuId, table.itemPosition),
     menuIdx: index('user_sound_menu_items_menu_idx').on(table.menuId),
+    // Index for root items (menuId is NULL, use userGuid)
+    rootItemsIdx: index('user_sound_menu_items_root_idx').on(table.userGuid, table.itemPosition),
   })
 );
 

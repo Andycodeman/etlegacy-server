@@ -1098,6 +1098,10 @@ intptr_t CL_CgameSystemCalls(intptr_t *args)
 		re.Finish();
 		return 0;
 
+	case CG_OPENURL:
+		CL_OpenURL(VMA(1));
+		return 0;
+
 	case CG_LOADCAMERA:
 	case CG_STARTCAMERA:
 	case CG_STOPCAMERA:

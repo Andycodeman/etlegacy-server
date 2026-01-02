@@ -3644,6 +3644,9 @@ int trap_R_GetTextureId(const char *name);
 // flush rendering buffer
 void trap_R_Finish(void);
 
+// open URL in system browser
+void trap_OpenURL(const char *url);
+
 // extension interface
 qboolean trap_GetValue(char *value, int valueSize, const char *key);
 void trap_SysFlashWindow(int state);

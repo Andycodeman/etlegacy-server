@@ -3199,6 +3199,7 @@ void CL_Init(void)
 
 	Cmd_AddCommand("updatehunkusage", CL_UpdateLevelHunkUsage, "Updates the hunk usage file.");
 	Cmd_AddCommand("updatescreen", SCR_UpdateScreen, "Updates the screen.");
+	Cmd_AddCommand("openurl", CL_OpenURL_f, "Opens a URL in the system browser.");
 
 	Cmd_AddCommand("setRecommended", CL_SetRecommended_f, "Sets recommended cvar values.");
 
@@ -4564,6 +4565,19 @@ void CL_OpenURL(const char *url)
 	// Minimize should happen automatically since SDL detects the lost window focus
 	// Also this should only happen if we are actually fullscreen
 	// Cbuf_ExecuteText(EXEC_NOW, "minimize");
+}
+
+/**
+ * @brief CL_OpenURL_f - Console command to open a URL in browser
+ */
+static void CL_OpenURL_f(void)
+{
+	if (Cmd_Argc() < 2)
+	{
+		Com_Printf("Usage: openurl <url>\n");
+		return;
+	}
+	CL_OpenURL(Cmd_Argv(1));
 }
 
 /**

@@ -3488,6 +3488,7 @@ static consoleCommand_t commands[] =
 	{ "soundmenu",              CG_SoundMenu_f            },
 	{ "+soundmenu",             CG_SoundMenuDown_f        },
 	{ "-soundmenu",             CG_SoundMenuUp_f          },
+	{ "soundmenu_server",       CG_SoundMenuServer_f      },
 #endif
 
 	{ NULL,                     NULL                      }

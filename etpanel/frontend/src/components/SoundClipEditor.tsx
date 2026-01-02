@@ -96,11 +96,10 @@ export default function SoundClipEditor({
   const maxZoom = 20; // 20x zoom for precise selection
 
   // Form state - generate unique alias from filename
-  // Normalize: remove extension, replace spaces with underscores, strip other invalid chars
+  // Normalize: remove extension, strip invalid chars (allow spaces)
   const baseAlias = originalName
     .replace(/\.(mp3|wav)$/i, '')
-    .replace(/\s+/g, '_')
-    .replace(/[^a-zA-Z0-9_-]/g, '');
+    .replace(/[^a-zA-Z0-9_\- ]/g, '');
 
   // Generate initial alias: add _clip suffix only for re-clips, auto-increment if exists
   const generateUniqueAlias = () => {
@@ -790,7 +789,7 @@ export default function SoundClipEditor({
             <input
               type="text"
               value={alias}
-              onChange={(e) => setAlias(e.target.value.replace(/[^a-zA-Z0-9_-]/g, ''))}
+              onChange={(e) => setAlias(e.target.value.replace(/[^a-zA-Z0-9_\- ]/g, ''))}
               placeholder="my_sound"
               maxLength={32}
               className="w-full bg-gray-700 border border-gray-600 rounded px-4 py-2 text-white placeholder-gray-400 focus:outline-none focus:border-orange-500"

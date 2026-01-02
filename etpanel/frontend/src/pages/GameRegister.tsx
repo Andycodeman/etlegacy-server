@@ -1,6 +1,6 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useMutation } from '@tanstack/react-query';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { useAuthStore } from '../stores/auth';
 
 const API_BASE = import.meta.env.PROD ? '/api' : 'http://localhost:3000/api';
@@ -37,6 +37,7 @@ async function gameRegister(data: {
 
 export default function GameRegister() {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const login = useAuthStore((s) => s.login);
   const [step, setStep] = useState<'code' | 'details'>('code');
   const [code, setCode] = useState('');
@@ -44,6 +45,7 @@ export default function GameRegister() {
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [playerName, setPlayerName] = useState('');
+  const [autoVerifying, setAutoVerifying] = useState(false);
 
   // Verify code first
   const verifyMutation = useMutation({
@@ -65,8 +67,25 @@ export default function GameRegister() {
       const sanitizedName = data.playerName.replace(/[^a-zA-Z0-9_]/g, '');
       setUsername(sanitizedName || 'player');
       setStep('details');
+      setAutoVerifying(false);
+    },
+    onError: () => {
+      setAutoVerifying(false);
     },
   });
+
+  // Auto-verify if code is passed in URL (from in-game browser open)
+  useEffect(() => {
+    const urlCode = searchParams.get('code');
+    if (urlCode && urlCode.length === 6 && !autoVerifying && step === 'code') {
+      const cleanCode = urlCode.toUpperCase().replace(/[^A-Z0-9]/g, '');
+      if (cleanCode.length === 6) {
+        setCode(cleanCode);
+        setAutoVerifying(true);
+        verifyMutation.mutate(cleanCode);
+      }
+    }
+  }, [searchParams]);
 
   // Register with code + username + password
   const registerMutation = useMutation({
@@ -118,11 +137,20 @@ export default function GameRegister() {
         <div className="bg-gray-800 rounded-lg p-6 shadow-xl">
           {step === 'code' ? (
             <>
-              <h2 className="text-xl font-semibold mb-4">Step 1: Enter Verification Code</h2>
-              <p className="text-gray-400 text-sm mb-6">
-                Type <code className="bg-gray-700 px-2 py-1 rounded">/etman register</code> in-game
-                to get your 6-digit code.
-              </p>
+              <h2 className="text-xl font-semibold mb-4">
+                {autoVerifying ? 'Verifying your code...' : 'Step 1: Enter Verification Code'}
+              </h2>
+              {autoVerifying ? (
+                <div className="flex items-center justify-center py-4 mb-6">
+                  <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-orange-500"></div>
+                  <span className="ml-3 text-gray-400">Code detected from game, verifying...</span>
+                </div>
+              ) : (
+                <p className="text-gray-400 text-sm mb-6">
+                  Type <code className="bg-gray-700 px-2 py-1 rounded">/etman register</code> in-game
+                  to get your 6-digit code.
+                </p>
+              )}
 
               <form onSubmit={handleVerifyCode} className="space-y-4">
                 <div>

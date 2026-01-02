@@ -7,6 +7,7 @@ import AudioPlayer from '../components/AudioPlayer';
 import SoundClipEditor from '../components/SoundClipEditor';
 import SoundMenuEditor from '../components/SoundMenuEditor';
 import { renderETColors } from '../utils/etColors';
+import { useAuthStore } from '../stores/auth';
 
 function formatFileSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -83,17 +84,20 @@ function SortableHeader({
   );
 }
 
-type TabType = 'library' | 'unfinished' | 'menus';
+type TabType = 'library' | 'unfinished' | 'menus' | 'server-menus';
 
 export default function MySounds() {
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
+  const user = useAuthStore((s) => s.user);
+  const isAdmin = user?.role === 'admin';
 
   // Tab state - default to 'library', can be set via URL param
   const [activeTab, setActiveTab] = useState<TabType>(() => {
     const tab = searchParams.get('tab');
     if (tab === 'menus') return 'menus';
+    if (tab === 'server-menus') return 'server-menus';
     if (tab === 'unfinished') return 'unfinished';
     return 'library';
   });
@@ -840,9 +844,9 @@ export default function MySounds() {
 
   const openAcceptModal = (share: PendingShare) => {
     setAcceptModal(share);
-    // Normalize: remove extension, replace spaces with underscores, strip invalid chars
+    // Normalize: remove extension, strip invalid chars (allow spaces)
     const rawName = share.suggestedAlias || share.originalName.replace(/\.(mp3|wav)$/i, '');
-    setAcceptAlias(rawName.replace(/\s+/g, '_').replace(/[^a-zA-Z0-9_-]/g, ''));
+    setAcceptAlias(rawName.replace(/[^a-zA-Z0-9_\- ]/g, ''));
   };
 
   if (guidLoading) {
@@ -1003,6 +1007,18 @@ export default function MySounds() {
           >
             Sound Menus
           </button>
+          {isAdmin && (
+            <button
+              onClick={() => handleTabChange('server-menus')}
+              className={`px-4 py-2 rounded-t-lg font-medium transition-colors ${
+                activeTab === 'server-menus'
+                  ? 'bg-gray-800 text-white border-b-2 border-orange-500'
+                  : 'bg-gray-800/50 text-gray-400 hover:text-white hover:bg-gray-800'
+              }`}
+            >
+              🔊 Server Menus
+            </button>
+          )}
         </div>
       </div>
 
@@ -1011,6 +1027,22 @@ export default function MySounds() {
         {/* Sound Menus Tab */}
         {activeTab === 'menus' && (
           <SoundMenuEditor userSounds={soundsData?.sounds || []} />
+        )}
+
+        {/* Server Menus Tab (Admin Only) */}
+        {activeTab === 'server-menus' && isAdmin && (
+          <div className="flex flex-col gap-4">
+            <div className="bg-blue-900/30 border border-blue-600 rounded-lg p-4 flex-shrink-0">
+              <h2 className="text-lg font-semibold text-blue-400 mb-2">🔊 Server Sound Menus</h2>
+              <p className="text-gray-300 text-sm">
+                Configure server-wide sound menus that <strong>all players</strong> see when they press{' '}
+                <kbd className="bg-gray-700 px-1.5 py-0.5 rounded text-orange-400 text-xs">V</kbd> (or{' '}
+                <kbd className="bg-gray-700 px-1.5 py-0.5 rounded text-orange-400 text-xs">8</kbd> in alt menu) in-game.
+                These are separate from players' personal menus.
+              </p>
+            </div>
+            <SoundMenuEditor userSounds={soundsData?.sounds || []} mode="server" />
+          </div>
         )}
 
         {/* Unfinished Sounds Tab */}
@@ -1057,7 +1089,7 @@ export default function MySounds() {
                                 type="text"
                                 value={newUnfinishedAlias}
                                 onChange={(e) => {
-                                  setNewUnfinishedAlias(e.target.value.replace(/[^a-zA-Z0-9_-]/g, ''));
+                                  setNewUnfinishedAlias(e.target.value.replace(/[^a-zA-Z0-9_\- ]/g, ''));
                                   setUnfinishedRenameError(null);
                                 }}
                                 onKeyDown={(e) => {
@@ -1226,7 +1258,7 @@ export default function MySounds() {
                               type="text"
                               value={newAlias}
                               onChange={(e) => {
-                                setNewAlias(e.target.value.replace(/[^a-zA-Z0-9_]/g, ''));
+                                setNewAlias(e.target.value.replace(/[^a-zA-Z0-9_\- ]/g, ''));
                                 setRenameError(null);
                               }}
                               onKeyDown={(e) => {
@@ -1464,7 +1496,7 @@ export default function MySounds() {
                               type="text"
                               value={newAlias}
                               onChange={(e) => {
-                                setNewAlias(e.target.value.replace(/[^a-zA-Z0-9_]/g, ''));
+                                setNewAlias(e.target.value.replace(/[^a-zA-Z0-9_\- ]/g, ''));
                                 setRenameError(null);
                               }}
                               onKeyDown={(e) => {
@@ -1716,7 +1748,7 @@ export default function MySounds() {
             <input
               type="text"
               value={acceptAlias}
-              onChange={(e) => setAcceptAlias(e.target.value.replace(/[^a-zA-Z0-9_-]/g, ''))}
+              onChange={(e) => setAcceptAlias(e.target.value.replace(/[^a-zA-Z0-9_\- ]/g, ''))}
               placeholder="Sound alias"
               className="w-full bg-gray-700 border border-gray-600 rounded px-4 py-2 text-white placeholder-gray-400 focus:outline-none focus:border-blue-500 mb-4"
             />

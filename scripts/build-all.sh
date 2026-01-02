@@ -302,6 +302,11 @@ create_mod_pk3() {
         cp "$SRC_DIR/etmain/ui/options.menu" ui/ 2>/dev/null || true
         cp "$SRC_DIR/etmain/ui/options_voice.menu" ui/ 2>/dev/null || true
         cp "$SRC_DIR/etmain/ui/menus.txt" ui/ 2>/dev/null || true
+        # ETMan menu system
+        cp "$SRC_DIR/etmain/ui/etman_main.menu" ui/ 2>/dev/null || true
+        cp "$SRC_DIR/etmain/ui/ingame_main.menu" ui/ 2>/dev/null || true
+        cp "$SRC_DIR/etmain/ui/wm_quickmessage.menu" ui/ 2>/dev/null || true
+        cp "$SRC_DIR/etmain/ui/wm_quickmessageAlt.menu" ui/ 2>/dev/null || true
     fi
 
     # Create pk3 with modules at root level
