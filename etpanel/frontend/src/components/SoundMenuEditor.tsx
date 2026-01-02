@@ -1,7 +1,7 @@
 import { useState, useCallback } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { sounds } from '../api/client';
-import type { SoundMenu, SoundMenuItem, UserSound } from '../api/client';
+import type { SoundMenu, SoundMenuItem, UserSound, PlaylistSnapshotItem } from '../api/client';
 
 type MenuMode = 'personal' | 'server';
 
@@ -35,9 +35,12 @@ export default function SoundMenuEditor({ userSounds, mode = 'personal' }: Sound
   // Edit slot state
   const [editingSlot, setEditingSlot] = useState<number | null>(null);
   const [editingSlotItem, setEditingSlotItem] = useState<SoundMenuItem | SoundMenu | null>(null);
-  const [editMode, setEditMode] = useState<'view' | 'pick-type' | 'pick-sound' | 'pick-playlist' | 'pick-menu' | 'create-menu'>('view');
+  const [editMode, setEditMode] = useState<'view' | 'pick-type' | 'pick-sound' | 'pick-playlist' | 'pick-menu' | 'create-menu' | 'edit-playlist-sounds'>('view');
   const [searchQuery, setSearchQuery] = useState('');
   const [newMenuName, setNewMenuName] = useState('');
+
+  // Playlist snapshot editing state
+  const [editingSnapshotItems, setEditingSnapshotItems] = useState<PlaylistSnapshotItem[]>([]);
 
   // Error state
   const [error, setError] = useState('');
@@ -379,6 +382,42 @@ export default function SoundMenuEditor({ userSounds, mode = 'personal' }: Sound
     onError: (err: Error) => setError(err.message),
   });
 
+  // Update playlist snapshot displayNames
+  const updateSnapshotMutation = useMutation({
+    mutationFn: async ({ itemId, items }: { itemId: number; items: { position: number; displayName: string | null }[] }) => {
+      // Use server endpoint for server mode, personal endpoint for personal mode
+      return isServerMode
+        ? sounds.updateServerPlaylistSnapshot(itemId, items)
+        : sounds.updatePlaylistSnapshot(itemId, items);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey });
+      queryClient.invalidateQueries({ queryKey: [...queryKey, 'rootItems'] });
+      setEditMode('view');
+      setEditingSnapshotItems([]);
+    },
+    onError: (err: Error) => setError(err.message),
+  });
+
+  // Refresh playlist snapshot from live playlist
+  const refreshSnapshotMutation = useMutation({
+    mutationFn: async (itemId: number) => {
+      // Use server endpoint for server mode, personal endpoint for personal mode
+      return isServerMode
+        ? sounds.refreshServerPlaylistSnapshot(itemId)
+        : sounds.refreshPlaylistSnapshot(itemId);
+    },
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey });
+      queryClient.invalidateQueries({ queryKey: [...queryKey, 'rootItems'] });
+      // Update local state with the new snapshot
+      if (data.snapshot?.items) {
+        setEditingSnapshotItems(data.snapshot.items);
+      }
+    },
+    onError: (err: Error) => setError(err.message),
+  });
+
   // Navigation handlers
   const navigateToMenu = (menu: SoundMenu | SoundMenuItem) => {
     const menuId = 'nestedMenuId' in menu ? menu.nestedMenuId : menu.id;
@@ -410,6 +449,7 @@ export default function SoundMenuEditor({ userSounds, mode = 'personal' }: Sound
     setSearchQuery('');
     setNewMenuName('');
     setError('');
+    setEditingSnapshotItems([]);
   };
 
   // Filter helpers
@@ -848,6 +888,30 @@ export default function SoundMenuEditor({ userSounds, mode = 'personal' }: Sound
                   })()}
                 </div>
 
+                {/* Edit playlist sounds button - only for playlist items at root level */}
+                {(() => {
+                  const item = editingSlotItem as SoundMenuItem;
+                  if (item?.itemType === 'playlist' && currentParentId === null) {
+                    return (
+                      <button
+                        onClick={() => {
+                          // Load snapshot items into editing state
+                          if (item.playlistSnapshot?.items) {
+                            setEditingSnapshotItems([...item.playlistSnapshot.items]);
+                          } else {
+                            setEditingSnapshotItems([]);
+                          }
+                          setEditMode('edit-playlist-sounds');
+                        }}
+                        className="w-full px-4 py-2 bg-purple-600/30 hover:bg-purple-600/50 text-purple-300 rounded transition-colors mb-3 flex items-center justify-center gap-2"
+                      >
+                        ✏️ Edit Sound Names
+                      </button>
+                    );
+                  }
+                  return null;
+                })()}
+
                 <div className="flex gap-2">
                   <button
                     onClick={() => setEditMode('pick-type')}
@@ -1075,6 +1139,109 @@ export default function SoundMenuEditor({ userSounds, mode = 'personal' }: Sound
                 >
                   {createMenuMutation.isPending ? 'Creating...' : 'Create Menu'}
                 </button>
+              </div>
+            )}
+
+            {/* Edit playlist sounds mode - customize display names for each sound in the playlist */}
+            {editMode === 'edit-playlist-sounds' && editingSlotItem && (
+              <div className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <button
+                    onClick={() => {
+                      setEditMode('view');
+                      setEditingSnapshotItems([]);
+                    }}
+                    className="text-sm text-gray-400 hover:text-white"
+                  >
+                    ← Back
+                  </button>
+                  <span className="text-sm text-gray-400">Edit Sound Names</span>
+                </div>
+
+                <p className="text-sm text-gray-400">
+                  Customize how each sound appears in-game. Leave blank to use the original name.
+                </p>
+
+                {/* Refresh button */}
+                <button
+                  onClick={() => {
+                    const item = editingSlotItem as SoundMenuItem;
+                    refreshSnapshotMutation.mutate(item.id);
+                  }}
+                  disabled={refreshSnapshotMutation.isPending}
+                  className="w-full px-3 py-2 bg-blue-600/30 hover:bg-blue-600/50 text-blue-300 rounded text-sm transition-colors flex items-center justify-center gap-2"
+                >
+                  {refreshSnapshotMutation.isPending ? (
+                    <>Refreshing...</>
+                  ) : (
+                    <>🔄 Refresh from Live Playlist</>
+                  )}
+                </button>
+
+                {/* Snapshot info */}
+                {(() => {
+                  const item = editingSlotItem as SoundMenuItem;
+                  const snapshot = item.playlistSnapshot;
+                  if (snapshot) {
+                    const capturedDate = new Date(snapshot.capturedAt);
+                    return (
+                      <div className="text-xs text-gray-500 text-center">
+                        Snapshot from {capturedDate.toLocaleDateString()} at {capturedDate.toLocaleTimeString()}
+                      </div>
+                    );
+                  }
+                  return null;
+                })()}
+
+                {/* Sound list */}
+                <div className="max-h-80 overflow-y-auto space-y-2">
+                  {editingSnapshotItems.length === 0 ? (
+                    <div className="text-gray-500 text-center py-4">
+                      No snapshot data. Click "Refresh from Live Playlist" to create one.
+                    </div>
+                  ) : (
+                    editingSnapshotItems.map((snapItem, index) => (
+                      <div key={snapItem.position} className="bg-gray-900 rounded-lg p-3">
+                        <div className="flex items-center gap-2 mb-2">
+                          <span className="text-yellow-400 font-bold">{snapItem.position}.</span>
+                          <span className="text-gray-400 text-sm">🔊 {snapItem.originalAlias}</span>
+                        </div>
+                        <input
+                          type="text"
+                          value={snapItem.displayName || ''}
+                          onChange={(e) => {
+                            const newItems = [...editingSnapshotItems];
+                            newItems[index] = {
+                              ...newItems[index],
+                              displayName: e.target.value || null,
+                            };
+                            setEditingSnapshotItems(newItems);
+                          }}
+                          placeholder={snapItem.originalAlias}
+                          className="w-full bg-gray-700 border border-gray-600 rounded px-3 py-1.5 text-white placeholder-gray-500 focus:outline-none focus:border-orange-500 text-sm"
+                        />
+                      </div>
+                    ))
+                  )}
+                </div>
+
+                {/* Save button */}
+                {editingSnapshotItems.length > 0 && (
+                  <button
+                    onClick={() => {
+                      const item = editingSlotItem as SoundMenuItem;
+                      const updates = editingSnapshotItems.map(snapItem => ({
+                        position: snapItem.position,
+                        displayName: snapItem.displayName,
+                      }));
+                      updateSnapshotMutation.mutate({ itemId: item.id, items: updates });
+                    }}
+                    disabled={updateSnapshotMutation.isPending}
+                    className="w-full px-4 py-2 bg-orange-600 hover:bg-orange-500 disabled:bg-gray-600 disabled:cursor-not-allowed rounded font-medium transition-colors"
+                  >
+                    {updateSnapshotMutation.isPending ? 'Saving...' : 'Save Custom Names'}
+                  </button>
+                )}
               </div>
             )}
 

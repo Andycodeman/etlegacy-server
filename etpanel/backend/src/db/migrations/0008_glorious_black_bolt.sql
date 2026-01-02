@@ -1,0 +1,1 @@
+ALTER TABLE "user_sound_menu_items" ADD COLUMN "playlist_snapshot" jsonb;

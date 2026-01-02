@@ -84,12 +84,14 @@ export async function generateWaveformPeaks(filePath: string, numPeaks: number =
  * Clip audio file to specified start/end times
  * Preserves format: WAV stays WAV (lossless), MP3 stays MP3
  * Both are converted to 44.1kHz mono to match etman-server's Opus encoder
+ * @param volumeDb - Volume adjustment in decibels (-12 to +12, 0 = no change)
  */
 export async function clipAndConvertAudio(
   inputPath: string,
   outputPath: string,
   startTime: number,
-  endTime: number
+  endTime: number,
+  volumeDb: number = 0
 ): Promise<{ duration: number; fileSize: number }> {
   // Validate times
   const clipDuration = endTime - startTime;
@@ -104,6 +106,13 @@ export async function clipAndConvertAudio(
     // Detect if output is WAV or MP3 based on extension
     const isWav = outputPath.toLowerCase().endsWith('.wav');
 
+    // Clamp volume to safe range (-12dB to +12dB)
+    const clampedVolume = Math.max(-12, Math.min(12, volumeDb));
+
+    // Build audio filter chain
+    // Volume filter comes first if needed, then resampling
+    const volumeFilter = clampedVolume !== 0 ? `volume=${clampedVolume}dB,` : '';
+
     // Use ffmpeg to clip and convert
     // -ss: start time (with millisecond precision)
     // -to: end time (with millisecond precision)
@@ -112,11 +121,15 @@ export async function clipAndConvertAudio(
     if (isWav) {
       // WAV output: 16-bit PCM, keep original sample rate (don't upsample low-quality sources)
       // The etman-server will resample to 44.1kHz at playback time anyway
-      command = `ffmpeg -y -i "${inputPath}" -ss ${startTime.toFixed(3)} -to ${endTime.toFixed(3)} -ac 1 -c:a pcm_s16le "${outputPath}"`;
+      if (clampedVolume !== 0) {
+        command = `ffmpeg -y -i "${inputPath}" -ss ${startTime.toFixed(3)} -to ${endTime.toFixed(3)} -af "volume=${clampedVolume}dB" -ac 1 -c:a pcm_s16le "${outputPath}"`;
+      } else {
+        command = `ffmpeg -y -i "${inputPath}" -ss ${startTime.toFixed(3)} -to ${endTime.toFixed(3)} -ac 1 -c:a pcm_s16le "${outputPath}"`;
+      }
     } else {
       // MP3 output: 128kbps at 44.1kHz
       // -af aresample=resampler=soxr: use high-quality SoX resampler
-      command = `ffmpeg -y -i "${inputPath}" -ss ${startTime.toFixed(3)} -to ${endTime.toFixed(3)} -af "aresample=resampler=soxr:precision=28" -ar 44100 -ac 1 -b:a 128k "${outputPath}"`;
+      command = `ffmpeg -y -i "${inputPath}" -ss ${startTime.toFixed(3)} -to ${endTime.toFixed(3)} -af "${volumeFilter}aresample=resampler=soxr:precision=28" -ar 44100 -ac 1 -b:a 128k "${outputPath}"`;
     }
 
     await execAsync(command, { timeout: 60000 });

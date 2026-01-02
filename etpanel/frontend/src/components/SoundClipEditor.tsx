@@ -7,7 +7,7 @@ interface SoundClipEditorProps {
   durationSeconds: number;
   maxClipDuration: number;
   originalName: string;
-  onSave: (alias: string, startTime: number, endTime: number, isPublic: boolean) => Promise<void>;
+  onSave: (alias: string, startTime: number, endTime: number, isPublic: boolean, volumeDb: number) => Promise<void>;
   onCancel: () => void;
   isSaving: boolean;
   saveError?: string;
@@ -79,6 +79,14 @@ export default function SoundClipEditor({
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [playMode, setPlayMode] = useState<'full' | 'selection'>('full');
+
+  // Web Audio for live volume preview
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const gainNodeRef = useRef<GainNode | null>(null);
+  const sourceNodeRef = useRef<MediaElementAudioSourceNode | null>(null);
+
+  // Volume adjustment in dB (-12 to +12, 0 = no change)
+  const [volumeDb, setVolumeDb] = useState(0);
 
   // Selection state (in seconds) - with hundredth precision
   const [selectionStart, setSelectionStart] = useState(0);
@@ -197,6 +205,19 @@ export default function SoundClipEditor({
         audio.src = blobUrl;
         setAudioLoaded(true);
 
+        // Set up Web Audio for volume control
+        if (!audioContextRef.current) {
+          audioContextRef.current = new AudioContext();
+          gainNodeRef.current = audioContextRef.current.createGain();
+          gainNodeRef.current.connect(audioContextRef.current.destination);
+        }
+
+        // Connect audio element to Web Audio (only once)
+        if (!sourceNodeRef.current && audioContextRef.current && gainNodeRef.current) {
+          sourceNodeRef.current = audioContextRef.current.createMediaElementSource(audio);
+          sourceNodeRef.current.connect(gainNodeRef.current);
+        }
+
         return () => URL.revokeObjectURL(blobUrl);
       } catch (err) {
         setAudioError('Failed to load audio file');
@@ -205,7 +226,26 @@ export default function SoundClipEditor({
     };
 
     loadAudio();
+
+    // Cleanup
+    return () => {
+      if (audioContextRef.current && audioContextRef.current.state !== 'closed') {
+        audioContextRef.current.close();
+        audioContextRef.current = null;
+        gainNodeRef.current = null;
+        sourceNodeRef.current = null;
+      }
+    };
   }, [tempId, streamUrl]);
+
+  // Update gain when volumeDb changes (live preview)
+  useEffect(() => {
+    if (gainNodeRef.current) {
+      // Convert dB to linear gain: gain = 10^(dB/20)
+      const linearGain = Math.pow(10, volumeDb / 20);
+      gainNodeRef.current.gain.value = linearGain;
+    }
+  }, [volumeDb]);
 
   // Audio event handlers - use high-precision timer for selection end detection
   useEffect(() => {
@@ -455,8 +495,8 @@ export default function SoundClipEditor({
 
   // Validate and save
   const handleSave = async () => {
-    if (!alias || !/^[a-zA-Z0-9_-]+$/.test(alias)) {
-      setValidationError('Alias can only contain letters, numbers, underscores, and dashes');
+    if (!alias || !/^[a-zA-Z0-9_\- ]+$/.test(alias)) {
+      setValidationError('Alias can only contain letters, numbers, spaces, underscores, and dashes');
       return;
     }
     if (alias.length > 32) {
@@ -465,7 +505,7 @@ export default function SoundClipEditor({
     }
 
     setValidationError('');
-    await onSave(alias, selectionStart, selectionEnd, isPublic);
+    await onSave(alias, selectionStart, selectionEnd, isPublic, volumeDb);
   };
 
   const selectionDuration = selectionEnd - selectionStart;
@@ -777,6 +817,53 @@ export default function SoundClipEditor({
         <span className="ml-auto text-sm text-gray-400 font-mono">
           {formatTime(currentTime)} / {formatTimeShort(durationSeconds)}
         </span>
+      </div>
+
+      {/* Volume adjustment */}
+      <div className="mb-6 bg-gray-900 rounded-lg p-4">
+        <div className="flex items-center gap-4">
+          <span className="text-sm text-gray-400 w-24 flex-shrink-0">Volume Adjust</span>
+          <div className="flex-1 flex items-center gap-3">
+            <span className="text-xs text-gray-500 w-8 text-right">-12</span>
+            <div className="flex-1 relative">
+              <input
+                type="range"
+                min={-12}
+                max={12}
+                step={1}
+                value={volumeDb}
+                onChange={(e) => setVolumeDb(Number(e.target.value))}
+                className="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-orange-500"
+                style={{
+                  background: `linear-gradient(to right,
+                    #4B5563 0%,
+                    #4B5563 ${((volumeDb + 12) / 24) * 100}%,
+                    #374151 ${((volumeDb + 12) / 24) * 100}%,
+                    #374151 100%)`
+                }}
+              />
+              {/* Center marker */}
+              <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-0.5 h-4 bg-gray-500 pointer-events-none" />
+            </div>
+            <span className="text-xs text-gray-500 w-8">+12</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <span className={`text-sm font-mono w-16 text-center ${volumeDb === 0 ? 'text-gray-400' : volumeDb > 0 ? 'text-green-400' : 'text-yellow-400'}`}>
+              {volumeDb > 0 ? '+' : ''}{volumeDb} dB
+            </span>
+            <button
+              onClick={() => setVolumeDb(0)}
+              disabled={volumeDb === 0}
+              className="px-2 py-1 text-xs bg-gray-700 hover:bg-gray-600 disabled:opacity-50 disabled:cursor-not-allowed rounded transition-colors"
+              title="Reset to original volume"
+            >
+              Reset
+            </button>
+          </div>
+        </div>
+        <p className="text-xs text-gray-500 mt-2">
+          Adjust the volume level. Play the audio to preview changes in real-time. The adjustment will be baked into the saved file.
+        </p>
       </div>
 
       {/* Save form */}

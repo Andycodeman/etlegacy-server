@@ -2105,12 +2105,85 @@ bool DB_GetMenuPage(const char *guid, int menuId, int pageOffset, bool isServerM
 
         PQclear(res);
     } else if (menuId < 0) {
-        /* Negative menuId = playlist ID, show playlist contents */
+        /* Negative menuId = playlist ID, show playlist contents
+         * Strategy:
+         * 1. First try to load snapshot data (for displayName overrides and fallback)
+         * 2. Try live playlist query
+         * 3. If live query fails/empty, use snapshot as fallback
+         * 4. If both fail, return empty result
+         */
         int playlistId = -menuId;
         char playlistIdStr[16];
         snprintf(playlistIdStr, sizeof(playlistIdStr), "%d", playlistId);
         printf("[DEBUG] DB_GetMenuPage: showing playlist %d contents (isServerMenu=%d)\n", playlistId, isServerMenu);
 
+        /* Step 1: Try to get snapshot data for this playlist (for displayNames and fallback)
+         * Query the menu item that references this playlist to get its snapshot.
+         * Use PostgreSQL's jsonb operators to extract snapshot items.
+         */
+        PGresult *snapshotRes = NULL;
+        bool hasSnapshot = false;
+        char snapshotPlaylistName[33] = "";
+
+        if (isServerMenu) {
+            const char *snapParams[1] = { playlistIdStr };
+            snapshotRes = PQexecParams(g_db.conn,
+                "SELECT "
+                "  playlist_snapshot->'originalPlaylistName' as playlist_name, "
+                "  elem->>'position' as position, "
+                "  elem->>'originalAlias' as original_alias, "
+                "  elem->>'displayName' as display_name, "
+                "  elem->>'filePath' as file_path, "
+                "  jsonb_array_length(playlist_snapshot->'items') as total_items "
+                "FROM user_sound_menu_items, "
+                "     jsonb_array_elements(playlist_snapshot->'items') as elem "
+                "WHERE playlist_id = $1 "
+                "  AND is_server_default = true "
+                "  AND playlist_snapshot IS NOT NULL "
+                "ORDER BY (elem->>'position')::int "
+                "LIMIT 9",
+                1, NULL, snapParams, NULL, NULL, 0);
+        } else {
+            const char *snapParams[2] = { guid, playlistIdStr };
+            snapshotRes = PQexecParams(g_db.conn,
+                "SELECT "
+                "  playlist_snapshot->'originalPlaylistName' as playlist_name, "
+                "  elem->>'position' as position, "
+                "  elem->>'originalAlias' as original_alias, "
+                "  elem->>'displayName' as display_name, "
+                "  elem->>'filePath' as file_path, "
+                "  jsonb_array_length(playlist_snapshot->'items') as total_items "
+                "FROM user_sound_menu_items, "
+                "     jsonb_array_elements(playlist_snapshot->'items') as elem "
+                "WHERE user_guid = $1 "
+                "  AND playlist_id = $2 "
+                "  AND (is_server_default = false OR is_server_default IS NULL) "
+                "  AND playlist_snapshot IS NOT NULL "
+                "ORDER BY (elem->>'position')::int "
+                "LIMIT 9",
+                2, NULL, snapParams, NULL, NULL, 0);
+        }
+
+        int snapshotRows = 0;
+        if (snapshotRes && PQresultStatus(snapshotRes) == PGRES_TUPLES_OK) {
+            snapshotRows = PQntuples(snapshotRes);
+            hasSnapshot = (snapshotRows > 0);
+            if (hasSnapshot) {
+                /* Extract playlist name from snapshot (remove JSON quotes) */
+                const char *rawName = PQgetvalue(snapshotRes, 0, 0);
+                if (rawName && rawName[0] == '"') {
+                    /* Remove surrounding quotes from JSON string */
+                    strncpy(snapshotPlaylistName, rawName + 1, sizeof(snapshotPlaylistName) - 1);
+                    char *endQuote = strrchr(snapshotPlaylistName, '"');
+                    if (endQuote) *endQuote = '\0';
+                } else if (rawName) {
+                    strncpy(snapshotPlaylistName, rawName, sizeof(snapshotPlaylistName) - 1);
+                }
+                printf("[DEBUG] DB_GetMenuPage: found snapshot with %d items for playlist %d\n", snapshotRows, playlistId);
+            }
+        }
+
+        /* Step 2: Try live playlist query */
         PGresult *res;
         if (isServerMenu) {
             /* Server playlist - no guid filter, playlist must be public or linked to server */
@@ -2142,31 +2215,86 @@ bool DB_GetMenuPage(const char *guid, int menuId, int pageOffset, bool isServerM
 
         if (!checkResult(res, PGRES_TUPLES_OK)) {
             printf("[DEBUG] DB_GetMenuPage: playlist contents query failed\n");
+            if (snapshotRes) PQclear(snapshotRes);
             return false;
         }
 
         int rows = PQntuples(res);
-        printf("[DEBUG] DB_GetMenuPage: found %d items in playlist %d\n", rows, playlistId);
+        printf("[DEBUG] DB_GetMenuPage: found %d live items in playlist %d\n", rows, playlistId);
 
         outResult->found = true;
         outResult->menu.menuId = menuId; /* Keep negative to indicate playlist */
         outResult->menu.pageOffset = pageOffset;
-        outResult->menu.totalItems = (rows > 0) ? atoi(PQgetvalue(res, 0, 4)) : 0;
-        if (rows > 0) {
-            strncpy(outResult->menu.name, PQgetvalue(res, 0, 3), sizeof(outResult->menu.name) - 1);
-        }
 
-        for (int i = 0; i < rows && i < DB_MAX_MENU_ITEMS; i++) {
-            DBMenuItem *item = &outResult->menu.items[i];
-            item->position = i + 1;
-            item->itemType = DB_MENU_ITEM_SOUND;
-            strncpy(item->name, PQgetvalue(res, i, 1), sizeof(item->name) - 1);
-            strncpy(item->soundAlias, PQgetvalue(res, i, 1), sizeof(item->soundAlias) - 1);
-            item->nestedMenuId = 0;
-            outResult->menu.itemCount++;
+        if (rows > 0) {
+            /* Use live playlist data, but apply displayName overrides from snapshot */
+            outResult->menu.totalItems = atoi(PQgetvalue(res, 0, 4));
+            strncpy(outResult->menu.name, PQgetvalue(res, 0, 3), sizeof(outResult->menu.name) - 1);
+
+            for (int i = 0; i < rows && i < DB_MAX_MENU_ITEMS; i++) {
+                DBMenuItem *item = &outResult->menu.items[i];
+                item->position = i + 1;
+                item->itemType = DB_MENU_ITEM_SOUND;
+                const char *alias = PQgetvalue(res, i, 1);
+                strncpy(item->soundAlias, alias, sizeof(item->soundAlias) - 1);
+
+                /* Check for displayName override in snapshot */
+                bool foundOverride = false;
+                if (hasSnapshot) {
+                    for (int j = 0; j < snapshotRows; j++) {
+                        const char *snapAlias = PQgetvalue(snapshotRes, j, 2); /* originalAlias */
+                        const char *snapDisplayName = PQgetvalue(snapshotRes, j, 3); /* displayName */
+                        if (snapAlias && strcmp(snapAlias, alias) == 0) {
+                            /* Found matching sound - check if displayName is set (not null) */
+                            if (snapDisplayName && snapDisplayName[0] != '\0' && strcmp(snapDisplayName, "null") != 0) {
+                                strncpy(item->name, snapDisplayName, sizeof(item->name) - 1);
+                                foundOverride = true;
+                                printf("[DEBUG] Applied displayName override: %s -> %s\n", alias, snapDisplayName);
+                            }
+                            break;
+                        }
+                    }
+                }
+                if (!foundOverride) {
+                    strncpy(item->name, alias, sizeof(item->name) - 1);
+                }
+                item->nestedMenuId = 0;
+                outResult->menu.itemCount++;
+            }
+        } else if (hasSnapshot) {
+            /* Step 3: Live playlist empty/inaccessible - use snapshot as fallback */
+            printf("[DEBUG] DB_GetMenuPage: using snapshot fallback for playlist %d\n", playlistId);
+            outResult->menu.totalItems = atoi(PQgetvalue(snapshotRes, 0, 5));
+            strncpy(outResult->menu.name, snapshotPlaylistName, sizeof(outResult->menu.name) - 1);
+
+            for (int i = 0; i < snapshotRows && i < DB_MAX_MENU_ITEMS; i++) {
+                DBMenuItem *item = &outResult->menu.items[i];
+                item->position = i + 1;
+                item->itemType = DB_MENU_ITEM_SOUND;
+
+                const char *originalAlias = PQgetvalue(snapshotRes, i, 2);
+                const char *displayName = PQgetvalue(snapshotRes, i, 3);
+
+                /* Use displayName if set, otherwise originalAlias */
+                if (displayName && displayName[0] != '\0' && strcmp(displayName, "null") != 0) {
+                    strncpy(item->name, displayName, sizeof(item->name) - 1);
+                } else {
+                    strncpy(item->name, originalAlias ? originalAlias : "Unknown", sizeof(item->name) - 1);
+                }
+
+                /* For soundAlias, always use originalAlias (needed for playback lookup) */
+                strncpy(item->soundAlias, originalAlias ? originalAlias : "", sizeof(item->soundAlias) - 1);
+                item->nestedMenuId = 0;
+                outResult->menu.itemCount++;
+            }
+        } else {
+            /* No live data and no snapshot - empty playlist */
+            outResult->menu.totalItems = 0;
+            outResult->menu.name[0] = '\0';
         }
 
         PQclear(res);
+        if (snapshotRes) PQclear(snapshotRes);
     } else {
         /* Specific menu: show its items (sounds, nested menus, and playlists)
          * For server menus we don't filter by user_guid, for personal menus we do

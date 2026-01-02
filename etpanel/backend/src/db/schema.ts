@@ -626,6 +626,8 @@ export const userSoundMenuItems = pgTable(
     playlistId: integer('playlist_id')
       .references(() => soundPlaylists.id, { onDelete: 'cascade' }), // For itemType='playlist'
     displayName: varchar('display_name', { length: 32 }), // Override name (NULL = use source name)
+    // Playlist snapshot: captures playlist contents at time of linking for custom names and fallback
+    playlistSnapshot: jsonb('playlist_snapshot'), // Structure: { capturedAt, originalPlaylistId, originalPlaylistName, items: [{position, soundFileId, originalAlias, displayName, filePath}] }
     createdAt: timestamp('created_at').defaultNow().notNull(),
   },
   (table) => ({

@@ -135,6 +135,7 @@ export default function MySounds() {
   const [isSavingClip, setIsSavingClip] = useState(false);
   const [saveClipError, setSaveClipError] = useState('');
   const [isReclip, setIsReclip] = useState(false); // True when re-clipping an existing sound
+  const [reclipAlias, setReclipAlias] = useState<string | null>(null); // Original alias when re-clipping
 
   // State for creating clip from existing sound
   const [copyingSound, setCopyingSound] = useState<string | null>(null);
@@ -469,7 +470,7 @@ export default function MySounds() {
   };
 
   // Save clipped audio from unfinished sound
-  const handleSaveUnfinishedClip = async (alias: string, startTime: number, endTime: number, isPublic: boolean) => {
+  const handleSaveUnfinishedClip = async (alias: string, startTime: number, endTime: number, isPublic: boolean, volumeDb: number = 0) => {
     if (!editingUnfinishedSound) return;
 
     // Check for duplicate alias
@@ -482,7 +483,7 @@ export default function MySounds() {
     setSaveClipError('');
 
     try {
-      await sounds.saveUnfinishedClip(editingUnfinishedSound.tempId, alias, startTime, endTime, isPublic);
+      await sounds.saveUnfinishedClip(editingUnfinishedSound.tempId, alias, startTime, endTime, isPublic, volumeDb);
       queryClient.invalidateQueries({ queryKey: ['mySounds'] });
       queryClient.invalidateQueries({ queryKey: ['unfinishedSounds'] });
       setEditingUnfinishedSound(null);
@@ -718,6 +719,7 @@ export default function MySounds() {
     setIsSavingClip(false);
     setSaveClipError('');
     setIsReclip(false);
+    setReclipAlias(null);
     if (fileInputRef.current) {
       fileInputRef.current.value = '';
     }
@@ -757,7 +759,7 @@ export default function MySounds() {
   };
 
   // Save the clipped audio
-  const handleSaveClip = async (alias: string, startTime: number, endTime: number, isPublic: boolean) => {
+  const handleSaveClip = async (alias: string, startTime: number, endTime: number, isPublic: boolean, volumeDb: number = 0) => {
     if (!tempUploadData) return;
 
     // Check for duplicate alias
@@ -770,7 +772,7 @@ export default function MySounds() {
     setSaveClipError('');
 
     try {
-      await sounds.saveClip(tempUploadData.tempId, alias, startTime, endTime, isPublic);
+      await sounds.saveClip(tempUploadData.tempId, alias, startTime, endTime, isPublic, volumeDb);
       queryClient.invalidateQueries({ queryKey: ['mySounds'] });
       resetUploadModal();
     } catch (err) {
@@ -804,6 +806,7 @@ export default function MySounds() {
       const result = await sounds.copyToTemp(alias);
       setTempUploadData(result);
       setIsReclip(true); // Mark as re-clip for _clip suffix
+      setReclipAlias(alias); // Store the original alias
       setUploadModal(true);
     } catch (err) {
       alert('Failed to prepare sound for editing: ' + (err as Error).message);
@@ -1797,6 +1800,7 @@ export default function MySounds() {
                 saveError={saveClipError}
                 isReclip={isReclip}
                 existingAliases={soundsData?.sounds?.map((s: UserSound) => s.alias) || []}
+                initialAlias={reclipAlias || undefined}
               />
             </div>
           ) : (

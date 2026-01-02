@@ -85,6 +85,7 @@ const saveClipSchema = z.object({
   startTime: z.number().min(0),
   endTime: z.number().min(0),
   isPublic: z.boolean().optional().default(false),
+  volumeDb: z.number().min(-12).max(12).optional().default(0), // Volume adjustment in dB
 });
 
 // Max file size for temp uploads: 20MB (larger files allowed, will be clipped down)
@@ -118,6 +119,87 @@ async function getUserGuid(userId: number): Promise<string | null> {
     .where(eq(schema.users.id, userId))
     .limit(1);
   return user?.guid || null;
+}
+
+// Playlist snapshot structure
+interface PlaylistSnapshotItem {
+  position: number;
+  soundFileId: number;
+  originalAlias: string;
+  displayName: string | null; // User's custom override
+  filePath: string;
+}
+
+interface PlaylistSnapshot {
+  capturedAt: string; // ISO timestamp
+  originalPlaylistId: number;
+  originalPlaylistName: string;
+  items: PlaylistSnapshotItem[];
+}
+
+// Helper to build a playlist snapshot capturing all sounds at the current moment
+async function buildPlaylistSnapshot(playlistId: number): Promise<PlaylistSnapshot | null> {
+  // Get playlist info and items
+  const playlistResult = await db.execute(sql`
+    SELECT
+      p.id,
+      p.name,
+      pi.order_number as "position",
+      sf.id as "soundFileId",
+      us.alias as "originalAlias",
+      sf.file_path as "filePath"
+    FROM sound_playlists p
+    JOIN sound_playlist_items pi ON pi.playlist_id = p.id
+    JOIN user_sounds us ON us.id = pi.user_sound_id
+    JOIN sound_files sf ON sf.id = us.sound_file_id
+    WHERE p.id = ${playlistId}
+    ORDER BY pi.order_number
+  `);
+
+  if (playlistResult.rows.length === 0) {
+    // Playlist might exist but be empty, or not exist
+    const [playlist] = await db
+      .select({ id: schema.soundPlaylists.id, name: schema.soundPlaylists.name })
+      .from(schema.soundPlaylists)
+      .where(eq(schema.soundPlaylists.id, playlistId))
+      .limit(1);
+
+    if (!playlist) {
+      return null;
+    }
+
+    // Empty playlist - return snapshot with no items
+    return {
+      capturedAt: new Date().toISOString(),
+      originalPlaylistId: playlist.id,
+      originalPlaylistName: playlist.name,
+      items: [],
+    };
+  }
+
+  const firstRow = playlistResult.rows[0] as { name: string };
+  const items: PlaylistSnapshotItem[] = playlistResult.rows.map((row) => {
+    const r = row as {
+      position: number;
+      soundFileId: number;
+      originalAlias: string;
+      filePath: string;
+    };
+    return {
+      position: r.position,
+      soundFileId: r.soundFileId,
+      originalAlias: r.originalAlias,
+      displayName: null, // No custom name yet
+      filePath: r.filePath,
+    };
+  });
+
+  return {
+    capturedAt: new Date().toISOString(),
+    originalPlaylistId: playlistId,
+    originalPlaylistName: firstRow.name,
+    items,
+  };
 }
 
 export const soundsRoutes: FastifyPluginAsync = async (fastify) => {
@@ -819,7 +901,7 @@ export const soundsRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.status(400).send({ error: 'No GUID linked to account. Use /etman register in-game.' });
     }
 
-    const { tempId, alias, startTime, endTime, isPublic } = body.data;
+    const { tempId, alias, startTime, endTime, isPublic, volumeDb } = body.data;
 
     // Validate clip duration
     const clipDuration = endTime - startTime;
@@ -864,7 +946,8 @@ export const soundsRoutes: FastifyPluginAsync = async (fastify) => {
         tempFilePath,
         permanentFilePath,
         startTime,
-        endTime
+        endTime,
+        volumeDb
       );
 
       // Check final file size (WAV files are larger, allow more for them)
@@ -2182,6 +2265,7 @@ export const soundsRoutes: FastifyPluginAsync = async (fastify) => {
         i.nested_menu_id as "nestedMenuId",
         i.playlist_id as "playlistId",
         i.display_name as "displayName",
+        i.playlist_snapshot as "playlistSnapshot",
         i.created_at as "createdAt",
         s.alias as "soundAlias",
         sf.duration_seconds as "durationSeconds",
@@ -2270,7 +2354,8 @@ export const soundsRoutes: FastifyPluginAsync = async (fastify) => {
       }
     }
 
-    // Validate playlist exists if assigning a playlist
+    // Validate playlist exists and build snapshot if assigning a playlist
+    let playlistSnapshot: PlaylistSnapshot | null = null;
     if (itemType === 'playlist' && playlistId) {
       const [playlist] = await db
         .select({ id: schema.soundPlaylists.id })
@@ -2281,6 +2366,9 @@ export const soundsRoutes: FastifyPluginAsync = async (fastify) => {
       if (!playlist) {
         return reply.status(404).send({ error: 'Playlist not found' });
       }
+
+      // Capture snapshot of playlist contents
+      playlistSnapshot = await buildPlaylistSnapshot(playlistId);
     }
 
     const [item] = await db
@@ -2295,6 +2383,7 @@ export const soundsRoutes: FastifyPluginAsync = async (fastify) => {
         nestedMenuId: itemType === 'menu' ? menuId : null,
         playlistId: itemType === 'playlist' ? playlistId : null,
         displayName: displayName || null,
+        playlistSnapshot: playlistSnapshot as unknown as Record<string, unknown>,
       })
       .returning();
 
@@ -2380,6 +2469,138 @@ export const soundsRoutes: FastifyPluginAsync = async (fastify) => {
     return { success: true };
   });
 
+  // PUT /api/sounds/root-items/:id/snapshot - Update playlist snapshot displayNames for a playlist item
+  fastify.put('/root-items/:id/snapshot', { preHandler: authenticate }, async (request, reply) => {
+    const guid = await getUserGuid(request.user.userId);
+    if (!guid) {
+      return reply.status(400).send({ error: 'No GUID linked to account. Use /etman register in-game.' });
+    }
+
+    const { id } = request.params as { id: string };
+    const itemId = parseInt(id, 10);
+
+    const body = z.object({
+      items: z.array(z.object({
+        position: z.number().int().min(1),
+        displayName: z.string().max(32).nullable(),
+      })),
+    }).safeParse(request.body);
+
+    if (!body.success) {
+      return reply.status(400).send({ error: body.error.errors[0].message });
+    }
+
+    // Get the current item with its snapshot
+    const [item] = await db
+      .select({
+        id: schema.userSoundMenuItems.id,
+        itemType: schema.userSoundMenuItems.itemType,
+        playlistSnapshot: schema.userSoundMenuItems.playlistSnapshot,
+      })
+      .from(schema.userSoundMenuItems)
+      .where(and(
+        eq(schema.userSoundMenuItems.id, itemId),
+        isNull(schema.userSoundMenuItems.menuId),
+        eq(schema.userSoundMenuItems.userGuid, guid)
+      ))
+      .limit(1);
+
+    if (!item) {
+      return reply.status(404).send({ error: 'Root item not found' });
+    }
+
+    if (item.itemType !== 'playlist') {
+      return reply.status(400).send({ error: 'Item is not a playlist' });
+    }
+
+    if (!item.playlistSnapshot) {
+      return reply.status(400).send({ error: 'No playlist snapshot exists. Try refreshing the snapshot first.' });
+    }
+
+    // Update displayNames in the snapshot
+    const snapshot = item.playlistSnapshot as unknown as PlaylistSnapshot;
+    for (const update of body.data.items) {
+      const snapshotItem = snapshot.items.find(i => i.position === update.position);
+      if (snapshotItem) {
+        snapshotItem.displayName = update.displayName;
+      }
+    }
+
+    await db
+      .update(schema.userSoundMenuItems)
+      .set({ playlistSnapshot: snapshot as unknown as Record<string, unknown> })
+      .where(eq(schema.userSoundMenuItems.id, itemId));
+
+    return { success: true, snapshot };
+  });
+
+  // POST /api/sounds/root-items/:id/snapshot/refresh - Refresh playlist snapshot from live playlist
+  fastify.post('/root-items/:id/snapshot/refresh', { preHandler: authenticate }, async (request, reply) => {
+    const guid = await getUserGuid(request.user.userId);
+    if (!guid) {
+      return reply.status(400).send({ error: 'No GUID linked to account. Use /etman register in-game.' });
+    }
+
+    const { id } = request.params as { id: string };
+    const itemId = parseInt(id, 10);
+
+    // Get the current item
+    const [item] = await db
+      .select({
+        id: schema.userSoundMenuItems.id,
+        itemType: schema.userSoundMenuItems.itemType,
+        playlistId: schema.userSoundMenuItems.playlistId,
+        playlistSnapshot: schema.userSoundMenuItems.playlistSnapshot,
+      })
+      .from(schema.userSoundMenuItems)
+      .where(and(
+        eq(schema.userSoundMenuItems.id, itemId),
+        isNull(schema.userSoundMenuItems.menuId),
+        eq(schema.userSoundMenuItems.userGuid, guid)
+      ))
+      .limit(1);
+
+    if (!item) {
+      return reply.status(404).send({ error: 'Root item not found' });
+    }
+
+    if (item.itemType !== 'playlist' || !item.playlistId) {
+      return reply.status(400).send({ error: 'Item is not a playlist' });
+    }
+
+    // Get the old snapshot to preserve custom displayNames
+    const oldSnapshot = item.playlistSnapshot as unknown as PlaylistSnapshot | null;
+    const displayNameMap = new Map<number, string | null>();
+    if (oldSnapshot?.items) {
+      for (const oldItem of oldSnapshot.items) {
+        if (oldItem.displayName) {
+          displayNameMap.set(oldItem.soundFileId, oldItem.displayName);
+        }
+      }
+    }
+
+    // Build fresh snapshot from live playlist
+    const newSnapshot = await buildPlaylistSnapshot(item.playlistId);
+    if (!newSnapshot) {
+      return reply.status(404).send({ error: 'Playlist no longer exists or is inaccessible' });
+    }
+
+    // Restore custom displayNames for matching sounds
+    for (const newItem of newSnapshot.items) {
+      const preservedName = displayNameMap.get(newItem.soundFileId);
+      if (preservedName) {
+        newItem.displayName = preservedName;
+      }
+    }
+
+    await db
+      .update(schema.userSoundMenuItems)
+      .set({ playlistSnapshot: newSnapshot as unknown as Record<string, unknown> })
+      .where(eq(schema.userSoundMenuItems.id, itemId));
+
+    return { success: true, snapshot: newSnapshot };
+  });
+
   // GET /api/sounds/server-root-items - Get server's root-level items (admin only)
   fastify.get('/server-root-items', { preHandler: [authenticate, requireAdmin] }, async (request, reply) => {
     const items = await db.execute(sql`
@@ -2391,6 +2612,7 @@ export const soundsRoutes: FastifyPluginAsync = async (fastify) => {
         i.nested_menu_id as "nestedMenuId",
         i.playlist_id as "playlistId",
         i.display_name as "displayName",
+        i.playlist_snapshot as "playlistSnapshot",
         i.created_at as "createdAt",
         sf.original_name as "soundName",
         sf.duration_seconds as "durationSeconds",
@@ -2442,6 +2664,12 @@ export const soundsRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.status(409).send({ error: `Position ${itemPosition} is already taken` });
     }
 
+    // Build playlist snapshot if assigning a playlist
+    let playlistSnapshot: PlaylistSnapshot | null = null;
+    if (itemType === 'playlist' && playlistId) {
+      playlistSnapshot = await buildPlaylistSnapshot(playlistId);
+    }
+
     const [item] = await db
       .insert(schema.userSoundMenuItems)
       .values({
@@ -2454,6 +2682,7 @@ export const soundsRoutes: FastifyPluginAsync = async (fastify) => {
         nestedMenuId: itemType === 'menu' ? menuId : null,
         playlistId: itemType === 'playlist' ? playlistId : null,
         displayName: displayName || null,
+        playlistSnapshot: playlistSnapshot as unknown as Record<string, unknown>,
       })
       .returning();
 
@@ -2502,6 +2731,128 @@ export const soundsRoutes: FastifyPluginAsync = async (fastify) => {
     }
 
     return { success: true };
+  });
+
+  // PUT /api/sounds/server-root-items/:id/snapshot - Update playlist snapshot displayNames (admin only)
+  fastify.put('/server-root-items/:id/snapshot', { preHandler: [authenticate, requireAdmin] }, async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const itemId = parseInt(id, 10);
+
+    const body = z.object({
+      items: z.array(z.object({
+        position: z.number().int().min(1),
+        displayName: z.string().max(32).nullable(),
+      })),
+    }).safeParse(request.body);
+
+    if (!body.success) {
+      return reply.status(400).send({ error: body.error.errors[0].message });
+    }
+
+    // Get the current item with its snapshot
+    const [item] = await db
+      .select({
+        id: schema.userSoundMenuItems.id,
+        itemType: schema.userSoundMenuItems.itemType,
+        playlistSnapshot: schema.userSoundMenuItems.playlistSnapshot,
+      })
+      .from(schema.userSoundMenuItems)
+      .where(and(
+        eq(schema.userSoundMenuItems.id, itemId),
+        isNull(schema.userSoundMenuItems.menuId),
+        eq(schema.userSoundMenuItems.isServerDefault, true)
+      ))
+      .limit(1);
+
+    if (!item) {
+      return reply.status(404).send({ error: 'Server root item not found' });
+    }
+
+    if (item.itemType !== 'playlist') {
+      return reply.status(400).send({ error: 'Item is not a playlist' });
+    }
+
+    if (!item.playlistSnapshot) {
+      return reply.status(400).send({ error: 'No playlist snapshot exists. Try refreshing the snapshot first.' });
+    }
+
+    // Update displayNames in the snapshot
+    const snapshot = item.playlistSnapshot as unknown as PlaylistSnapshot;
+    for (const update of body.data.items) {
+      const snapshotItem = snapshot.items.find(i => i.position === update.position);
+      if (snapshotItem) {
+        snapshotItem.displayName = update.displayName;
+      }
+    }
+
+    await db
+      .update(schema.userSoundMenuItems)
+      .set({ playlistSnapshot: snapshot as unknown as Record<string, unknown> })
+      .where(eq(schema.userSoundMenuItems.id, itemId));
+
+    return { success: true, snapshot };
+  });
+
+  // POST /api/sounds/server-root-items/:id/snapshot/refresh - Refresh playlist snapshot (admin only)
+  fastify.post('/server-root-items/:id/snapshot/refresh', { preHandler: [authenticate, requireAdmin] }, async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const itemId = parseInt(id, 10);
+
+    // Get the current item
+    const [item] = await db
+      .select({
+        id: schema.userSoundMenuItems.id,
+        itemType: schema.userSoundMenuItems.itemType,
+        playlistId: schema.userSoundMenuItems.playlistId,
+        playlistSnapshot: schema.userSoundMenuItems.playlistSnapshot,
+      })
+      .from(schema.userSoundMenuItems)
+      .where(and(
+        eq(schema.userSoundMenuItems.id, itemId),
+        isNull(schema.userSoundMenuItems.menuId),
+        eq(schema.userSoundMenuItems.isServerDefault, true)
+      ))
+      .limit(1);
+
+    if (!item) {
+      return reply.status(404).send({ error: 'Server root item not found' });
+    }
+
+    if (item.itemType !== 'playlist' || !item.playlistId) {
+      return reply.status(400).send({ error: 'Item is not a playlist' });
+    }
+
+    // Get the old snapshot to preserve custom displayNames
+    const oldSnapshot = item.playlistSnapshot as unknown as PlaylistSnapshot | null;
+    const displayNameMap = new Map<number, string | null>();
+    if (oldSnapshot?.items) {
+      for (const oldItem of oldSnapshot.items) {
+        if (oldItem.displayName) {
+          displayNameMap.set(oldItem.soundFileId, oldItem.displayName);
+        }
+      }
+    }
+
+    // Build fresh snapshot from live playlist
+    const newSnapshot = await buildPlaylistSnapshot(item.playlistId);
+    if (!newSnapshot) {
+      return reply.status(404).send({ error: 'Playlist no longer exists or is inaccessible' });
+    }
+
+    // Restore custom displayNames for matching sounds
+    for (const newItem of newSnapshot.items) {
+      const preservedName = displayNameMap.get(newItem.soundFileId);
+      if (preservedName) {
+        newItem.displayName = preservedName;
+      }
+    }
+
+    await db
+      .update(schema.userSoundMenuItems)
+      .set({ playlistSnapshot: newSnapshot as unknown as Record<string, unknown> })
+      .where(eq(schema.userSoundMenuItems.id, itemId));
+
+    return { success: true, snapshot: newSnapshot };
   });
 
   // DELETE /api/sounds/server-root-items/:id - Remove item from server root level (admin only)
@@ -3055,6 +3406,12 @@ export const soundsRoutes: FastifyPluginAsync = async (fastify) => {
       validPlaylistId = playlist.id;
     }
 
+    // Build playlist snapshot if assigning a playlist
+    let playlistSnapshot: PlaylistSnapshot | null = null;
+    if (itemType === 'playlist' && validPlaylistId) {
+      playlistSnapshot = await buildPlaylistSnapshot(validPlaylistId);
+    }
+
     const [item] = await db
       .insert(schema.userSoundMenuItems)
       .values({
@@ -3065,6 +3422,7 @@ export const soundsRoutes: FastifyPluginAsync = async (fastify) => {
         nestedMenuId: validNestedMenuId,
         playlistId: validPlaylistId,
         displayName: displayName || null,
+        playlistSnapshot: playlistSnapshot as unknown as Record<string, unknown>,
       })
       .returning();
 
@@ -3746,6 +4104,7 @@ export const soundsRoutes: FastifyPluginAsync = async (fastify) => {
       startTime: z.number().min(0),
       endTime: z.number().min(0),
       isPublic: z.boolean().optional().default(false),
+      volumeDb: z.number().min(-12).max(12).optional().default(0),
     }).safeParse(request.body);
 
     if (!body.success) {
@@ -3757,7 +4116,7 @@ export const soundsRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.status(400).send({ error: 'No GUID linked to account' });
     }
 
-    const { alias, startTime, endTime, isPublic } = body.data;
+    const { alias, startTime, endTime, isPublic, volumeDb } = body.data;
 
     // Validate clip duration
     const clipDuration = endTime - startTime;
@@ -3814,7 +4173,8 @@ export const soundsRoutes: FastifyPluginAsync = async (fastify) => {
         tempFilePath,
         permanentFilePath,
         startTime,
-        endTime
+        endTime,
+        volumeDb
       );
 
       // Check final file size
@@ -4279,6 +4639,12 @@ export const soundsRoutes: FastifyPluginAsync = async (fastify) => {
       }
     }
 
+    // Build playlist snapshot if assigning a playlist
+    let playlistSnapshot: PlaylistSnapshot | null = null;
+    if (itemType === 'playlist' && playlistId) {
+      playlistSnapshot = await buildPlaylistSnapshot(playlistId);
+    }
+
     const [item] = await db
       .insert(schema.userSoundMenuItems)
       .values({
@@ -4289,6 +4655,7 @@ export const soundsRoutes: FastifyPluginAsync = async (fastify) => {
         soundId: itemType === 'sound' ? soundId : null,
         nestedMenuId: itemType === 'menu' ? nestedMenuId : null,
         playlistId: itemType === 'playlist' ? playlistId : null,
+        playlistSnapshot: playlistSnapshot as unknown as Record<string, unknown>,
       })
       .returning();
 

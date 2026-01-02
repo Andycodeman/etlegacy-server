@@ -651,10 +651,10 @@ export const sounds = {
   getWaveform: (tempId: string) =>
     apiRequest<WaveformResponse>(`/sounds/temp/${tempId}/waveform`),
 
-  saveClip: (tempId: string, alias: string, startTime: number, endTime: number, isPublic: boolean = false) =>
+  saveClip: (tempId: string, alias: string, startTime: number, endTime: number, isPublic: boolean = false, volumeDb: number = 0) =>
     apiRequest<SaveClipResponse>('/sounds/save-clip', {
       method: 'POST',
-      body: { tempId, alias, startTime, endTime, isPublic },
+      body: { tempId, alias, startTime, endTime, isPublic, volumeDb },
     }),
 
   deleteTempFile: (tempId: string) =>
@@ -717,6 +717,20 @@ export const sounds = {
       body: updates,
     }),
 
+  // Update playlist snapshot displayNames for a playlist item
+  updatePlaylistSnapshot: (itemId: number, items: { position: number; displayName: string | null }[]) =>
+    apiRequest<{ success: boolean; snapshot: PlaylistSnapshot }>(`/sounds/root-items/${itemId}/snapshot`, {
+      method: 'PUT',
+      body: { items },
+    }),
+
+  // Refresh playlist snapshot from live playlist (preserves custom displayNames)
+  refreshPlaylistSnapshot: (itemId: number) =>
+    apiRequest<{ success: boolean; snapshot: PlaylistSnapshot }>(`/sounds/root-items/${itemId}/snapshot/refresh`, {
+      method: 'POST',
+      body: {},  // Empty body to satisfy Content-Type: application/json
+    }),
+
   // Remove item from root level
   removeRootItem: (itemId: number) =>
     apiRequest<{ success: boolean }>(`/sounds/root-items/${itemId}`, { method: 'DELETE' }),
@@ -750,6 +764,20 @@ export const sounds = {
     apiRequest<{ success: boolean }>(`/sounds/server-root-items/${itemId}`, {
       method: 'PUT',
       body: updates,
+    }),
+
+  // Update server playlist snapshot displayNames (admin only)
+  updateServerPlaylistSnapshot: (itemId: number, items: { position: number; displayName: string | null }[]) =>
+    apiRequest<{ success: boolean; snapshot: PlaylistSnapshot }>(`/sounds/server-root-items/${itemId}/snapshot`, {
+      method: 'PUT',
+      body: { items },
+    }),
+
+  // Refresh server playlist snapshot from live playlist (admin only)
+  refreshServerPlaylistSnapshot: (itemId: number) =>
+    apiRequest<{ success: boolean; snapshot: PlaylistSnapshot }>(`/sounds/server-root-items/${itemId}/snapshot/refresh`, {
+      method: 'POST',
+      body: {},  // Empty body to satisfy Content-Type: application/json
     }),
 
   // Remove item from server root level (admin only)
@@ -924,10 +952,10 @@ export const sounds = {
     apiRequest<UnfinishedEditResponse>(`/sounds/unfinished/${tempId}/edit`),
 
   // Save clipped audio from unfinished sound
-  saveUnfinishedClip: (tempId: string, alias: string, startTime: number, endTime: number, isPublic: boolean = false) =>
+  saveUnfinishedClip: (tempId: string, alias: string, startTime: number, endTime: number, isPublic: boolean = false, volumeDb: number = 0) =>
     apiRequest<SaveClipResponse>(`/sounds/unfinished/${tempId}/save-clip`, {
       method: 'POST',
-      body: { alias, startTime, endTime, isPublic },
+      body: { alias, startTime, endTime, isPublic, volumeDb },
     }),
 
   // Get stream URL for unfinished sound preview
@@ -1133,6 +1161,23 @@ export interface SoundMenusResponse {
   menus: SoundMenu[];
 }
 
+// Playlist snapshot item - individual sound in a captured playlist
+export interface PlaylistSnapshotItem {
+  position: number;
+  soundFileId: number;
+  originalAlias: string;
+  displayName: string | null;  // User's custom override
+  filePath: string;
+}
+
+// Playlist snapshot - captured at time of linking playlist to menu
+export interface PlaylistSnapshot {
+  capturedAt: string;  // ISO timestamp
+  originalPlaylistId: number;
+  originalPlaylistName: string;
+  items: PlaylistSnapshotItem[];
+}
+
 export interface SoundMenuItem {
   id: number;
   itemPosition: number;
@@ -1147,6 +1192,7 @@ export interface SoundMenuItem {
   playlistId: number | null;   // For playlist items
   playlistName?: string;       // For playlist items - display name
   playlistSoundCount?: number; // For playlist items - number of sounds
+  playlistSnapshot?: PlaylistSnapshot; // Snapshot of playlist contents at time of linking
   durationSeconds?: number;
   isFromPlaylist: boolean;
 }
