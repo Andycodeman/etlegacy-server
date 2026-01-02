@@ -651,10 +651,10 @@ export const sounds = {
   getWaveform: (tempId: string) =>
     apiRequest<WaveformResponse>(`/sounds/temp/${tempId}/waveform`),
 
-  saveClip: (tempId: string, alias: string, startTime: number, endTime: number, isPublic: boolean = false, volumeDb: number = 0) =>
+  saveClip: (tempId: string, alias: string, startTime: number, endTime: number, isPublic: boolean = false, volumeDb: number = 0, overwrite: boolean = false) =>
     apiRequest<SaveClipResponse>('/sounds/save-clip', {
       method: 'POST',
-      body: { tempId, alias, startTime, endTime, isPublic, volumeDb },
+      body: { tempId, alias, startTime, endTime, isPublic, volumeDb, overwrite },
     }),
 
   deleteTempFile: (tempId: string) =>

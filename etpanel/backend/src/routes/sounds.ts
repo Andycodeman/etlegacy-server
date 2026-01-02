@@ -86,6 +86,7 @@ const saveClipSchema = z.object({
   endTime: z.number().min(0),
   isPublic: z.boolean().optional().default(false),
   volumeDb: z.number().min(-12).max(12).optional().default(0), // Volume adjustment in dB
+  overwrite: z.boolean().optional().default(false), // Overwrite existing sound with same alias
 });
 
 // Max file size for temp uploads: 20MB (larger files allowed, will be clipped down)
@@ -901,7 +902,7 @@ export const soundsRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.status(400).send({ error: 'No GUID linked to account. Use /etman register in-game.' });
     }
 
-    const { tempId, alias, startTime, endTime, isPublic, volumeDb } = body.data;
+    const { tempId, alias, startTime, endTime, isPublic, volumeDb, overwrite } = body.data;
 
     // Validate clip duration
     const clipDuration = endTime - startTime;
@@ -913,14 +914,39 @@ export const soundsRoutes: FastifyPluginAsync = async (fastify) => {
     }
 
     // Check alias doesn't already exist for this user
-    const [existingAlias] = await db
-      .select({ id: schema.userSounds.id })
+    const [existingSound] = await db
+      .select({ id: schema.userSounds.id, soundFileId: schema.userSounds.soundFileId, visibility: schema.userSounds.visibility })
       .from(schema.userSounds)
       .where(and(eq(schema.userSounds.guid, guid), eq(schema.userSounds.alias, alias)))
       .limit(1);
 
-    if (existingAlias) {
-      return reply.status(409).send({ error: 'You already have a sound with this alias' });
+    if (existingSound) {
+      if (!overwrite) {
+        return reply.status(409).send({ error: 'You already have a sound with this alias' });
+      }
+
+      // Overwrite mode: delete the old sound first
+      // Get file info for cleanup
+      const [oldFile] = await db
+        .select({ referenceCount: schema.soundFiles.referenceCount, filePath: schema.soundFiles.filePath })
+        .from(schema.soundFiles)
+        .where(eq(schema.soundFiles.id, existingSound.soundFileId))
+        .limit(1);
+
+      // Delete user_sounds entry
+      await db.delete(schema.userSounds).where(eq(schema.userSounds.id, existingSound.id));
+
+      // Decrement reference count
+      await db
+        .update(schema.soundFiles)
+        .set({ referenceCount: sql`${schema.soundFiles.referenceCount} - 1` })
+        .where(eq(schema.soundFiles.id, existingSound.soundFileId));
+
+      // If this was the last reference and it was private, delete the file record
+      if (oldFile && oldFile.referenceCount === 1 && existingSound.visibility === 'private') {
+        await db.delete(schema.soundFiles).where(eq(schema.soundFiles.id, existingSound.soundFileId));
+        // TODO: Queue file for deletion from disk
+      }
     }
 
     // Check temp file exists (could be .mp3 or .wav)
@@ -1177,7 +1203,7 @@ export const soundsRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.get('/public/library', { preHandler: authenticate }, async (request, reply) => {
     const { page = '0', search } = request.query as { page?: string; search?: string };
     const pageNum = parseInt(page, 10) || 0;
-    const limit = 50;
+    const limit = 100;
     const offset = pageNum * limit;
 
     // Use raw SQL to get DISTINCT sounds that are either:

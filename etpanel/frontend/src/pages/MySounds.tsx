@@ -120,7 +120,7 @@ export default function MySounds() {
   const [search, setSearch] = useState('');
   const [debouncedSearch, setDebouncedSearch] = useState('');
   const [page, setPage] = useState(0);
-  const pageSize = 50;
+  const pageSize = 100;
 
   // Upload modal state
   const [uploadModal, setUploadModal] = useState(false);
@@ -136,6 +136,15 @@ export default function MySounds() {
   const [saveClipError, setSaveClipError] = useState('');
   const [isReclip, setIsReclip] = useState(false); // True when re-clipping an existing sound
   const [reclipAlias, setReclipAlias] = useState<string | null>(null); // Original alias when re-clipping
+
+  // Overwrite confirmation state
+  const [overwriteConfirm, setOverwriteConfirm] = useState<{
+    alias: string;
+    startTime: number;
+    endTime: number;
+    isPublic: boolean;
+    volumeDb: number;
+  } | null>(null);
 
   // State for creating clip from existing sound
   const [copyingSound, setCopyingSound] = useState<string | null>(null);
@@ -167,6 +176,12 @@ export default function MySounds() {
   const [selectedPlaylists, setSelectedPlaylists] = useState<Set<string>>(new Set());
   const [isAddingToPlaylists, setIsAddingToPlaylists] = useState(false);
   const [batchAddResults, setBatchAddResults] = useState<{ added: number; skipped: number } | null>(null);
+
+  // Single sound add-to-playlist modal state
+  const [singleAddSound, setSingleAddSound] = useState<string | null>(null);
+  const [singleAddPlaylists, setSingleAddPlaylists] = useState<Set<string>>(new Set());
+  const [isSingleAdding, setIsSingleAdding] = useState(false);
+  const [singleAddResults, setSingleAddResults] = useState<{ added: number; skipped: number } | null>(null);
 
   const handleSort = (field: SortField) => {
     if (sortField === field) {
@@ -694,6 +709,57 @@ export default function MySounds() {
     }
   };
 
+  // Single sound add-to-playlist handlers
+  const toggleSingleAddPlaylist = (playlistName: string) => {
+    setSingleAddPlaylists(prev => {
+      const newSet = new Set(prev);
+      if (newSet.has(playlistName)) {
+        newSet.delete(playlistName);
+      } else {
+        newSet.add(playlistName);
+      }
+      return newSet;
+    });
+  };
+
+  const handleSingleAddToPlaylists = async () => {
+    if (!singleAddSound || singleAddPlaylists.size === 0) return;
+
+    setIsSingleAdding(true);
+    setSingleAddResults(null);
+
+    let added = 0;
+    let skipped = 0;
+
+    for (const playlistName of singleAddPlaylists) {
+      try {
+        await sounds.addToPlaylist(playlistName, singleAddSound);
+        added++;
+      } catch (err) {
+        const errorMessage = (err as Error).message || '';
+        if (errorMessage.includes('already') || errorMessage.includes('exists')) {
+          skipped++;
+        } else {
+          console.error(`Failed to add ${singleAddSound} to ${playlistName}:`, err);
+          skipped++;
+        }
+      }
+    }
+
+    setSingleAddResults({ added, skipped });
+    setIsSingleAdding(false);
+
+    // Refresh data
+    queryClient.invalidateQueries({ queryKey: ['playlists'] });
+    queryClient.invalidateQueries({ queryKey: ['mySounds'] });
+  };
+
+  const closeSingleAddModal = () => {
+    setSingleAddSound(null);
+    setSingleAddPlaylists(new Set());
+    setSingleAddResults(null);
+  };
+
   // Get user's own playlists for batch add
   const userPlaylists = useMemo(() => {
     if (!playlistsData?.playlists) return [];
@@ -759,25 +825,50 @@ export default function MySounds() {
   };
 
   // Save the clipped audio
-  const handleSaveClip = async (alias: string, startTime: number, endTime: number, isPublic: boolean, volumeDb: number = 0) => {
+  const handleSaveClip = async (alias: string, startTime: number, endTime: number, isPublic: boolean, volumeDb: number = 0, overwrite: boolean = false) => {
     if (!tempUploadData) return;
 
-    // Check for duplicate alias
-    if (soundsData?.sounds.some((s: UserSound) => s.alias.toLowerCase() === alias.toLowerCase())) {
-      setSaveClipError('You already have a sound with this alias');
-      return;
+    // Check for duplicate alias - only if not overwriting
+    if (!overwrite) {
+      const existingSound = soundsData?.sounds.find((s: UserSound) => s.alias.toLowerCase() === alias.toLowerCase());
+      if (existingSound) {
+        // If user owns the sound, offer to overwrite
+        if (existingSound.isOwner) {
+          setOverwriteConfirm({ alias, startTime, endTime, isPublic, volumeDb });
+          return;
+        }
+        // User doesn't own this sound, can't overwrite
+        setSaveClipError('You already have a sound with this alias');
+        return;
+      }
     }
 
     setIsSavingClip(true);
     setSaveClipError('');
 
     try {
-      await sounds.saveClip(tempUploadData.tempId, alias, startTime, endTime, isPublic, volumeDb);
+      await sounds.saveClip(tempUploadData.tempId, alias, startTime, endTime, isPublic, volumeDb, overwrite);
       queryClient.invalidateQueries({ queryKey: ['mySounds'] });
+      queryClient.invalidateQueries({ queryKey: ['publicLibrary'] });
+      setOverwriteConfirm(null);
       resetUploadModal();
     } catch (err) {
       setSaveClipError((err as Error).message);
       setIsSavingClip(false);
+    }
+  };
+
+  // Handle overwrite confirmation
+  const handleOverwriteConfirm = () => {
+    if (overwriteConfirm) {
+      handleSaveClip(
+        overwriteConfirm.alias,
+        overwriteConfirm.startTime,
+        overwriteConfirm.endTime,
+        overwriteConfirm.isPublic,
+        overwriteConfirm.volumeDb,
+        true // overwrite = true
+      );
     }
   };
 
@@ -1362,6 +1453,17 @@ export default function MySounds() {
                             )}
                           </div>
                         )}
+                        {/* Add to Playlist button */}
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setSingleAddSound(sound.alias);
+                          }}
+                          className="px-1.5 py-0.5 rounded-full text-xs font-medium bg-blue-600 text-white hover:bg-blue-500"
+                          title="Add to playlist"
+                        >
+                          ➕
+                        </button>
                       </div>
                       <div className="text-xs text-gray-500 mt-1 ml-8">
                         Added {formatRelativeTime(sound.createdAt)}
@@ -1635,6 +1737,17 @@ export default function MySounds() {
                       </td>
                       <td className="px-4 py-2">
                         <div className="flex items-center gap-1">
+                          {/* Add to Playlist Button */}
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setSingleAddSound(sound.alias);
+                            }}
+                            className="p-1.5 text-gray-400 hover:text-blue-400 hover:bg-gray-700 rounded transition-colors"
+                            title="Add to playlist"
+                          >
+                            ➕
+                          </button>
                           {/* Create Clip Button */}
                           <button
                             onClick={(e) => {
@@ -1998,6 +2111,43 @@ export default function MySounds() {
         </div>
       )}
 
+      {/* Overwrite Confirmation Modal */}
+      {overwriteConfirm && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
+          <div className="bg-gray-800 rounded-lg p-6 max-w-md w-full">
+            <h3 className="text-lg font-semibold mb-4 text-orange-400">Overwrite Existing Sound?</h3>
+            <p className="text-gray-300 mb-4">
+              You already have a sound named{' '}
+              <span className="text-blue-400 font-medium">"{overwriteConfirm.alias}"</span>.
+            </p>
+            <div className="bg-yellow-900/30 border border-yellow-600/50 rounded p-3 mb-4">
+              <p className="text-yellow-400 text-sm">⚠️ Overwriting will:</p>
+              <ul className="text-yellow-300 text-sm mt-2 space-y-1 ml-4 list-disc">
+                <li>Replace the existing sound with this new clip</li>
+                <li>Remove it from any playlists it was in</li>
+                <li>This action cannot be undone</li>
+              </ul>
+            </div>
+            <div className="flex justify-end gap-3">
+              <button
+                onClick={() => setOverwriteConfirm(null)}
+                disabled={isSavingClip}
+                className="px-4 py-2 bg-gray-700 hover:bg-gray-600 disabled:bg-gray-800 rounded transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleOverwriteConfirm}
+                disabled={isSavingClip}
+                className="px-4 py-2 bg-orange-600 hover:bg-orange-500 disabled:bg-gray-600 disabled:cursor-not-allowed rounded font-medium transition-colors"
+              >
+                {isSavingClip ? 'Saving...' : 'Overwrite'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Delete Sound Warning Modal */}
       {deleteWarningSound && (() => {
         const inPublicPlaylists = deleteWarningSound.publicPlaylists && deleteWarningSound.publicPlaylists.length > 0;
@@ -2195,6 +2345,104 @@ export default function MySounds() {
                         {isAddingToPlaylists
                           ? 'Adding...'
                           : `Add to ${selectedPlaylists.size} Playlist${selectedPlaylists.size !== 1 ? 's' : ''}`
+                        }
+                      </button>
+                    </div>
+                  </>
+                )}
+              </>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Single Sound Add to Playlist Modal */}
+      {singleAddSound && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
+          <div className="bg-gray-800 rounded-lg p-6 max-w-md w-full max-h-[80vh] flex flex-col">
+            <h3 className="text-lg font-semibold mb-2">Add to Playlist</h3>
+            <p className="text-gray-400 text-sm mb-4">
+              Adding "<span className="text-white font-medium">{singleAddSound}</span>" to selected playlists.
+            </p>
+
+            {singleAddResults ? (
+              // Show results after add
+              <div className="flex-1">
+                <div className="bg-green-900/30 border border-green-600 rounded-lg p-4 mb-4">
+                  <p className="text-green-400 font-medium mb-2">Done!</p>
+                  <ul className="text-gray-300 text-sm space-y-1">
+                    <li>✓ Added to {singleAddResults.added} playlist{singleAddResults.added !== 1 ? 's' : ''}</li>
+                    {singleAddResults.skipped > 0 && (
+                      <li className="text-gray-400">⊘ {singleAddResults.skipped} skipped (already in playlist)</li>
+                    )}
+                  </ul>
+                </div>
+                <div className="flex justify-end">
+                  <button
+                    onClick={closeSingleAddModal}
+                    className="px-4 py-2 bg-orange-600 hover:bg-orange-500 rounded font-medium transition-colors"
+                  >
+                    Done
+                  </button>
+                </div>
+              </div>
+            ) : (
+              // Show playlist selection
+              <>
+                {userPlaylists.length === 0 ? (
+                  <div className="flex-1 flex flex-col items-center justify-center py-8">
+                    <div className="text-4xl mb-3">📁</div>
+                    <p className="text-gray-400 text-center">
+                      You don't have any playlists yet.
+                    </p>
+                    <button
+                      onClick={() => {
+                        closeSingleAddModal();
+                        navigate('/sounds/playlists');
+                      }}
+                      className="mt-4 px-4 py-2 bg-blue-600 hover:bg-blue-500 rounded font-medium transition-colors"
+                    >
+                      Create a Playlist
+                    </button>
+                  </div>
+                ) : (
+                  <>
+                    <div className="flex-1 overflow-y-auto border border-gray-700 rounded-lg divide-y divide-gray-700 mb-4 max-h-[50vh]">
+                      {userPlaylists.map((playlist: { name: string; soundCount?: number }) => (
+                        <label
+                          key={playlist.name}
+                          className="flex items-center gap-3 p-3 hover:bg-gray-700/50 cursor-pointer"
+                        >
+                          <input
+                            type="checkbox"
+                            checked={singleAddPlaylists.has(playlist.name)}
+                            onChange={() => toggleSingleAddPlaylist(playlist.name)}
+                            className="w-4 h-4 rounded bg-gray-700 border-gray-600 text-orange-600 focus:ring-orange-500"
+                          />
+                          <span className="flex-1 font-medium">{playlist.name}</span>
+                          {playlist.soundCount !== undefined && (
+                            <span className="text-sm text-gray-500">{playlist.soundCount} sounds</span>
+                          )}
+                        </label>
+                      ))}
+                    </div>
+
+                    <div className="flex justify-end gap-3">
+                      <button
+                        onClick={closeSingleAddModal}
+                        disabled={isSingleAdding}
+                        className="px-4 py-2 bg-gray-700 hover:bg-gray-600 disabled:bg-gray-800 disabled:cursor-not-allowed rounded transition-colors"
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        onClick={handleSingleAddToPlaylists}
+                        disabled={isSingleAdding || singleAddPlaylists.size === 0}
+                        className="px-4 py-2 bg-orange-600 hover:bg-orange-500 disabled:bg-gray-600 disabled:cursor-not-allowed rounded font-medium transition-colors"
+                      >
+                        {isSingleAdding
+                          ? 'Adding...'
+                          : `Add to ${singleAddPlaylists.size} Playlist${singleAddPlaylists.size !== 1 ? 's' : ''}`
                         }
                       </button>
                     </div>
