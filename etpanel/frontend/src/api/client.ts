@@ -1497,3 +1497,59 @@ export interface ExecuteCommandResponse {
   needsInGame?: boolean;
   note?: string;
 }
+
+// ============================================================================
+// Quick Sound Commands
+// ============================================================================
+
+export interface QuickCommandAlias {
+  alias: string;
+  soundAlias: string;
+  isPublic: boolean;
+  chatText: string | null;
+}
+
+export interface QuickCommandSettings {
+  prefix: string;
+  aliases: QuickCommandAlias[];
+}
+
+export const settings = {
+  getQuickCommand: () =>
+    apiRequest<QuickCommandSettings>('/settings/quick-command'),
+
+  updatePrefix: (prefix: string) =>
+    apiRequest<{ success: boolean; prefix: string }>('/settings/quick-command/prefix', {
+      method: 'PUT',
+      body: { prefix },
+    }),
+
+  setQuickAlias: (
+    alias: string,
+    soundAlias?: string,
+    publicSoundId?: number,
+    chatText?: string | null
+  ) =>
+    apiRequest<{ success: boolean; alias: string; chatText: string | null }>(
+      '/settings/quick-command/alias',
+      {
+        method: 'POST',
+        body: { alias, soundAlias, publicSoundId, chatText },
+      }
+    ),
+
+  updateQuickAlias: (alias: string, chatText: string | null) =>
+    apiRequest<{ success: boolean; alias: string; chatText: string | null }>(
+      `/settings/quick-command/alias/${encodeURIComponent(alias)}`,
+      {
+        method: 'PUT',
+        body: { chatText },
+      }
+    ),
+
+  removeQuickAlias: (alias: string) =>
+    apiRequest<{ success: boolean; alias: string }>(
+      `/settings/quick-command/alias/${encodeURIComponent(alias)}`,
+      { method: 'DELETE' }
+    ),
+};

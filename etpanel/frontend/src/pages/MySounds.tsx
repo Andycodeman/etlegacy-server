@@ -1,8 +1,8 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { sounds } from '../api/client';
-import type { UserSound, PendingShare, TempUploadResponse, UnfinishedSound, UnfinishedEditResponse } from '../api/client';
+import { sounds, settings } from '../api/client';
+import type { UserSound, PendingShare, TempUploadResponse, UnfinishedSound, UnfinishedEditResponse, QuickCommandAlias } from '../api/client';
 import AudioPlayer from '../components/AudioPlayer';
 import SoundClipEditor from '../components/SoundClipEditor';
 import SoundMenuEditor from '../components/SoundMenuEditor';
@@ -183,6 +183,16 @@ export default function MySounds() {
   const [isSingleAdding, setIsSingleAdding] = useState(false);
   const [singleAddResults, setSingleAddResults] = useState<{ added: number; skipped: number } | null>(null);
 
+  // Quick Command state
+  const [quickCmdSettingsOpen, setQuickCmdSettingsOpen] = useState(false);
+  const [quickCmdPrefix, setQuickCmdPrefix] = useState('');
+  const [quickCmdPrefixError, setQuickCmdPrefixError] = useState<string | null>(null);
+  const [quickCmdModalData, setQuickCmdModalData] = useState<{
+    soundAlias: string;
+    quickAlias: string;
+    chatText: string;
+  } | null>(null);
+
   const handleSort = (field: SortField) => {
     if (sortField === field) {
       setSortDirection(sortDirection === 'asc' ? 'desc' : 'asc');
@@ -236,6 +246,31 @@ export default function MySounds() {
     queryFn: sounds.playlists,
     enabled: guidStatus?.linked === true,
   });
+
+  // Fetch Quick Command settings
+  const { data: quickCmdData } = useQuery({
+    queryKey: ['quickCommandSettings'],
+    queryFn: settings.getQuickCommand,
+    enabled: guidStatus?.linked === true,
+  });
+
+  // Initialize Quick Command prefix from server data
+  useEffect(() => {
+    if (quickCmdData?.prefix && !quickCmdPrefix) {
+      setQuickCmdPrefix(quickCmdData.prefix);
+    }
+  }, [quickCmdData?.prefix]);
+
+  // Create a map of sound alias -> quick command alias for easy lookup
+  const quickCmdMap = useMemo(() => {
+    const map = new Map<string, QuickCommandAlias>();
+    if (quickCmdData?.aliases) {
+      for (const alias of quickCmdData.aliases) {
+        map.set(alias.soundAlias, alias);
+      }
+    }
+    return map;
+  }, [quickCmdData?.aliases]);
 
   // Filter and sort sounds
   const filteredSounds = useMemo(() => {
@@ -397,6 +432,36 @@ export default function MySounds() {
     },
     onError: (error: Error) => {
       setLinkError(error.message);
+    },
+  });
+
+  // Quick Command mutations
+  const updatePrefixMutation = useMutation({
+    mutationFn: (prefix: string) => settings.updatePrefix(prefix),
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ['quickCommandSettings'] });
+      setQuickCmdPrefix(data.prefix);
+      setQuickCmdPrefixError(null);
+    },
+    onError: (error: Error) => {
+      setQuickCmdPrefixError(error.message);
+    },
+  });
+
+  const setQuickAliasMutation = useMutation({
+    mutationFn: ({ alias, soundAlias, chatText }: { alias: string; soundAlias: string; chatText: string | null }) =>
+      settings.setQuickAlias(alias, soundAlias, undefined, chatText),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['quickCommandSettings'] });
+      setQuickCmdModalData(null);
+    },
+  });
+
+  const removeQuickAliasMutation = useMutation({
+    mutationFn: (alias: string) => settings.removeQuickAlias(alias),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['quickCommandSettings'] });
+      setQuickCmdModalData(null);
     },
   });
 
@@ -758,6 +823,60 @@ export default function MySounds() {
     setSingleAddSound(null);
     setSingleAddPlaylists(new Set());
     setSingleAddResults(null);
+  };
+
+  // Quick Command helpers
+  const openQuickCmdEditor = (soundAlias: string) => {
+    const existing = quickCmdMap.get(soundAlias);
+    setQuickCmdModalData({
+      soundAlias,
+      quickAlias: existing?.alias || '',
+      chatText: existing?.chatText || '',
+    });
+  };
+
+  const handleSaveQuickCmd = () => {
+    if (!quickCmdModalData) return;
+    const { soundAlias, quickAlias, chatText } = quickCmdModalData;
+    if (!quickAlias.trim()) {
+      // If no alias, remove the quick command
+      const existing = quickCmdMap.get(soundAlias);
+      if (existing) {
+        removeQuickAliasMutation.mutate(existing.alias);
+      } else {
+        setQuickCmdModalData(null);
+      }
+      return;
+    }
+    setQuickAliasMutation.mutate({
+      alias: quickAlias.trim().toLowerCase(),
+      soundAlias,
+      chatText: chatText.trim() || null,
+    });
+  };
+
+  const handleRemoveQuickCmd = () => {
+    if (!quickCmdModalData) return;
+    const existing = quickCmdMap.get(quickCmdModalData.soundAlias);
+    if (existing) {
+      removeQuickAliasMutation.mutate(existing.alias);
+    } else {
+      setQuickCmdModalData(null);
+    }
+  };
+
+  const handlePrefixSave = () => {
+    if (quickCmdPrefix !== quickCmdData?.prefix) {
+      updatePrefixMutation.mutate(quickCmdPrefix);
+    }
+  };
+
+  // Format prefix for display - show trailing space visually
+  const formatPrefixDisplay = (prefix: string) => {
+    if (prefix.endsWith(' ')) {
+      return prefix.slice(0, -1) + '␣';
+    }
+    return prefix;
   };
 
   // Get user's own playlists for batch add
@@ -1277,6 +1396,99 @@ export default function MySounds() {
         {/* Library Tab Content */}
         {activeTab === 'library' && (
           <>
+        {/* Quick Command Settings Panel */}
+        <div className="bg-gray-800 border border-gray-700 rounded-lg flex-shrink-0 mb-4">
+          <button
+            onClick={() => setQuickCmdSettingsOpen(!quickCmdSettingsOpen)}
+            className="w-full px-4 py-3 flex items-center justify-between text-left hover:bg-gray-700/50 transition-colors rounded-lg"
+          >
+            <div className="flex items-center gap-2">
+              <span className="text-lg">⚡</span>
+              <span className="font-medium">Quick Command Settings</span>
+              {quickCmdData?.prefix && (
+                <span className="text-sm text-gray-400">
+                  (prefix: <span className="text-cyan-400 font-mono">{formatPrefixDisplay(quickCmdData.prefix)}</span>)
+                </span>
+              )}
+            </div>
+            <span className={`text-gray-400 transition-transform ${quickCmdSettingsOpen ? 'rotate-180' : ''}`}>
+              ▼
+            </span>
+          </button>
+
+          {quickCmdSettingsOpen && (
+            <div className="px-4 pb-4 border-t border-gray-700">
+              <div className="mt-4 space-y-4">
+                {/* Prefix Setting */}
+                <div>
+                  <label className="block text-sm font-medium text-gray-300 mb-2">
+                    Quick Command Prefix
+                  </label>
+                  <div className="flex items-center gap-3">
+                    <div className="relative">
+                      <input
+                        type="text"
+                        value={quickCmdPrefix}
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          // Allow trailing space but not leading/middle whitespace
+                          if (val.length <= 4 && !/^\s/.test(val) && !/\s[^\s]/.test(val)) {
+                            setQuickCmdPrefix(val);
+                            setQuickCmdPrefixError(null);
+                          }
+                        }}
+                        onBlur={handlePrefixSave}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') handlePrefixSave();
+                        }}
+                        maxLength={4}
+                        className={`w-24 bg-gray-700 border rounded px-3 py-2 text-white font-mono text-center focus:outline-none ${
+                          quickCmdPrefixError ? 'border-red-500' : 'border-gray-600 focus:border-cyan-500'
+                        }`}
+                        placeholder="@"
+                      />
+                      {quickCmdPrefix.endsWith(' ') && (
+                        <span className="absolute right-2 top-1/2 -translate-y-1/2 text-xs text-cyan-400" title="Includes trailing space">
+                          ␣
+                        </span>
+                      )}
+                    </div>
+                    {updatePrefixMutation.isPending && (
+                      <span className="text-sm text-gray-400">Saving...</span>
+                    )}
+                    {quickCmdPrefixError && (
+                      <span className="text-sm text-red-400">{quickCmdPrefixError}</span>
+                    )}
+                  </div>
+                </div>
+
+                {/* Instructions */}
+                <div className="bg-gray-900/50 rounded-lg p-3 text-sm">
+                  <p className="text-gray-300 mb-2">
+                    <span className="text-cyan-400 font-semibold">How it works:</span> Type your prefix + alias in chat to play a sound.
+                  </p>
+                  <p className="text-gray-400">
+                    Example: <span className="text-cyan-400 font-mono">{quickCmdPrefix || '@'}lol</span> plays your sound
+                    {quickCmdData?.aliases?.length ? ' and shows your custom chat text' : ''}
+                  </p>
+                  <div className="mt-2 pt-2 border-t border-gray-700">
+                    <p className="text-yellow-400 text-xs">
+                      ⚠️ Blocked prefixes: <span className="font-mono">!</span> (admin commands), <span className="font-mono">/</span> and <span className="font-mono">\</span> (console)
+                    </p>
+                  </div>
+                </div>
+
+                {/* Stats */}
+                {quickCmdData?.aliases && quickCmdData.aliases.length > 0 && (
+                  <div className="text-sm text-gray-400">
+                    You have <span className="text-cyan-400 font-medium">{quickCmdData.aliases.length}</span> quick command{quickCmdData.aliases.length !== 1 ? 's' : ''} configured.
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
+
         {/* Pending Shares Section */}
         {pendingShares.length > 0 && (
           <div className="bg-blue-900/30 border border-blue-600 rounded-lg p-4 flex-shrink-0">
@@ -1380,6 +1592,33 @@ export default function MySounds() {
                       </div>
                       <div className="text-sm text-gray-400 ml-8 flex items-center gap-2 flex-wrap">
                         {formatFileSize(sound.fileSize)} • {formatDuration(sound.durationSeconds)} • {sound.isOwner ? <span className="text-green-400">You</span> : renderETColors(sound.ownerName || 'Unknown')}
+                        {/* Quick Command for mobile */}
+                        {(() => {
+                          const quickCmd = quickCmdMap.get(sound.alias);
+                          return quickCmd ? (
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                openQuickCmdEditor(sound.alias);
+                              }}
+                              className="px-1.5 py-0.5 rounded-full text-xs font-medium bg-cyan-700 text-white hover:bg-cyan-600"
+                              title={`Type "${quickCmdData?.prefix || '@'}${quickCmd.alias}" in chat`}
+                            >
+                              ⚡{quickCmd.alias}
+                            </button>
+                          ) : (
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                openQuickCmdEditor(sound.alias);
+                              }}
+                              className="px-1.5 py-0.5 rounded-full text-xs font-medium bg-gray-700 text-gray-400 hover:bg-gray-600"
+                              title="Add quick command"
+                            >
+                              ⚡+
+                            </button>
+                          );
+                        })()}
                         {/* Playlist counts for mobile */}
                         {sound.publicPlaylists && sound.publicPlaylists.length > 0 && (
                           <div className="relative inline-block">
@@ -1569,6 +1808,8 @@ export default function MySounds() {
                       <th className="px-2 py-2 w-12">#</th>
                       <th className="px-4 py-2 w-16">Play</th>
                       <SortableHeader label="Alias" field="alias" currentSort={sortField} currentDirection={sortDirection} onSort={handleSort} />
+                      <th className="px-4 py-2 w-20" title="Quick command alias">Quick Cmd</th>
+                      <th className="px-4 py-2 w-28" title="Chat text replacement">Chat Text</th>
                       <SortableHeader label="Size" field="fileSize" currentSort={sortField} currentDirection={sortDirection} onSort={handleSort} />
                       <SortableHeader label="Duration" field="durationSeconds" currentSort={sortField} currentDirection={sortDirection} onSort={handleSort} />
                       <SortableHeader label="Owner" field="isOwner" currentSort={sortField} currentDirection={sortDirection} onSort={handleSort} className="w-16" />
@@ -1626,6 +1867,55 @@ export default function MySounds() {
                             {sound.alias}
                           </span>
                         )}
+                      </td>
+                      {/* Quick Command Alias */}
+                      <td className="px-4 py-2">
+                        {(() => {
+                          const quickCmd = quickCmdMap.get(sound.alias);
+                          return quickCmd ? (
+                            <button
+                              onClick={() => openQuickCmdEditor(sound.alias)}
+                              className="text-cyan-400 hover:text-cyan-300 font-mono text-sm cursor-pointer"
+                              title={`Type "${quickCmdData?.prefix || '@'}${quickCmd.alias}" in chat`}
+                            >
+                              ({quickCmd.alias})
+                            </button>
+                          ) : (
+                            <button
+                              onClick={() => openQuickCmdEditor(sound.alias)}
+                              className="text-gray-500 hover:text-gray-400 cursor-pointer"
+                              title="Add quick command"
+                            >
+                              (+)
+                            </button>
+                          );
+                        })()}
+                      </td>
+                      {/* Chat Text */}
+                      <td className="px-4 py-2">
+                        {(() => {
+                          const quickCmd = quickCmdMap.get(sound.alias);
+                          if (!quickCmd) {
+                            return <span className="text-gray-700">—</span>;
+                          }
+                          return quickCmd.chatText ? (
+                            <button
+                              onClick={() => openQuickCmdEditor(sound.alias)}
+                              className="text-gray-400 hover:text-gray-300 text-sm truncate max-w-[100px] block cursor-pointer"
+                              title={quickCmd.chatText}
+                            >
+                              "{quickCmd.chatText}"
+                            </button>
+                          ) : (
+                            <button
+                              onClick={() => openQuickCmdEditor(sound.alias)}
+                              className="text-gray-600 hover:text-gray-500 cursor-pointer"
+                              title="Add chat text"
+                            >
+                              —
+                            </button>
+                          );
+                        })()}
                       </td>
                       <td className="px-4 py-2 text-sm">{formatFileSize(sound.fileSize)}</td>
                       <td className="px-4 py-2 text-sm">{formatDuration(sound.durationSeconds)}</td>
@@ -2450,6 +2740,114 @@ export default function MySounds() {
                 )}
               </>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* Quick Command Editor Modal */}
+      {quickCmdModalData && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
+          <div className="bg-gray-800 rounded-lg p-6 max-w-md w-full">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-lg font-semibold">
+                Quick Command for "{quickCmdModalData.soundAlias}"
+              </h3>
+              <button
+                onClick={() => setQuickCmdModalData(null)}
+                className="text-gray-400 hover:text-white text-xl"
+              >
+                ×
+              </button>
+            </div>
+
+            <div className="space-y-4">
+              {/* Quick Alias Input */}
+              <div>
+                <label className="block text-sm font-medium text-gray-300 mb-2">
+                  Quick Alias
+                </label>
+                <input
+                  type="text"
+                  value={quickCmdModalData.quickAlias}
+                  onChange={(e) => {
+                    const val = e.target.value.toLowerCase().replace(/[^a-z0-9_]/g, '');
+                    setQuickCmdModalData({ ...quickCmdModalData, quickAlias: val });
+                  }}
+                  placeholder="e.g., lol"
+                  maxLength={16}
+                  className="w-full bg-gray-700 border border-gray-600 rounded px-4 py-2 text-white placeholder-gray-400 focus:outline-none focus:border-cyan-500 font-mono"
+                />
+                <p className="text-sm text-gray-400 mt-1">
+                  {quickCmdModalData.quickAlias ? (
+                    <>
+                      Type <span className="text-cyan-400 font-mono">{quickCmdData?.prefix || '@'}{quickCmdModalData.quickAlias}</span> in chat to trigger
+                    </>
+                  ) : (
+                    'Leave empty to remove quick command'
+                  )}
+                </p>
+              </div>
+
+              {/* Chat Text Input */}
+              <div>
+                <label className="block text-sm font-medium text-gray-300 mb-2">
+                  Chat Text <span className="text-gray-500 font-normal">(optional)</span>
+                </label>
+                <input
+                  type="text"
+                  value={quickCmdModalData.chatText}
+                  onChange={(e) => setQuickCmdModalData({ ...quickCmdModalData, chatText: e.target.value })}
+                  placeholder="LOLOL"
+                  maxLength={128}
+                  className="w-full bg-gray-700 border border-gray-600 rounded px-4 py-2 text-white placeholder-gray-400 focus:outline-none focus:border-cyan-500"
+                />
+                <p className="text-sm text-gray-400 mt-1">
+                  {quickCmdModalData.chatText ? (
+                    <>Shows "<span className="text-gray-300">{quickCmdModalData.chatText}</span>" in chat</>
+                  ) : (
+                    'Leave empty for sound only (no chat message)'
+                  )}
+                </p>
+              </div>
+
+              {/* Error Display */}
+              {(setQuickAliasMutation.isError || removeQuickAliasMutation.isError) && (
+                <p className="text-red-400 text-sm">
+                  {(setQuickAliasMutation.error as Error)?.message || (removeQuickAliasMutation.error as Error)?.message || 'An error occurred'}
+                </p>
+              )}
+            </div>
+
+            {/* Action Buttons */}
+            <div className="flex justify-between gap-3 mt-6">
+              <div>
+                {quickCmdMap.has(quickCmdModalData.soundAlias) && (
+                  <button
+                    onClick={handleRemoveQuickCmd}
+                    disabled={removeQuickAliasMutation.isPending || setQuickAliasMutation.isPending}
+                    className="px-4 py-2 bg-red-600 hover:bg-red-500 disabled:bg-gray-600 disabled:cursor-not-allowed rounded font-medium transition-colors"
+                  >
+                    {removeQuickAliasMutation.isPending ? 'Removing...' : 'Remove'}
+                  </button>
+                )}
+              </div>
+              <div className="flex gap-3">
+                <button
+                  onClick={() => setQuickCmdModalData(null)}
+                  disabled={setQuickAliasMutation.isPending || removeQuickAliasMutation.isPending}
+                  className="px-4 py-2 bg-gray-700 hover:bg-gray-600 disabled:bg-gray-800 rounded transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleSaveQuickCmd}
+                  disabled={setQuickAliasMutation.isPending || removeQuickAliasMutation.isPending}
+                  className="px-4 py-2 bg-cyan-600 hover:bg-cyan-500 disabled:bg-gray-600 disabled:cursor-not-allowed rounded font-medium transition-colors"
+                >
+                  {setQuickAliasMutation.isPending ? 'Saving...' : 'Save'}
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       )}

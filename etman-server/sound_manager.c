@@ -398,20 +398,19 @@ void SoundMgr_Frame(void) {
 void SoundMgr_HandlePacket(uint32_t clientId, struct sockaddr_in *clientAddr,
                            const uint8_t *data, int dataLen) {
     if (!g_soundMgr.initialized || dataLen < 5) {  /* type + clientId (some commands have no payload) */
-        printf("[DEBUG] SoundMgr_HandlePacket: rejected (init=%d, len=%d)\n",
-               g_soundMgr.initialized, dataLen);
         return;
     }
 
-    /* Update client address in case NAT port changed */
-    updateClientAddress(clientId, clientAddr);
-
-    /* Store address for responses in case client doesn't exist yet */
-    setCurrentPacketAddress(clientAddr);
-
     uint8_t cmdType = data[0];
-    printf("[DEBUG] SoundMgr_HandlePacket: cmdType=0x%02X, dataLen=%d, clientId=%u\n",
-           cmdType, dataLen, clientId);
+
+    /* Update client address in case NAT port changed - but NOT for QUICK_LOOKUP
+     * because those come from qagame (server-side) not cgame (client-side).
+     * Updating the address would redirect audio packets to qagame instead of cgame! */
+    if (cmdType != VOICE_CMD_QUICK_LOOKUP) {
+        updateClientAddress(clientId, clientAddr);
+        /* Store address for responses in case client doesn't exist yet */
+        setCurrentPacketAddress(clientAddr);
+    }
     /* Skip type (1) and clientId (4) - clientId already extracted by caller */
     const uint8_t *payload = data + 5;
     int payloadLen = dataLen - 5;
@@ -425,11 +424,8 @@ void SoundMgr_HandlePacket(uint32_t clientId, struct sockaddr_in *clientAddr,
                 return;
             }
 
-            printf("[DEBUG] SOUND_LIST: clientId=%u, using GUID=%s\n", clientId, guid);
-
             SoundInfo sounds[SOUND_MAX_PER_USER];
             int count = SoundMgr_ListSounds(guid, sounds, SOUND_MAX_PER_USER);
-            printf("[DEBUG] SOUND_LIST: got %d sounds for GUID %s\n", count, guid);
 
             if (count < 0) {
                 sendResponseToClient(clientId, VOICE_RESP_ERROR, "Failed to list sounds");
@@ -1340,8 +1336,6 @@ void SoundMgr_HandlePacket(uint32_t clientId, struct sockaddr_in *clientAddr,
 
         case VOICE_CMD_PLAYLIST_PUBLIC_LIST: {
             /* List all public playlists */
-            printf("[DEBUG] VOICE_CMD_PLAYLIST_PUBLIC_LIST received from client %u\n", clientId);
-
             if (!g_soundMgr.dbMode) {
                 sendResponseToClient(clientId, VOICE_RESP_ERROR, "Playlists require database mode");
                 return;
@@ -1349,7 +1343,6 @@ void SoundMgr_HandlePacket(uint32_t clientId, struct sockaddr_in *clientAddr,
 
             DBPlaylistListResult result;
             int count = DB_ListPublicPlaylists(&result);
-            printf("[DEBUG] DB_ListPublicPlaylists returned %d\n", count);
 
             if (count < 0) {
                 sendResponseToClient(clientId, VOICE_RESP_ERROR, DB_GetLastError());
@@ -1668,8 +1661,6 @@ void SoundMgr_HandlePacket(uint32_t clientId, struct sockaddr_in *clientAddr,
              * Payload format: [guid:32][menuId:4][pageOffset:2][menuType:1]
              * menuType: 0 = personal menus, 1 = server menus
              */
-            printf("[DEBUG] MENU_NAVIGATE: received, payloadLen=%d\n", payloadLen);
-
             if (!g_soundMgr.dbMode) {
                 sendResponseToClient(clientId, VOICE_RESP_ERROR, "Menus require database mode");
                 break;
@@ -1681,15 +1672,11 @@ void SoundMgr_HandlePacket(uint32_t clientId, struct sockaddr_in *clientAddr,
                 break;
             }
 
-            printf("[DEBUG] MENU_NAVIGATE: clientId=%u, guid=%s\n", clientId, guid);
-
             /* Parse menuId, pageOffset, and menuType from payload
              * Payload format: [guid:32][menuId:4][pageOffset:2][menuType:1]
              * Total: 39 bytes minimum (menuType is optional, defaults to 0)
              */
             if (payloadLen < SOUND_GUID_LEN + 6) {
-                printf("[DEBUG] MENU_NAVIGATE: payload too short (%d < %d)\n",
-                       payloadLen, SOUND_GUID_LEN + 6);
                 sendResponseToClient(clientId, VOICE_RESP_ERROR, "Invalid request");
                 break;
             }
@@ -1707,9 +1694,6 @@ void SoundMgr_HandlePacket(uint32_t clientId, struct sockaddr_in *clientAddr,
                 uint8_t menuType = payload[SOUND_GUID_LEN + 6];
                 isServerMenu = (menuType == ETMAN_MENU_SERVER);
             }
-
-            printf("[DEBUG] MENU_NAVIGATE: menuId=%d, pageOffset=%d, isServerMenu=%d\n",
-                   menuId, pageOffset, isServerMenu);
 
             DBMenuPageResult result;
             if (!DB_GetMenuPage(guid, menuId, pageOffset, isServerMenu, &result)) {
@@ -1760,10 +1744,6 @@ void SoundMgr_HandlePacket(uint32_t clientId, struct sockaddr_in *clientAddr,
                 }
             }
 
-            printf("[DEBUG] MENU_NAVIGATE: built response, offset=%d bytes\n", offset);
-            printf("[MENU] Sending menu page (id=%d, items=%d/%d, page=%d) to client %u\n",
-                   result.menu.menuId, result.menu.itemCount, result.menu.totalItems,
-                   pageOffset / 9 + 1, clientId);
             sendBinaryToClient(clientId, VOICE_RESP_MENU_DATA, response, offset);
             break;
         }
@@ -1807,6 +1787,147 @@ void SoundMgr_HandlePacket(uint32_t clientId, struct sockaddr_in *clientAddr,
                 sendResponseToClient(clientId, VOICE_RESP_SUCCESS, msg);
             } else {
                 sendResponseToClient(clientId, VOICE_RESP_ERROR, "Failed to play sound");
+            }
+            break;
+        }
+
+        case VOICE_CMD_QUICK_LOOKUP: {
+            /*
+             * Quick command lookup from qagame (chat interception)
+             * Payload: <slot:1><guid[32]><msgLen:1><message>
+             * Response: VOICE_RESP_QUICK_FOUND or VOICE_RESP_QUICK_NOTFOUND
+             */
+            if (!g_soundMgr.dbMode) {
+                /* Quick commands require database mode - send not found */
+                uint8_t resp[4];
+                resp[0] = VOICE_RESP_QUICK_NOTFOUND;
+                resp[1] = (uint8_t)clientId;
+                sendBinaryToClient(clientId, resp[0], resp + 1, 1);
+                break;
+            }
+
+            /* Parse packet - minimum: slot(1) + guid(32) + msgLen(1) + at least 1 char */
+            if (payloadLen < 1 + SOUND_GUID_LEN + 2) {
+                uint8_t resp[4];
+                resp[0] = VOICE_RESP_QUICK_NOTFOUND;
+                resp[1] = (uint8_t)clientId;
+                sendBinaryToClient(clientId, resp[0], resp + 1, 1);
+                break;
+            }
+
+            int pos = 0;
+            uint8_t slot = payload[pos++];
+
+            char guid[SOUND_GUID_LEN + 1];
+            memcpy(guid, &payload[pos], SOUND_GUID_LEN);
+            guid[SOUND_GUID_LEN] = '\0';
+            pos += SOUND_GUID_LEN;
+
+            uint8_t msgLen = payload[pos++];
+            if (payloadLen < pos + msgLen) {
+                uint8_t resp[4];
+                resp[0] = VOICE_RESP_QUICK_NOTFOUND;
+                resp[1] = slot;
+                sendBinaryToClient(slot, resp[0], resp + 1, 1);
+                break;
+            }
+
+            char message[128];
+            int copyLen = (msgLen < sizeof(message) - 1) ? msgLen : sizeof(message) - 1;
+            memcpy(message, &payload[pos], copyLen);
+            message[copyLen] = '\0';
+
+            /* Step 1: Get player's prefix */
+            char prefix[5];
+            DB_GetQuickCmdPrefix(guid, prefix);
+            int prefixLen = strlen(prefix);
+
+            /* Step 2: Check if message starts with prefix */
+            if (strncmp(message, prefix, prefixLen) != 0) {
+                /* Not a quick command for this player */
+                uint8_t resp[4];
+                resp[0] = VOICE_RESP_QUICK_NOTFOUND;
+                resp[1] = slot;
+                sendBinaryToClient(slot, resp[0], resp + 1, 1);
+                break;
+            }
+
+            /* Step 3: Extract alias (everything after prefix) */
+            const char *alias = message + prefixLen;
+            if (!alias[0]) {
+                /* Empty alias - just the prefix with nothing after */
+                uint8_t resp[4];
+                resp[0] = VOICE_RESP_QUICK_NOTFOUND;
+                resp[1] = slot;
+                sendBinaryToClient(slot, resp[0], resp + 1, 1);
+                break;
+            }
+
+            DBQuickCmdResult result;
+            int soundFileId = 0;
+            char filePath[513];
+            bool hasResult = false;
+            bool hasChatText = false;
+            char chatText[129] = {0};
+
+            /* Step 4: Look up player's quick command aliases */
+            if (DB_LookupQuickCommand(guid, alias, &result)) {
+                soundFileId = result.soundFileId;
+                strncpy(filePath, result.filePath, sizeof(filePath) - 1);
+                hasChatText = result.hasChatText;
+                if (hasChatText) {
+                    strncpy(chatText, result.chatText, sizeof(chatText) - 1);
+                }
+                hasResult = true;
+            }
+
+            /* Step 5: Fall back to user's own sounds by alias (fuzzy match) */
+            if (!hasResult) {
+                if (DB_FuzzySearchUserSound(guid, alias, filePath, sizeof(filePath), &soundFileId)) {
+                    hasResult = true;
+                }
+            }
+
+            /* Step 6: Fall back to public sounds */
+            if (!hasResult) {
+                if (DB_GetPublicSoundByName(alias, filePath, sizeof(filePath))) {
+                    hasResult = true;
+                } else if (DB_FuzzySearchPublicSound(alias, filePath, sizeof(filePath), &soundFileId)) {
+                    hasResult = true;
+                }
+            }
+
+            /* Step 7: Send response */
+            if (hasResult) {
+                /* Play the sound */
+                SoundMgr_PlaySoundByPath(slot, guid, alias, filePath);
+
+                /* Build QUICK_FOUND response: <slot><soundFileId:4><chatTextLen><chatText> */
+                uint8_t resp[256];
+                int respPos = 0;
+                resp[respPos++] = slot;
+
+                /* Sound file ID (4 bytes, network order) */
+                uint32_t sfidNet = htonl(soundFileId);
+                memcpy(&resp[respPos], &sfidNet, 4);
+                respPos += 4;
+
+                /* Chat text length and content */
+                int chatLen = hasChatText ? strlen(chatText) : 0;
+                if (chatLen > QUICK_CMD_MAX_CHAT_TEXT) chatLen = QUICK_CMD_MAX_CHAT_TEXT;
+                resp[respPos++] = (uint8_t)chatLen;
+
+                if (chatLen > 0) {
+                    memcpy(&resp[respPos], chatText, chatLen);
+                    respPos += chatLen;
+                }
+
+                sendBinaryToClient(slot, VOICE_RESP_QUICK_FOUND, resp, respPos);
+            } else {
+                /* Not found - let original chat through */
+                uint8_t resp[4];
+                resp[0] = slot;
+                sendBinaryToClient(slot, VOICE_RESP_QUICK_NOTFOUND, resp, 1);
             }
             break;
         }
@@ -2210,6 +2331,7 @@ bool SoundMgr_PlaySound(uint32_t clientId, const char *guid, const char *name) {
     /* Setup playback */
     if (g_soundMgr.playback.pcmBuffer) {
         free(g_soundMgr.playback.pcmBuffer);
+        g_soundMgr.playback.pcmBuffer = NULL;
     }
 
     /* Reset Opus encoder state to avoid garbled audio at start of new sounds.
@@ -2242,9 +2364,9 @@ bool SoundMgr_PlaySound(uint32_t clientId, const char *guid, const char *name) {
  */
 static bool SoundMgr_PlaySoundByPath(uint32_t clientId, const char *guid,
                                      const char *name, const char *filepath) {
+    /* If already playing, stop current sound and start new one */
     if (g_soundMgr.playback.state == PLAYBACK_PLAYING) {
-        printf("SoundMgr: PlaySoundByPath called while state=PLAYING\n");
-        return false;
+        SoundMgr_StopSound();
     }
 
     /* Build full path from base directory + relative filepath */
@@ -2252,12 +2374,9 @@ static bool SoundMgr_PlaySoundByPath(uint32_t clientId, const char *guid,
     snprintf(fullPath, sizeof(fullPath), "%s%c%s",
              g_soundMgr.baseDir, PATH_SEP, filepath);
 
-    printf("SoundMgr: PlaySoundByPath trying filepath: %s\n", fullPath);
-
     /* Check file exists */
     struct stat st;
     if (stat(fullPath, &st) != 0) {
-        printf("SoundMgr: PlaySoundByPath failed - file not found: %s\n", fullPath);
         return false;
     }
 
@@ -2265,7 +2384,6 @@ static bool SoundMgr_PlaySoundByPath(uint32_t clientId, const char *guid,
     int16_t *pcmData = NULL;
     int pcmSamples = 0;
     if (!decodeMP3(fullPath, &pcmData, &pcmSamples)) {
-        printf("SoundMgr: PlaySoundByPath failed - decodeMP3 failed\n");
         return false;
     }
 
@@ -2279,6 +2397,7 @@ static bool SoundMgr_PlaySoundByPath(uint32_t clientId, const char *guid,
     /* Setup playback */
     if (g_soundMgr.playback.pcmBuffer) {
         free(g_soundMgr.playback.pcmBuffer);
+        g_soundMgr.playback.pcmBuffer = NULL;
     }
 
     /* Reset Opus encoder state to avoid garbled audio at start of new sounds.
@@ -2326,8 +2445,19 @@ void SoundMgr_StopSound(void) {
  * Check if playing
  */
 bool SoundMgr_IsPlaying(void) {
-    return g_soundMgr.playback.state == PLAYBACK_PLAYING &&
-           g_soundMgr.playback.pcmPosition < g_soundMgr.playback.pcmSamples;
+    if (g_soundMgr.playback.state != PLAYBACK_PLAYING) {
+        return false;
+    }
+
+    /* If we've reached the end of the samples, mark as idle.
+     * Don't free buffer here - it will be freed when next sound starts
+     * or when StopSound is called. This avoids double-free race conditions. */
+    if (g_soundMgr.playback.pcmPosition >= g_soundMgr.playback.pcmSamples) {
+        g_soundMgr.playback.state = PLAYBACK_IDLE;
+        return false;
+    }
+
+    return true;
 }
 
 /*
@@ -2344,32 +2474,15 @@ uint32_t SoundMgr_GetPlaybackClientId(void) {
  * Get next Opus packet
  */
 bool SoundMgr_GetNextOpusPacket(uint8_t *outBuffer, int *outLen) {
-    /* Debug: log state on first call */
-    static int debugCounter = 0;
-    if (debugCounter == 0 && g_soundMgr.playback.state == PLAYBACK_PLAYING) {
-        printf("SoundMgr: GetNextOpusPacket starting, state=%d, pos=%d, samples=%d\n",
-               g_soundMgr.playback.state,
-               g_soundMgr.playback.pcmPosition,
-               g_soundMgr.playback.pcmSamples);
-    }
-
     if (!SoundMgr_IsPlaying()) {
-        if (debugCounter > 0) {
-            printf("SoundMgr: GetNextOpusPacket done after %d packets\n", debugCounter);
-            debugCounter = 0;
-        }
         return false;
     }
 
     int remaining = g_soundMgr.playback.pcmSamples - g_soundMgr.playback.pcmPosition;
     if (remaining <= 0) {
-        printf("SoundMgr: Playback complete, sent %d packets\n", debugCounter);
-        debugCounter = 0;
         g_soundMgr.playback.state = PLAYBACK_IDLE;
         return false;
     }
-
-    debugCounter++;
 
     int16_t frame[OPUS_FRAME_SIZE];
     int samplesToEncode = (remaining >= OPUS_FRAME_SIZE) ? OPUS_FRAME_SIZE : remaining;

@@ -666,4 +666,62 @@ bool DB_GetMenuPage(const char *guid, int menuId, int pageOffset, bool isServerM
 bool DB_GetSoundById(const char *guid, int soundId, char *outFilePath, int outLen,
                      char *outName, int nameLen);
 
+/*
+ * Quick Command operations (Phase 11: Chat-triggered sounds)
+ */
+
+/**
+ * Quick command lookup result
+ */
+typedef struct {
+    int         soundFileId;            /* Sound file ID to play */
+    char        filePath[513];          /* Sound file path to play */
+    char        chatText[129];          /* Chat replacement text (empty = no chat) */
+    bool        hasChatText;            /* True if chatText should be sent */
+} DBQuickCmdResult;
+
+/**
+ * Get player's quick command prefix.
+ * @param guid Player GUID
+ * @param outPrefix Output buffer (min 5 bytes)
+ * @return true if found, false uses default "@"
+ */
+bool DB_GetQuickCmdPrefix(const char *guid, char *outPrefix);
+
+/**
+ * Look up a quick command alias for a player.
+ * First checks player's own quick_command_aliases, then falls back to public sounds.
+ * @param guid Player GUID
+ * @param alias The alias to look up (e.g., "lol")
+ * @param outResult Output struct with file path and chat text
+ * @return true if found
+ */
+bool DB_LookupQuickCommand(const char *guid, const char *alias,
+                           DBQuickCmdResult *outResult);
+
+/**
+ * Fuzzy search for public sounds by alias.
+ * Note: Public fallback does NOT include chat text.
+ * @param alias Partial alias to search
+ * @param outFilePath Output buffer for sound file path
+ * @param outLen Output buffer length
+ * @param outSoundFileId Output sound file ID (can be NULL)
+ * @return true if found
+ */
+bool DB_FuzzySearchPublicSound(const char *alias, char *outFilePath, int outLen,
+                               int *outSoundFileId);
+
+/**
+ * Fuzzy search for a player's own sounds by alias.
+ * First tries exact match, then prefix match on user_sounds.alias.
+ * @param guid Player's GUID
+ * @param alias Partial alias to search
+ * @param outFilePath Output buffer for sound file path
+ * @param outLen Output buffer length
+ * @param outSoundFileId Output sound file ID (can be NULL)
+ * @return true if found
+ */
+bool DB_FuzzySearchUserSound(const char *guid, const char *alias,
+                             char *outFilePath, int outLen, int *outSoundFileId);
+
 #endif /* DB_MANAGER_H */

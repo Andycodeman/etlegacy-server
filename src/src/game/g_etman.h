@@ -48,6 +48,17 @@
 #define ADMIN_MAX_ARGS_LEN      512
 #define ADMIN_MAX_RESPONSE_LEN  1024
 
+/*
+ * Quick Command Packet Types (for chat-triggered sounds)
+ * Must match etman-server/sound_manager.h
+ * Note: 0x40-0x42 conflict with PKT_ADMIN_*, so use 0x50-0x52
+ */
+#define VOICE_CMD_QUICK_LOOKUP      0x50  /* Look up quick command: <slot><guid><msgLen><message> */
+#define VOICE_RESP_QUICK_FOUND      0x51  /* Found: <slot><soundFileId:4><chatTextLen><chatText> */
+#define VOICE_RESP_QUICK_NOTFOUND   0x52  /* Not found, let chat through: <slot> */
+
+#define QUICK_CMD_MAX_CHAT_TEXT     128   /* Max length of chat replacement text */
+
 // CVARs for ETMan configuration
 extern vmCvar_t etman_enabled;
 extern vmCvar_t etman_port;
@@ -69,5 +80,16 @@ qboolean G_ETMan_CheckCommand(gentity_t *ent, const char *chatText);
 void G_ETMan_PlayerConnect(int clientNum, const char *guid, const char *name, int team);
 void G_ETMan_PlayerDisconnect(int clientNum);
 void G_ETMan_PlayerTeamChange(int clientNum, int team);
+
+// Quick command support - chat-triggered sound commands
+// Characters that can potentially start a quick command prefix
+// Note: '!' is NOT included - reserved for admin commands
+#define QUICK_PREFIX_CHARS "@#$*~^&%+="
+
+// Check if a chat message might be a quick sound command
+// Sends to etman-server for lookup, returns immediately
+// The response is handled in G_ETMan_Frame()
+// Returns qtrue if message was sent for lookup (caller should defer chat)
+qboolean G_ETMan_CheckQuickCommand(gentity_t *ent, const char *chatText, int mode);
 
 #endif // G_ETMAN_H

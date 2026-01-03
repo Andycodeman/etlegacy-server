@@ -30,6 +30,11 @@ static qboolean etman_initialized = qfalse;
 #define ETMAN_MAX_PACKET 2048
 static char etman_packet[ETMAN_MAX_PACKET];
 
+// Quick command pending state (for async response handling)
+static qboolean etman_pending_quick[MAX_CLIENTS];
+static char     etman_pending_chat[MAX_CLIENTS][MAX_SAY_TEXT];
+static int      etman_pending_mode[MAX_CLIENTS];
+
 /*
  * Packet structures (must match etman-server/admin/admin.h)
  */
@@ -370,6 +375,76 @@ void G_ETMan_Frame(void)
 			}
 			break;
 
+		case VOICE_RESP_QUICK_FOUND:
+		{
+			/* Quick command was found - play sound and optionally send chat text
+			 * Payload: <slot:1><soundFileId:4><chatTextLen:1><chatText:N>
+			 */
+			if (received < 7)
+			{
+				break;  /* Too short */
+			}
+
+			uint8_t slot = (uint8_t)etman_packet[1];
+			/* Skip soundFileId bytes 2-5 (sound is already playing server-side) */
+			uint8_t chatTextLen = (uint8_t)etman_packet[6];
+
+			if (slot >= MAX_CLIENTS || !etman_pending_quick[slot])
+			{
+				break;
+			}
+
+			etman_pending_quick[slot] = qfalse;
+
+			G_Printf("[ETMan] Quick command found for slot %d, chatLen=%d\n", slot, chatTextLen);
+
+			/* If there's chat text, send it as the player's chat */
+			if (chatTextLen > 0 && received >= 7 + chatTextLen)
+			{
+				char chatText[QUICK_CMD_MAX_CHAT_TEXT + 1];
+				int copyLen = (chatTextLen < QUICK_CMD_MAX_CHAT_TEXT) ? chatTextLen : QUICK_CMD_MAX_CHAT_TEXT;
+				memcpy(chatText, &etman_packet[7], copyLen);
+				chatText[copyLen] = '\0';
+
+				gentity_t *ent = &g_entities[slot];
+				if (ent->client)
+				{
+					G_Printf("[ETMan] Sending replacement chat: '%s'\n", chatText);
+					G_Say(ent, NULL, etman_pending_mode[slot], chatText);
+				}
+			}
+			/* If no chat text, sound plays but no chat is sent (silent mode) */
+			break;
+		}
+
+		case VOICE_RESP_QUICK_NOTFOUND:
+		{
+			/* Quick command not found - send original chat through */
+			if (received < 2)
+			{
+				break;
+			}
+
+			uint8_t slot = (uint8_t)etman_packet[1];
+
+			if (slot >= MAX_CLIENTS || !etman_pending_quick[slot])
+			{
+				break;
+			}
+
+			etman_pending_quick[slot] = qfalse;
+
+			G_Printf("[ETMan] Quick command not found for slot %d, sending original chat\n", slot);
+
+			/* Send the original chat message */
+			gentity_t *ent = &g_entities[slot];
+			if (ent->client)
+			{
+				G_Say(ent, NULL, etman_pending_mode[slot], etman_pending_chat[slot]);
+			}
+			break;
+		}
+
 		default:
 			G_Printf("[ETMan] Unknown packet type: 0x%02x\n", type);
 			break;
@@ -521,5 +596,111 @@ void G_ETMan_PlayerTeamChange(int clientNum, int team)
 	pkt.team = (uint8_t)team;
 
 	ETMan_SendPacket(&pkt, sizeof(pkt));
+#endif
+}
+
+/**
+ * @brief Check if a chat message might be a quick sound command
+ *
+ * This function checks if a chat message starts with a character that
+ * could be a quick command prefix (like @, #, $, *, etc.).
+ * If so, it sends the message to etman-server for lookup.
+ *
+ * The response is handled asynchronously in G_ETMan_Frame().
+ *
+ * @param ent Player entity
+ * @param chatText The chat message
+ * @param mode Chat mode (SAY_ALL, SAY_TEAM, etc.)
+ * @return qtrue if message was sent for lookup (caller should NOT send chat)
+ */
+qboolean G_ETMan_CheckQuickCommand(gentity_t *ent, const char *chatText, int mode)
+{
+#ifndef _WIN32
+	int clientNum;
+	char userinfo[MAX_INFO_STRING];
+	const char *guid;
+	uint8_t packet[512];
+	int pos = 0;
+
+	if (!etman_initialized || !ent || !ent->client)
+	{
+		return qfalse;
+	}
+
+	/* Skip if empty */
+	if (!chatText || !chatText[0])
+	{
+		return qfalse;
+	}
+
+	/* Quick check: must start with a potential prefix character
+	 * Skip '!' - that's for admin commands */
+	char c = chatText[0];
+	if (!strchr(QUICK_PREFIX_CHARS, c))
+	{
+		return qfalse;
+	}
+
+	/* Need at least prefix + 1 character for alias */
+	if (strlen(chatText) < 2)
+	{
+		return qfalse;
+	}
+
+	clientNum = ent - g_entities;
+	if (clientNum < 0 || clientNum >= MAX_CLIENTS)
+	{
+		return qfalse;
+	}
+
+	/* Get player GUID */
+	trap_GetUserinfo(clientNum, userinfo, sizeof(userinfo));
+	guid = Info_ValueForKey(userinfo, "cl_guid");
+	if (!guid || !guid[0])
+	{
+		return qfalse;
+	}
+
+	G_Printf("[ETMan] Checking quick command: '%s' from slot %d\n", chatText, clientNum);
+
+	/* Build packet: <type:1><clientId:4><slot:1><guid:32><msgLen:1><message:N> */
+	packet[pos++] = VOICE_CMD_QUICK_LOOKUP;
+
+	/* Client ID (4 bytes, for etman-server packet routing) */
+	uint32_t clientIdNet = htonl((uint32_t)clientNum);
+	memcpy(&packet[pos], &clientIdNet, 4);
+	pos += 4;
+
+	/* Slot (1 byte) */
+	packet[pos++] = (uint8_t)clientNum;
+
+	/* GUID (32 bytes) */
+	int guidLen = strlen(guid);
+	if (guidLen > ADMIN_GUID_LEN) guidLen = ADMIN_GUID_LEN;
+	memset(&packet[pos], 0, ADMIN_GUID_LEN);
+	memcpy(&packet[pos], guid, guidLen);
+	pos += ADMIN_GUID_LEN;
+
+	/* Message length and content */
+	int msgLen = strlen(chatText);
+	if (msgLen > 127) msgLen = 127;
+	packet[pos++] = (uint8_t)msgLen;
+	memcpy(&packet[pos], chatText, msgLen);
+	pos += msgLen;
+
+	/* Send to etman-server */
+	ETMan_SendPacket(packet, pos);
+
+	/* Mark this client as having a pending quick command lookup */
+	etman_pending_quick[clientNum] = qtrue;
+	etman_pending_mode[clientNum] = mode;
+	Q_strncpyz(etman_pending_chat[clientNum], chatText,
+	           sizeof(etman_pending_chat[0]));
+
+	G_Printf("[ETMan] Quick command lookup sent for slot %d\n", clientNum);
+
+	return qtrue;  /* Message sent for lookup - caller should defer chat */
+#else
+	return qfalse;
 #endif
 }

@@ -2999,6 +2999,17 @@ void G_Say_f(gentity_t *ent, int mode /*, qboolean arg0*/)
 		return;
 	}
 
+	// ETMan: Check for quick sound commands (prefix + alias like @lol)
+	// This is async - if we send a lookup, we defer the chat
+	// The response will be handled in G_ETMan_Frame() which calls G_Say()
+	if (G_ETMan_CheckQuickCommand(ent, chatText, mode))
+	{
+		// Message sent to etman-server for lookup
+		// The actual chat will be handled in G_ETMan_Frame()
+		// based on the response (QUICK_FOUND with chat text, or QUICK_NOTFOUND)
+		return;
+	}
+
 	G_Say(ent, NULL, mode, chatText);
 }
 

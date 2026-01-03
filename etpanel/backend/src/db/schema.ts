@@ -673,6 +673,61 @@ export const userSoundMenuItemsRelations = relations(userSoundMenuItems, ({ one 
 }));
 
 // ============================================================================
+// Quick Sound Commands (Chat-triggered sound aliases)
+// ============================================================================
+
+// Player settings - per-player configuration options (quick command prefix, future settings)
+export const playerSettings = pgTable(
+  'player_settings',
+  {
+    id: serial('id').primaryKey(),
+    guid: varchar('guid', { length: 32 }).notNull().unique(),
+    quickCmdPrefix: varchar('quick_cmd_prefix', { length: 4 }).notNull().default('@'),
+    createdAt: timestamp('created_at').defaultNow().notNull(),
+    updatedAt: timestamp('updated_at').defaultNow().notNull(),
+  },
+  (table) => ({
+    guidIdx: index('idx_player_settings_guid').on(table.guid),
+  })
+);
+
+// Quick command aliases - maps player's custom short alias to a sound, with optional chat text
+export const quickCommandAliases = pgTable(
+  'quick_command_aliases',
+  {
+    id: serial('id').primaryKey(),
+    guid: varchar('guid', { length: 32 }).notNull(),
+    alias: varchar('alias', { length: 16 }).notNull(), // Short alias like "lol", "gg", "rekt"
+    userSoundId: integer('user_sound_id')
+      .references(() => userSounds.id, { onDelete: 'cascade' }),
+    soundFileId: integer('sound_file_id')
+      .references(() => soundFiles.id, { onDelete: 'cascade' }),
+    isPublic: boolean('is_public').notNull().default(false), // True if pointing to public sound
+    chatText: varchar('chat_text', { length: 128 }), // Optional replacement text for chat (NULL = no chat)
+    createdAt: timestamp('created_at').defaultNow().notNull(),
+    updatedAt: timestamp('updated_at').defaultNow().notNull(),
+  },
+  (table) => ({
+    guidAliasIdx: uniqueIndex('quick_cmd_guid_alias_idx').on(table.guid, table.alias),
+    guidIdx: index('quick_cmd_guid_idx').on(table.guid),
+  })
+);
+
+// Quick command relations
+export const playerSettingsRelations = relations(playerSettings, () => ({}));
+
+export const quickCommandAliasesRelations = relations(quickCommandAliases, ({ one }) => ({
+  userSound: one(userSounds, {
+    fields: [quickCommandAliases.userSoundId],
+    references: [userSounds.id],
+  }),
+  soundFile: one(soundFiles, {
+    fields: [quickCommandAliases.soundFileId],
+    references: [soundFiles.id],
+  }),
+}));
+
+// ============================================================================
 // Unfinished Sounds (Multi-file Upload Staging Area)
 // ============================================================================
 
@@ -754,3 +809,9 @@ export type AdminBan = typeof adminBans.$inferSelect;
 export type AdminMute = typeof adminMutes.$inferSelect;
 export type AdminWarning = typeof adminWarnings.$inferSelect;
 export type AdminCommandLogEntry = typeof adminCommandLog.$inferSelect;
+
+// Quick sound command types
+export type PlayerSettings = typeof playerSettings.$inferSelect;
+export type NewPlayerSettings = typeof playerSettings.$inferInsert;
+export type QuickCommandAlias = typeof quickCommandAliases.$inferSelect;
+export type NewQuickCommandAlias = typeof quickCommandAliases.$inferInsert;

@@ -1972,16 +1972,12 @@ bool DB_GetMenuItemSound(const char *guid, int menuPos, int itemPos,
  * isServerMenu=false returns player's personal menus
  */
 bool DB_GetMenuPage(const char *guid, int menuId, int pageOffset, bool isServerMenu, DBMenuPageResult *outResult) {
-    printf("[DEBUG] DB_GetMenuPage: guid=%s, menuId=%d, pageOffset=%d, isServerMenu=%d\n",
-           guid, menuId, pageOffset, isServerMenu);
-
     if (!outResult) return false;
     memset(outResult, 0, sizeof(*outResult));
     outResult->found = false;
 
     if (!DB_IsConnected()) {
         setError("Not connected to database");
-        printf("[DEBUG] DB_GetMenuPage: not connected to database\n");
         return false;
     }
 
@@ -2040,19 +2036,14 @@ bool DB_GetMenuPage(const char *guid, int menuId, int pageOffset, bool isServerM
         }
 
         if (!checkResult(res, PGRES_TUPLES_OK)) {
-            printf("[DEBUG] DB_GetMenuPage: root query failed\n");
             return false;
         }
 
         int rows = PQntuples(res);
-        printf("[DEBUG] DB_GetMenuPage: root level found %d %s root items\n",
-               rows, isServerMenu ? "server" : "personal");
 
         /* If no items, return empty result */
         if (rows == 0) {
             PQclear(res);
-            printf("[DEBUG] DB_GetMenuPage: no %s root items configured\n",
-                   isServerMenu ? "server" : "personal");
 
             outResult->found = true;
             outResult->menu.menuId = 0;
@@ -2099,8 +2090,6 @@ bool DB_GetMenuPage(const char *guid, int menuId, int pageOffset, bool isServerM
             }
 
             outResult->menu.itemCount++;
-            printf("[DEBUG] Root item %d: pos=%d type=%s name='%s' nestedId=%d\n",
-                   i, item->position, itemType, item->name, item->nestedMenuId);
         }
 
         PQclear(res);
@@ -2115,7 +2104,6 @@ bool DB_GetMenuPage(const char *guid, int menuId, int pageOffset, bool isServerM
         int playlistId = -menuId;
         char playlistIdStr[16];
         snprintf(playlistIdStr, sizeof(playlistIdStr), "%d", playlistId);
-        printf("[DEBUG] DB_GetMenuPage: showing playlist %d contents (isServerMenu=%d)\n", playlistId, isServerMenu);
 
         /* Step 1: Try to get snapshot data for this playlist (for displayNames and fallback)
          * Query the menu item that references this playlist to get its snapshot.
@@ -2179,7 +2167,6 @@ bool DB_GetMenuPage(const char *guid, int menuId, int pageOffset, bool isServerM
                 } else if (rawName) {
                     strncpy(snapshotPlaylistName, rawName, sizeof(snapshotPlaylistName) - 1);
                 }
-                printf("[DEBUG] DB_GetMenuPage: found snapshot with %d items for playlist %d\n", snapshotRows, playlistId);
             }
         }
 
@@ -2214,13 +2201,11 @@ bool DB_GetMenuPage(const char *guid, int menuId, int pageOffset, bool isServerM
         }
 
         if (!checkResult(res, PGRES_TUPLES_OK)) {
-            printf("[DEBUG] DB_GetMenuPage: playlist contents query failed\n");
             if (snapshotRes) PQclear(snapshotRes);
             return false;
         }
 
         int rows = PQntuples(res);
-        printf("[DEBUG] DB_GetMenuPage: found %d live items in playlist %d\n", rows, playlistId);
 
         outResult->found = true;
         outResult->menu.menuId = menuId; /* Keep negative to indicate playlist */
@@ -2249,7 +2234,6 @@ bool DB_GetMenuPage(const char *guid, int menuId, int pageOffset, bool isServerM
                             if (snapDisplayName && snapDisplayName[0] != '\0' && strcmp(snapDisplayName, "null") != 0) {
                                 strncpy(item->name, snapDisplayName, sizeof(item->name) - 1);
                                 foundOverride = true;
-                                printf("[DEBUG] Applied displayName override: %s -> %s\n", alias, snapDisplayName);
                             }
                             break;
                         }
@@ -2263,7 +2247,6 @@ bool DB_GetMenuPage(const char *guid, int menuId, int pageOffset, bool isServerM
             }
         } else if (hasSnapshot) {
             /* Step 3: Live playlist empty/inaccessible - use snapshot as fallback */
-            printf("[DEBUG] DB_GetMenuPage: using snapshot fallback for playlist %d\n", playlistId);
             outResult->menu.totalItems = atoi(PQgetvalue(snapshotRes, 0, 5));
             strncpy(outResult->menu.name, snapshotPlaylistName, sizeof(outResult->menu.name) - 1);
 
@@ -2529,5 +2512,252 @@ bool DB_GetSoundById(const char *guid, int soundId, char *outFilePath, int outLe
     PQclear(res);
 
     setError("Sound not found");
+    return false;
+}
+
+
+/*
+ * Quick Command operations (Phase 11: Chat-triggered sounds)
+ */
+
+/**
+ * Get player's quick command prefix.
+ * Returns true if a custom prefix was found, false if using default "@".
+ */
+bool DB_GetQuickCmdPrefix(const char *guid, char *outPrefix) {
+    if (!outPrefix) return false;
+
+    /* Default prefix */
+    strcpy(outPrefix, "@");
+
+    if (!guid || !guid[0]) return false;
+
+    if (!DB_IsConnected()) {
+        setError("Not connected to database");
+        return false;
+    }
+
+    const char *params[1] = { guid };
+    PGresult *res = PQexecParams(g_db.conn,
+        "SELECT quick_cmd_prefix FROM player_settings WHERE guid = $1",
+        1, NULL, params, NULL, NULL, 0);
+
+    if (!checkResult(res, PGRES_TUPLES_OK)) {
+        return false;
+    }
+
+    if (PQntuples(res) == 0 || PQgetisnull(res, 0, 0)) {
+        PQclear(res);
+        return false;  /* Use default */
+    }
+
+    const char *prefix = PQgetvalue(res, 0, 0);
+    if (prefix && prefix[0]) {
+        strncpy(outPrefix, prefix, 4);
+        outPrefix[4] = '\0';
+    }
+
+    PQclear(res);
+    return true;
+}
+
+/**
+ * Look up a quick command alias for a player.
+ * Checks quick_command_aliases table first, then falls back to public sounds.
+ */
+bool DB_LookupQuickCommand(const char *guid, const char *alias,
+                           DBQuickCmdResult *outResult) {
+    if (!outResult) return false;
+    memset(outResult, 0, sizeof(*outResult));
+
+    if (!guid || !guid[0] || !alias || !alias[0]) {
+        setError("Invalid GUID or alias");
+        return false;
+    }
+
+    if (!DB_IsConnected()) {
+        setError("Not connected to database");
+        return false;
+    }
+
+    /* Step 1: Check player's quick_command_aliases table */
+    const char *params[2] = { guid, alias };
+    PGresult *res = PQexecParams(g_db.conn,
+        "SELECT "
+        "  COALESCE(sf1.file_path, sf2.file_path) AS file_path, "
+        "  COALESCE(sf1.id, sf2.id) AS sound_file_id, "
+        "  qca.chat_text "
+        "FROM quick_command_aliases qca "
+        "LEFT JOIN user_sounds us ON qca.user_sound_id = us.id "
+        "LEFT JOIN sound_files sf1 ON us.sound_file_id = sf1.id "
+        "LEFT JOIN sound_files sf2 ON qca.sound_file_id = sf2.id "
+        "WHERE qca.guid = $1 AND LOWER(qca.alias) = LOWER($2)",
+        2, NULL, params, NULL, NULL, 0);
+
+    if (!checkResult(res, PGRES_TUPLES_OK)) {
+        return false;
+    }
+
+    if (PQntuples(res) > 0) {
+        const char *filePath = getField(res, 0, 0);
+        if (filePath && filePath[0]) {
+            strncpy(outResult->filePath, filePath, sizeof(outResult->filePath) - 1);
+            outResult->soundFileId = getIntField(res, 0, 1);
+
+            /* Get chat text (may be NULL) */
+            if (!PQgetisnull(res, 0, 2)) {
+                const char *chatText = PQgetvalue(res, 0, 2);
+                if (chatText && chatText[0]) {
+                    strncpy(outResult->chatText, chatText, sizeof(outResult->chatText) - 1);
+                    outResult->hasChatText = true;
+                }
+            }
+
+            PQclear(res);
+            return true;
+        }
+    }
+    PQclear(res);
+    return false;
+}
+
+/**
+ * Fuzzy search for public sounds by alias.
+ * First tries exact match on original_name, then prefix match.
+ * Note: Public fallback does NOT include chat text.
+ */
+bool DB_FuzzySearchPublicSound(const char *alias, char *outFilePath, int outLen,
+                               int *outSoundFileId) {
+    if (!outFilePath || outLen < 1) return false;
+    outFilePath[0] = '\0';
+    if (outSoundFileId) *outSoundFileId = 0;
+
+    if (!alias || !alias[0]) {
+        setError("Invalid alias");
+        return false;
+    }
+
+    if (!DB_IsConnected()) {
+        setError("Not connected to database");
+        return false;
+    }
+
+    /* Step 1: Exact match on public sounds by original_name (case-insensitive) */
+    const char *params[1] = { alias };
+    PGresult *res = PQexecParams(g_db.conn,
+        "SELECT file_path, id FROM sound_files "
+        "WHERE is_public = true AND LOWER(REPLACE(original_name, '.mp3', '')) = LOWER($1) "
+        "LIMIT 1",
+        1, NULL, params, NULL, NULL, 0);
+
+    if (checkResult(res, PGRES_TUPLES_OK) && PQntuples(res) > 0) {
+        strncpy(outFilePath, PQgetvalue(res, 0, 0), outLen - 1);
+        outFilePath[outLen - 1] = '\0';
+        if (outSoundFileId) {
+            *outSoundFileId = atoi(PQgetvalue(res, 0, 1));
+        }
+        PQclear(res);
+        return true;
+    }
+    PQclear(res);
+
+    /* Step 2: Prefix match on public sounds (find shortest match) */
+    char likePattern[64];
+    snprintf(likePattern, sizeof(likePattern), "%s%%", alias);
+    const char *fuzzyParams[1] = { likePattern };
+
+    res = PQexecParams(g_db.conn,
+        "SELECT file_path, id FROM sound_files "
+        "WHERE is_public = true AND LOWER(original_name) LIKE LOWER($1) "
+        "ORDER BY LENGTH(original_name) ASC LIMIT 1",
+        1, NULL, fuzzyParams, NULL, NULL, 0);
+
+    if (checkResult(res, PGRES_TUPLES_OK) && PQntuples(res) > 0) {
+        strncpy(outFilePath, PQgetvalue(res, 0, 0), outLen - 1);
+        outFilePath[outLen - 1] = '\0';
+        if (outSoundFileId) {
+            *outSoundFileId = atoi(PQgetvalue(res, 0, 1));
+        }
+        PQclear(res);
+        return true;
+    }
+    PQclear(res);
+
+    setError("Public sound not found");
+    return false;
+}
+
+/**
+ * Fuzzy search for a player's own sounds by alias.
+ * First tries exact match, then prefix match on user_sounds.alias.
+ */
+bool DB_FuzzySearchUserSound(const char *guid, const char *alias,
+                             char *outFilePath, int outLen, int *outSoundFileId) {
+    if (!outFilePath || outLen < 1) return false;
+    outFilePath[0] = '\0';
+    if (outSoundFileId) *outSoundFileId = 0;
+
+    if (!guid || !guid[0] || !alias || !alias[0]) {
+        setError("Invalid GUID or alias");
+        return false;
+    }
+
+    if (!DB_IsConnected()) {
+        setError("Not connected to database");
+        return false;
+    }
+
+    /* Step 1: Exact match on user's sounds by alias (case-insensitive) */
+    const char *params[2] = { guid, alias };
+    PGresult *res = PQexecParams(g_db.conn,
+        "SELECT sf.file_path, sf.id FROM user_sounds us "
+        "JOIN sound_files sf ON us.sound_file_id = sf.id "
+        "WHERE us.guid = $1 AND LOWER(us.alias) = LOWER($2) "
+        "LIMIT 1",
+        2, NULL, params, NULL, NULL, 0);
+
+    /* Note: checkResult clears res on failure, so only clear on success path */
+    if (checkResult(res, PGRES_TUPLES_OK)) {
+        if (PQntuples(res) > 0) {
+            strncpy(outFilePath, PQgetvalue(res, 0, 0), outLen - 1);
+            outFilePath[outLen - 1] = '\0';
+            if (outSoundFileId) {
+                *outSoundFileId = atoi(PQgetvalue(res, 0, 1));
+            }
+            PQclear(res);
+            return true;
+        }
+        PQclear(res);
+    }
+    /* If checkResult failed, res was already cleared by checkResult */
+
+    /* Step 2: Prefix match on user's sounds (find shortest match) */
+    char likePattern[64];
+    snprintf(likePattern, sizeof(likePattern), "%s%%", alias);
+    const char *fuzzyParams[2] = { guid, likePattern };
+
+    res = PQexecParams(g_db.conn,
+        "SELECT sf.file_path, sf.id FROM user_sounds us "
+        "JOIN sound_files sf ON us.sound_file_id = sf.id "
+        "WHERE us.guid = $1 AND LOWER(us.alias) LIKE LOWER($2) "
+        "ORDER BY LENGTH(us.alias) ASC LIMIT 1",
+        2, NULL, fuzzyParams, NULL, NULL, 0);
+
+    /* Note: checkResult clears res on failure, so only clear on success path */
+    if (checkResult(res, PGRES_TUPLES_OK)) {
+        if (PQntuples(res) > 0) {
+            strncpy(outFilePath, PQgetvalue(res, 0, 0), outLen - 1);
+            outFilePath[outLen - 1] = '\0';
+            if (outSoundFileId) {
+                *outSoundFileId = atoi(PQgetvalue(res, 0, 1));
+            }
+            PQclear(res);
+            return true;
+        }
+        PQclear(res);
+    }
+    /* If checkResult failed, res was already cleared by checkResult */
+
+    setError("User sound not found");
     return false;
 }

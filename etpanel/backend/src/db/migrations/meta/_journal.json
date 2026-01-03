@@ -64,6 +64,13 @@
       "when": 1767323216091,
       "tag": "0008_glorious_black_bolt",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1767407504650,
+      "tag": "0009_lazy_deadpool",
+      "breakpoints": true
     }
   ]
 }

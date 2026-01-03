@@ -18,6 +18,7 @@ import { logsRoutes } from './routes/logs.js';
 import { browserRoutes } from './routes/browser.js';
 import { soundsRoutes } from './routes/sounds.js';
 import { adminRoutes } from './routes/admin.js';
+import { settingsRoutes } from './routes/settings.js';
 import { setupWebSocket } from './websocket/index.js';
 
 const fastify = Fastify({
@@ -74,6 +75,7 @@ async function start() {
     await fastify.register(browserRoutes, { prefix: '/api/browser' });
     await fastify.register(soundsRoutes, { prefix: '/api/sounds' });
     await fastify.register(adminRoutes, { prefix: '/api/admin' });
+    await fastify.register(settingsRoutes, { prefix: '/api/settings' });
 
     // WebSocket setup
     setupWebSocket(fastify);

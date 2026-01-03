@@ -511,10 +511,13 @@ static void routeVoicePacket(ClientInfo *sender, uint8_t *packet, int packetLen,
 
 /* Debug helper to print routing decision */
 static void debugRouting(uint32_t senderId, uint8_t senderTeam, uint8_t channel) {
+    (void)senderId;
+    (void)senderTeam;
+    (void)channel;
+    /* Debug logging disabled - enable by uncommenting below */
+    /*
     static time_t lastDebug = 0;
     time_t now = time(NULL);
-
-    /* Only log once per second to avoid spam */
     if (now - lastDebug < 1) return;
     lastDebug = now;
 
@@ -523,7 +526,6 @@ static void debugRouting(uint32_t senderId, uint8_t senderTeam, uint8_t channel)
 
     for (int i = 0; i < g_numClients; i++) {
         if (g_clients[i].clientId == senderId) continue;
-
         const char *status = "SKIP";
         if (channel == VOICE_CHAN_ALL) {
             if (g_clients[i].team != TEAM_SPECTATOR) status = "SEND";
@@ -537,6 +539,7 @@ static void debugRouting(uint32_t senderId, uint8_t senderTeam, uint8_t channel)
         printf("  -> Client %u (team %d): %s\n",
                g_clients[i].clientId, g_clients[i].team, status);
     }
+    */
 }
 
 /*
@@ -791,10 +794,6 @@ void updateClientAddress(uint32_t clientId, struct sockaddr_in *addr) {
     if (client) {
         /* Only update if port changed */
         if (client->addr.sin_port != addr->sin_port) {
-            char ipStr[INET_ADDRSTRLEN];
-            inet_ntop(AF_INET, &addr->sin_addr, ipStr, sizeof(ipStr));
-            printf("[DEBUG] Client %u address updated: port %d -> %d\n",
-                   clientId, ntohs(client->addr.sin_port), ntohs(addr->sin_port));
             client->addr = *addr;
         }
         client->lastSeen = time(NULL);
@@ -986,12 +985,14 @@ static void processSoundPlayback(void) {
 }
 
 /*
- * Check if packet is a sound command (0x10-0x36 range)
+ * Check if packet is a sound command (0x10-0x36, 0x50-0x52 range)
  */
 static bool isSoundCommand(uint8_t type) {
     /* Sound commands: 0x10-0x27, account registration 0x30-0x31, menus 0x32-0x36 */
+    /* Quick commands: 0x50-0x52 */
     return (type >= VOICE_CMD_SOUND_ADD && type <= VOICE_CMD_PLAYLIST_PUBLIC_SHOW) ||
-           (type >= VOICE_CMD_ACCOUNT_REGISTER && type <= VOICE_CMD_SOUND_BY_ID);
+           (type >= VOICE_CMD_ACCOUNT_REGISTER && type <= VOICE_CMD_SOUND_BY_ID) ||
+           (type >= VOICE_CMD_QUICK_LOOKUP && type <= VOICE_RESP_QUICK_NOTFOUND);
 }
 
 /*
@@ -1136,19 +1137,7 @@ static void serverLoop(void) {
                         break;
 
                     case VOICE_PKT_DEBUG:
-                        /* Debug message from client - log it */
-                        if (received >= 3) {
-                            uint8_t clientId = buffer[1];
-                            char *msg = (char*)&buffer[2];
-                            /* Ensure null terminated */
-                            buffer[received] = '\0';
-                            printf("[DEBUG] Client %u from %s:%d: %s\n",
-                                   clientId,
-                                   inet_ntoa(clientAddr.sin_addr),
-                                   ntohs(clientAddr.sin_port),
-                                   msg);
-                            fflush(stdout);
-                        }
+                        /* Debug message from client - disabled in production */
                         break;
 
                     default:

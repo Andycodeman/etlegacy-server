@@ -73,6 +73,17 @@
 #define ETMAN_MENU_PERSONAL               0     /* Player's personal menus (is_server_default=false) */
 #define ETMAN_MENU_SERVER                 1     /* Server default menus (is_server_default=true) */
 
+/* Phase 11: Quick Sound Commands (chat-triggered sounds) */
+/* Note: 0x40-0x42 conflict with admin packet types, so use 0x50-0x52 */
+#define VOICE_CMD_QUICK_LOOKUP            0x50  /* Look up quick command: <slot><guid><message> */
+#define VOICE_RESP_QUICK_FOUND            0x51  /* Found: <slot><soundFileId:4><chatTextLen><chatText> */
+#define VOICE_RESP_QUICK_NOTFOUND         0x52  /* Not found, let chat through: <slot> */
+
+#define QUICK_CMD_MAX_PREFIX_LEN          4     /* Max length of quick command prefix */
+#define QUICK_CMD_MAX_ALIAS_LEN           16    /* Max length of quick command alias */
+#define QUICK_CMD_MAX_CHAT_TEXT           128   /* Max length of chat replacement text */
+#define QUICK_CMD_DEFAULT_PREFIX          "@"   /* Default prefix if not set */
+
 /*
  * Sound Response Packet Types (server -> client)
  */
