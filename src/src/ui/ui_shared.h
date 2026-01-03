@@ -412,6 +412,7 @@ typedef struct
 	fontHelper_t limboFont1_lo;
 	fontHelper_t limboFont2;
 	fontHelper_t limboFont2_lo;
+	fontHelper_t impactFont;          ///< Impact font for kill announcements
 	qhandle_t cursor;
 	qhandle_t gradientBar;
 	qhandle_t gradientRound;
@@ -450,7 +451,7 @@ typedef struct
 
 } cachedAssets_t;
 
-#define FONT_TABLE_NUMFONTS 6
+#define FONT_TABLE_NUMFONTS 7
 
 typedef struct
 {

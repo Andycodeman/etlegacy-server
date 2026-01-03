@@ -38,6 +38,180 @@
 
 extern void CG_StartShakeCamera(float param);
 extern void CG_Tracer(vec3_t source, vec3_t dest, int sparks);
+
+//==========================================================================
+// ETMan: Kill Announcement Systems
+//==========================================================================
+
+#define MULTIKILL_TIMEOUT 3000  // 3 seconds in milliseconds
+
+// Killing spree thresholds and names
+static const int killingSpreeThresholds[] = { 5, 10, 15, 20, 25, 50 };
+static const char *killingSpreeNames[] = {
+	"^2KILLING SPREE",
+	"^2RAMPAGE",
+	"^2DOMINATING",
+	"^2UNSTOPPABLE",
+	"^2GODLIKE",
+	"^5W^1I^3C^2K^6E^4D ^5S^1I^3C^2K"
+};
+
+// Multi-kill names (for reference)
+static const char *multiKillNames[] = {
+	"DOUBLE KILL",
+	"TRIPLE KILL",
+	"MULTI KILL",
+	"ULTRA KILL",
+	"MONSTER KILL",
+	"LUDICROUS KILL",
+	"HOLY SHIT"
+};
+
+// External functions (defined in cg_rickroll.c)
+extern void CG_TestKillingSpree(int kills);
+extern void CG_InitConfetti(void);
+
+/**
+ * @brief Check for killing spree milestone and announce
+ * @param[in] attackerNum - The player who got the kill
+ * @param[in] attackerName - Attacker's display name
+ *
+ * NOTE: Killing spree is shown to ALL players (unlike multi-kill which is local only)
+ */
+static void CG_CheckKillingSpree(int attackerNum, const char *attackerName)
+{
+	int spreeCount;
+	int i;
+
+	if (attackerNum < 0 || attackerNum >= MAX_CLIENTS)
+	{
+		return;
+	}
+
+	spreeCount = cg.killSpreeCount[attackerNum];
+
+	// Check each threshold
+	for (i = 0; i < 6; i++)
+	{
+		if (spreeCount == killingSpreeThresholds[i])
+		{
+			// Play sound to everyone - use CHAN_LOCAL_SOUND to avoid cutting multi-kill sounds
+			trap_S_StartLocalSound(cgs.media.killingSpreeSounds[i], CHAN_LOCAL_SOUND);
+
+			// Set up HUD display (upper-left pulsing text) - shown to ALL players
+			cg.killSpreeDisplayTime = cg.time;
+			cg.killSpreeDisplayKills = spreeCount;
+			cg.killSpreeDisplayLevel = i;
+			Q_strncpyz(cg.killSpreeDisplayName, attackerName, sizeof(cg.killSpreeDisplayName));
+
+			// Confetti disabled - was causing crashes
+			// if (i == 5) {
+			// 	CG_InitConfetti();
+			// }
+			break;
+		}
+	}
+}
+
+/**
+ * @brief Check for multi-kill combo and schedule sound (local player only)
+ * @param[in] killerNum - The player who got the kill
+ *
+ * Sound plays after a short delay (200ms) to avoid overlapping with kill sound.
+ * If another kill happens before the sound plays, it upgrades to the higher tier.
+ */
+static void CG_CheckMultiKill(int killerNum)
+{
+	int currentTime;
+	int soundIndex;
+
+	// Only track for local player
+	if (killerNum != cg.clientNum)
+	{
+		return;
+	}
+
+	currentTime = cg.time;
+
+	// Check if within combo window
+	if (currentTime - cg.multiKillLastTime <= MULTIKILL_TIMEOUT)
+	{
+		cg.multiKillCount++;
+	}
+	else
+	{
+		cg.multiKillCount = 1;  // First kill in new window
+	}
+
+	cg.multiKillLastTime = currentTime;
+
+	// Schedule sound if we have a combo (2+ kills)
+	if (cg.multiKillCount >= 2)
+	{
+		// Map kill count to sound index (2 kills = index 0, 3 = 1, etc.)
+		// Cap at index 6 (holyshit)
+		soundIndex = cg.multiKillCount - 2;
+		if (soundIndex > 6)
+		{
+			soundIndex = 6;
+		}
+
+		// Schedule sound to play after delay (overwrites any pending sound)
+		// This handles rapid kills - only the highest tier plays
+		cg.multiKillPendingSound = soundIndex;
+		cg.multiKillSoundTime = currentTime + 200;  // 200ms delay
+	}
+}
+
+/**
+ * @brief Process pending multi-kill sound (call from main loop)
+ * Plays the scheduled multi-kill sound after the delay has passed
+ */
+void CG_ProcessMultiKillSound(void)
+{
+	// Check if we have a pending sound and if it's time to play it
+	if (cg.multiKillPendingSound >= 0 && cg.time >= cg.multiKillSoundTime)
+	{
+		// Cut off any existing multi-kill sounds on CHAN_ANNOUNCER (but not killing spree on CHAN_LOCAL_SOUND)
+		trap_S_StartSoundEx(NULL, cg.clientNum, CHAN_ANNOUNCER, 0, SND_CUTOFF_ALL);
+
+		// Then play the new multi-kill sound
+		trap_S_StartLocalSound(cgs.media.multiKillSounds[cg.multiKillPendingSound], CHAN_ANNOUNCER);
+
+		// If we hit holyshit (level 7, index 6), reset the multi-kill counter
+		// so continued kills start fresh at double-kill instead of repeating holyshit
+		if (cg.multiKillPendingSound == 6)
+		{
+			cg.multiKillCount = 0;
+		}
+
+		// Clear pending sound
+		cg.multiKillPendingSound = -1;
+	}
+}
+
+/**
+ * @brief Reset killing spree for a player who died
+ * @param[in] targetNum - The player who died
+ * @param[in] targetName - Target's display name
+ */
+static void CG_ResetKillingSpree(int targetNum, const char *targetName)
+{
+	if (targetNum < 0 || targetNum >= MAX_CLIENTS)
+	{
+		return;
+	}
+
+	// If player had a significant spree, announce that it ended
+	if (cg.killSpreeCount[targetNum] >= 10)
+	{
+		CG_Printf("^7%s^3's killing spree of ^5%d ^3kills has ended!\n",
+			targetName, cg.killSpreeCount[targetNum]);
+	}
+
+	cg.killSpreeCount[targetNum] = 0;
+}
+
 //==========================================================================
 
 /**
@@ -221,6 +395,27 @@ static void CG_Obituary(entityState_t *ent)
 	else
 	{
 		ca = &cgs.clientinfo[attacker];
+	}
+
+	// ETMan: Track kills for killing spree and multi-kill systems
+	// Reset spree for the player who died (target)
+	CG_ResetKillingSpree(target, ci->name);
+
+	// Track kills if this was a player kill (not suicide or world)
+	if (attacker != target && ca != NULL)
+	{
+		// Don't count team kills for spree
+		if (ci->team != ca->team)
+		{
+			// Increment killing spree counter for attacker
+			cg.killSpreeCount[attacker]++;
+
+			// Check for killing spree milestone announcement
+			CG_CheckKillingSpree(attacker, ca->name);
+
+			// Check for multi-kill combo (only for local player)
+			CG_CheckMultiKill(attacker);
+		}
 	}
 
 	// check for kill messages from the current clientNum

@@ -1974,6 +1974,7 @@ void RegisterSharedFonts(void)
 		{ &DC->Assets.limboFont1_lo,      16, "cg_customFont1", "ariblk" },
 		{ &DC->Assets.limboFont2,         30, "cg_customFont2", "courbd" },
 		{ &DC->Assets.limboFont2_lo,      21, "cg_customFont2", "courbd" },
+		{ &DC->Assets.impactFont,         48, "cg_customFont1", "impact" },
 	};
 
 	char buf[MAX_QPATH];

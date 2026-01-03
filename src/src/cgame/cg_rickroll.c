@@ -1494,3 +1494,310 @@ void CG_DrawPanzerfestBonus(void) {
 	}
 }
 
+/**
+ * @brief Draw killing spree announcement on HUD
+ * Shows big number + "Killing Spree!" text in upper-left with pulsing green glow
+ * Display duration: 4 seconds with fade out
+ * Style: Blocky text, green numbers (rainbow for top tiers)
+ */
+/**
+ * @brief Draw text with thick black outline (draws text 4 times offset for outline, then main text)
+ */
+static void CG_DrawTextWithOutline(float x, float y, float scaleX, float scaleY, vec4_t color, const char *text, fontHelper_t *font, float outlineSize) {
+	vec4_t blackColor = {0.0f, 0.0f, 0.0f, color[3]};
+
+	// Draw black outline in 4 cardinal directions (reduced from 8 for performance)
+	CG_Text_Paint_Ext(x - outlineSize, y, scaleX, scaleY, blackColor, text, 0, 0, 0, font);
+	CG_Text_Paint_Ext(x + outlineSize, y, scaleX, scaleY, blackColor, text, 0, 0, 0, font);
+	CG_Text_Paint_Ext(x, y - outlineSize, scaleX, scaleY, blackColor, text, 0, 0, 0, font);
+	CG_Text_Paint_Ext(x, y + outlineSize, scaleX, scaleY, blackColor, text, 0, 0, 0, font);
+
+	// Draw main text on top with shadow style for extra depth
+	CG_Text_Paint_Ext(x, y, scaleX, scaleY, color, text, 0, 0, ITEM_TEXTSTYLE_SHADOWED, font);
+}
+
+/**
+ * @brief Draw text centered horizontally with outline
+ */
+static void CG_DrawTextCenteredWithOutline(float centerX, float y, float scaleX, float scaleY, vec4_t color, const char *text, fontHelper_t *font, float outlineSize) {
+	int textWidth = CG_Text_Width_Ext(text, scaleX, 0, font);
+	float x = centerX - (textWidth / 2.0f);
+	CG_DrawTextWithOutline(x, y, scaleX, scaleY, color, text, font, outlineSize);
+}
+
+/**
+ * @brief Initialize confetti particles for 100 kill celebration
+ * Simplified version - fewer particles, no rotation tracking
+ */
+void CG_InitConfetti(void) {
+	int i;
+	float wideWidth = Ccg_WideX(SCREEN_WIDTH);
+
+	// Simple fixed colors - one per particle slot
+	static vec4_t confettiColors[8] = {
+		{1.0f, 0.0f, 0.0f, 1.0f},  // Red
+		{0.0f, 1.0f, 0.0f, 1.0f},  // Green
+		{0.0f, 0.0f, 1.0f, 1.0f},  // Blue
+		{1.0f, 1.0f, 0.0f, 1.0f},  // Yellow
+		{1.0f, 0.0f, 1.0f, 1.0f},  // Magenta
+		{0.0f, 1.0f, 1.0f, 1.0f},  // Cyan
+		{1.0f, 0.5f, 0.0f, 1.0f},  // Orange
+		{1.0f, 1.0f, 1.0f, 1.0f},  // White
+	};
+
+	cg.confettiStartTime = cg.time;
+
+	// Simple initialization - spread evenly across screen
+	for (i = 0; i < MAX_CONFETTI; i++) {
+		cg.confetti[i].x = wideWidth * ((float)i / MAX_CONFETTI);
+		cg.confetti[i].y = -10.0f - (float)(i * 5);
+		cg.confetti[i].velX = (i % 2 == 0) ? 0.5f : -0.5f;
+		cg.confetti[i].velY = 2.0f + (float)(i % 3);
+		cg.confetti[i].size = 6.0f;
+		Vector4Copy(confettiColors[i % 8], cg.confetti[i].color);
+	}
+}
+
+/**
+ * @brief Update and draw confetti particles
+ */
+static void CG_DrawConfetti(float alpha) {
+	int i;
+	int elapsed;
+	vec4_t color;
+	float wideWidth = Ccg_WideX(SCREEN_WIDTH);
+
+	if (cg.confettiStartTime == 0) {
+		return;
+	}
+
+	elapsed = cg.time - cg.confettiStartTime;
+
+	// Confetti lasts 5 seconds
+	if (elapsed > 5000) {
+		cg.confettiStartTime = 0;
+		return;
+	}
+
+	// Update and draw each confetti piece
+	for (i = 0; i < MAX_CONFETTI; i++) {
+		// Update position
+		cg.confetti[i].x += cg.confetti[i].velX;
+		cg.confetti[i].y += cg.confetti[i].velY;
+
+		// Wrap horizontally
+		if (cg.confetti[i].x < -20) cg.confetti[i].x = wideWidth + 10;
+		if (cg.confetti[i].x > wideWidth + 20) cg.confetti[i].x = -10;
+
+		// Reset if fallen off bottom
+		if (cg.confetti[i].y > 500) {
+			cg.confetti[i].y = -20.0f;
+		}
+
+		// Draw confetti piece
+		Vector4Copy(cg.confetti[i].color, color);
+		color[3] = alpha;
+		CG_FillRect(cg.confetti[i].x, cg.confetti[i].y, cg.confetti[i].size, cg.confetti[i].size * 0.6f, color);
+	}
+}
+
+/**
+ * @brief Trigger a test killing spree display (for rcon testing)
+ */
+void CG_TestKillingSpree(int kills) {
+	int level = 0;
+	static const int thresholds[] = { 10, 20, 30, 40, 50, 100 };
+	int i;
+
+	// Find the level for this kill count
+	for (i = 0; i < 6; i++) {
+		if (kills >= thresholds[i]) {
+			level = i;
+		}
+	}
+
+	cg.killSpreeDisplayTime = cg.time;
+	cg.killSpreeDisplayKills = kills;
+	cg.killSpreeDisplayLevel = level;
+	Q_strncpyz(cg.killSpreeDisplayName, "TestPlayer", sizeof(cg.killSpreeDisplayName));
+
+	// Confetti disabled - was causing crashes
+	// if (kills >= 100) {
+	// 	CG_InitConfetti();
+	// }
+
+	// Play sound
+	if (level < 6) {
+		trap_S_StartLocalSound(cgs.media.killingSpreeSounds[level], CHAN_LOCAL_SOUND);
+	}
+}
+
+void CG_DrawKillingSpree(void) {
+	float x, y;
+	float alpha;
+	float pulse;
+	float textScale;
+	float numberScale;
+	float nameScale;
+	int elapsed;
+	int flashPhase;
+	int textWidth;
+	char killsText[16];
+	char spreeText[32];
+	vec4_t numberColor;
+	vec4_t textColor;
+	vec4_t nameColor;
+	qboolean isCentered;
+	float screenCenterX = Ccg_WideX(SCREEN_WIDTH) / 2.0f;  // Proper widescreen center
+	float screenCenterY = SCREEN_HEIGHT / 2.0f;            // 240.0f
+
+	// Spree names matching the thresholds
+	static const char *spreeNames[] = {
+		"Killing Spree!",
+		"Rampage!",
+		"Dominating!",
+		"Unstoppable!",
+		"GODLIKE!",
+		"WICKED SICK!"
+	};
+
+	// Base sizes - smaller for levels 0-4 (5-25 kills), bigger for level 5 (50 kills)
+	static const float levelNumberScales[] = { 1.1f, 1.1f, 1.1f, 1.1f, 1.1f, 1.8f };
+	static const float levelTextScales[] = { 0.40f, 0.40f, 0.40f, 0.40f, 0.40f, 0.90f };
+	static const float levelNameScales[] = { 0.26f, 0.26f, 0.26f, 0.26f, 0.26f, 0.50f };
+
+	// Don't draw if no active spree display
+	if (cg.killSpreeDisplayTime == 0) {
+		// Still draw confetti if active
+		CG_DrawConfetti(1.0f);
+		return;
+	}
+
+	// Calculate elapsed time and alpha for fade
+	elapsed = cg.time - cg.killSpreeDisplayTime;
+
+	// Display for 4 seconds total, fade out last 1 second (longer for 50 kills)
+	int displayTime = (cg.killSpreeDisplayLevel >= 5) ? 6000 : 4000;
+	int fadeTime = 1000;
+
+	if (elapsed > displayTime) {
+		cg.killSpreeDisplayTime = 0;  // Reset display
+		CG_DrawConfetti(1.0f);  // Keep drawing confetti
+		return;
+	}
+
+	if (elapsed > (displayTime - fadeTime)) {
+		alpha = 1.0f - ((float)(elapsed - (displayTime - fadeTime)) / fadeTime);
+	} else {
+		alpha = 1.0f;
+	}
+
+	// Draw confetti for 100 kills
+	CG_DrawConfetti(alpha);
+
+	// Flash effect - alternates between green and white every 100ms
+	flashPhase = (cg.time / 100) % 2;
+
+	// Get base scales for this level
+	numberScale = levelNumberScales[cg.killSpreeDisplayLevel < 6 ? cg.killSpreeDisplayLevel : 5];
+	textScale = levelTextScales[cg.killSpreeDisplayLevel < 6 ? cg.killSpreeDisplayLevel : 5];
+	nameScale = levelNameScales[cg.killSpreeDisplayLevel < 6 ? cg.killSpreeDisplayLevel : 5];
+
+	// Number pulses size (grow/shrink on 1 second cycle)
+	pulse = 0.1f * sin((float)cg.time * 0.006283f);
+	numberScale += pulse;
+
+	// Only level 5 (50 kills) is centered on screen with rainbow
+	isCentered = (cg.killSpreeDisplayLevel >= 5);
+
+	// Default colors for levels 0-4: green/white flash for text, green for number
+	if (flashPhase == 0) {
+		Vector4Set(textColor, 0.0f, 1.0f, 0.0f, alpha);
+	} else {
+		Vector4Set(textColor, 1.0f, 1.0f, 1.0f, alpha);
+	}
+	Vector4Set(numberColor, 0.0f, 1.0f, 0.0f, alpha);
+	Vector4Set(nameColor, 1.0f, 1.0f, 1.0f, alpha * 0.9f);
+
+	// Level 5 (50 kills / WICKED SICK) gets rainbow effect
+	if (cg.killSpreeDisplayLevel >= 5) {
+		int colorPhase = (cg.time / 80) % 6;
+		switch (colorPhase) {
+			case 0: Vector4Set(numberColor, 1.0f, 0.0f, 0.0f, alpha); Vector4Set(textColor, 1.0f, 0.0f, 0.0f, alpha); break;
+			case 1: Vector4Set(numberColor, 1.0f, 1.0f, 0.0f, alpha); Vector4Set(textColor, 1.0f, 1.0f, 0.0f, alpha); break;
+			case 2: Vector4Set(numberColor, 0.0f, 1.0f, 0.0f, alpha); Vector4Set(textColor, 0.0f, 1.0f, 0.0f, alpha); break;
+			case 3: Vector4Set(numberColor, 0.0f, 1.0f, 1.0f, alpha); Vector4Set(textColor, 0.0f, 1.0f, 1.0f, alpha); break;
+			case 4: Vector4Set(numberColor, 0.0f, 0.0f, 1.0f, alpha); Vector4Set(textColor, 0.0f, 0.0f, 1.0f, alpha); break;
+			case 5: Vector4Set(numberColor, 1.0f, 0.0f, 1.0f, alpha); Vector4Set(textColor, 1.0f, 0.0f, 1.0f, alpha); break;
+		}
+	}
+
+	// Prepare text strings
+	Com_sprintf(killsText, sizeof(killsText), "%d", cg.killSpreeDisplayKills);
+	if (cg.killSpreeDisplayLevel < 6) {
+		Q_strncpyz(spreeText, spreeNames[cg.killSpreeDisplayLevel], sizeof(spreeText));
+	} else {
+		Q_strncpyz(spreeText, "WICKED SICK!", sizeof(spreeText));
+	}
+
+	if (isCentered) {
+		// CENTERED LAYOUT for 50 kills (WICKED SICK)
+		// Number on top, spree text below, name below that - all centered
+
+		// Calculate vertical positions (centered around screen center)
+		float numberHeight = 50.0f * numberScale;
+		float textHeight = 30.0f * textScale;
+		float nameHeight = 20.0f * nameScale;
+		float totalHeight = numberHeight + textHeight + nameHeight + 20.0f;  // 20px spacing
+		float startY = screenCenterY - totalHeight / 2.0f + numberHeight;
+
+		// Draw number (centered)
+		CG_DrawTextCenteredWithOutline(screenCenterX, startY, numberScale, numberScale, numberColor, killsText, &cgs.media.impactFont, 2.5f);
+
+		// Draw spree text below number (centered)
+		CG_DrawTextCenteredWithOutline(screenCenterX, startY + textHeight + 15.0f, textScale, textScale, textColor, spreeText, &cgs.media.impactFont, 2.0f);
+
+		// Draw player name below spree text (centered)
+		textWidth = CG_Text_Width_Ext(cg.killSpreeDisplayName, nameScale, 0, &cgs.media.impactFont);
+		CG_Text_Paint_Ext(screenCenterX - textWidth / 2.0f, startY + textHeight + nameHeight + 35.0f, nameScale, nameScale, nameColor, cg.killSpreeDisplayName, 0, 0, ITEM_TEXTSTYLE_SHADOWED, &cgs.media.impactFont);
+	} else {
+		// UPPER-LEFT LAYOUT for 5/10/15/20/25 kills
+		// Number on left, spree text and name to the right
+
+		x = 10.0f;
+		float textY = 190.0f;   // Text vertical position (spree text and name)
+		float numberY = 212.0f; // Number vertical position (moved down from text)
+
+		// Fixed text position based on number of digits
+		float baseNumberScale = levelNumberScales[0];  // Base scale without pulse
+		int fixedNumberWidth;
+		float textX;
+
+		if (cg.killSpreeDisplayKills < 10) {
+			// Single digit (5)
+			fixedNumberWidth = CG_Text_Width_Ext("5", baseNumberScale, 0, &cgs.media.impactFont);
+			textX = x + fixedNumberWidth + 6.0f;
+		} else if (cg.killSpreeDisplayKills < 20) {
+			// 10, 15
+			fixedNumberWidth = CG_Text_Width_Ext("15", baseNumberScale, 0, &cgs.media.impactFont);
+			textX = x + fixedNumberWidth + 6.0f;
+		} else {
+			// 20, 25
+			fixedNumberWidth = CG_Text_Width_Ext("25", baseNumberScale, 0, &cgs.media.impactFont);
+			textX = x + fixedNumberWidth + 8.0f;
+		}
+
+		// Draw kill count number (pulses size)
+		CG_DrawTextWithOutline(x, numberY, numberScale, numberScale, numberColor, killsText, &cgs.media.impactFont, 2.0f);
+
+		// Draw spree text at fixed position
+		CG_DrawTextWithOutline(textX, textY, textScale, textScale, textColor, spreeText, &cgs.media.impactFont, 1.5f);
+
+		// Draw player name below spree text
+		CG_Text_Paint_Ext(textX, textY + 20.0f, nameScale, nameScale, nameColor, cg.killSpreeDisplayName, 0, 0, ITEM_TEXTSTYLE_SHADOWED, &cgs.media.impactFont);
+	}
+
+	// Reset render state after all drawing to prevent artifacts
+	trap_R_SetColor(NULL);
+}
+

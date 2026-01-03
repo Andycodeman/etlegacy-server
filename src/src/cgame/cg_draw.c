@@ -4346,6 +4346,12 @@ static void CG_Draw2D(void)
 	// Panzerfest/Survival bonus bars
 	CG_DrawPanzerfestBonus();
 
+	// Killing spree HUD display
+	CG_DrawKillingSpree();
+
+	// Process pending multi-kill sounds (with delay)
+	CG_ProcessMultiKillSound();
+
 #ifdef FEATURE_VOICE
 	// Voice chat HUD indicators
 	Voice_DrawTransmitIndicator();

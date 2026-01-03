@@ -293,6 +293,28 @@ create_mod_pk3() {
         [ -d "$PROJECT_DIR/rickroll/sound" ] && cp -r "$PROJECT_DIR/rickroll/sound" .
     fi
 
+    # Copy custom sounds from src/etmain/sound/ (greatshot, killingspree, multikill, etc.)
+    if [ -d "$SRC_DIR/etmain/sound" ]; then
+        log_info "Including custom sounds from etmain..."
+        mkdir -p sound
+        cp -r "$SRC_DIR/etmain/sound/"* sound/ 2>/dev/null || true
+    fi
+
+    # Copy custom voice chat scripts from src/etmain/scripts/
+    if [ -d "$SRC_DIR/etmain/scripts" ]; then
+        log_info "Including custom voice chat scripts..."
+        mkdir -p scripts
+        cp "$SRC_DIR/etmain/scripts/wm_allies_chat.voice" scripts/ 2>/dev/null || true
+        cp "$SRC_DIR/etmain/scripts/wm_axis_chat.voice" scripts/ 2>/dev/null || true
+    fi
+
+    # Copy custom fonts (Impact font for kill announcements)
+    if [ -f "$SRC_DIR/etmain/fonts/impact.ttf" ]; then
+        log_info "Including custom fonts..."
+        mkdir -p fonts
+        cp "$SRC_DIR/etmain/fonts/impact.ttf" fonts/ 2>/dev/null || true
+    fi
+
     # Copy custom UI menu files (overrides for controls, etc.)
     if [ -d "$SRC_DIR/etmain/ui" ]; then
         log_info "Including custom UI menus..."
@@ -315,16 +337,17 @@ create_mod_pk3() {
     ls -la *.so *.dll 2>/dev/null || true
 
     rm -f "$OUTPUT_DIR/$pk3_name"
-    # Include all available directories: modules + lua + weapons + rickroll assets + ui
-    zip -r "$OUTPUT_DIR/$pk3_name" *.so *.dll lua/ weapons/ gfx/ scripts/ sound/ ui/ 2>/dev/null \
-        || zip -r "$OUTPUT_DIR/$pk3_name" *.so *.dll lua/ gfx/ scripts/ sound/ ui/ 2>/dev/null \
-        || zip -r "$OUTPUT_DIR/$pk3_name" *.so *.dll lua/ ui/ 2>/dev/null \
+    # Include all available directories: modules + lua + weapons + rickroll assets + ui + fonts
+    zip -r "$OUTPUT_DIR/$pk3_name" *.so *.dll lua/ weapons/ gfx/ scripts/ sound/ ui/ fonts/ 2>/dev/null \
+        || zip -r "$OUTPUT_DIR/$pk3_name" *.so *.dll lua/ gfx/ scripts/ sound/ ui/ fonts/ 2>/dev/null \
+        || zip -r "$OUTPUT_DIR/$pk3_name" *.so *.dll lua/ ui/ fonts/ 2>/dev/null \
+        || zip -r "$OUTPUT_DIR/$pk3_name" *.so *.dll lua/ fonts/ 2>/dev/null \
         || zip -r "$OUTPUT_DIR/$pk3_name" *.so *.dll lua/ 2>/dev/null \
         || zip -r "$OUTPUT_DIR/$pk3_name" *.so *.dll
 
     # Cleanup
     rm -f *.so *.dll
-    rm -rf lua weapons gfx scripts sound ui
+    rm -rf lua weapons gfx scripts sound ui fonts
 
     log_info "Created $OUTPUT_DIR/$pk3_name"
 }

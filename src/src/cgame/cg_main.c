@@ -893,6 +893,21 @@ static void CG_RegisterSounds(void)
 
 	cgs.media.shoveSound = trap_S_RegisterSound("sound/weapons/impact/flesh1.wav", qfalse);
 
+	// ETMan: Killing spree sounds
+	for (i = 0; i < 6; i++)
+	{
+		cgs.media.killingSpreeSounds[i] = trap_S_RegisterSound(va("sound/killingspree/killspree%i.wav", i + 1), qfalse);
+	}
+
+	// ETMan: Multi-kill sounds
+	cgs.media.multiKillSounds[0] = trap_S_RegisterSound("sound/multikill/doublekill.wav", qfalse);
+	cgs.media.multiKillSounds[1] = trap_S_RegisterSound("sound/multikill/triplekill.wav", qfalse);
+	cgs.media.multiKillSounds[2] = trap_S_RegisterSound("sound/multikill/multikill.wav", qfalse);
+	cgs.media.multiKillSounds[3] = trap_S_RegisterSound("sound/multikill/ultrakill.wav", qfalse);
+	cgs.media.multiKillSounds[4] = trap_S_RegisterSound("sound/multikill/monsterkill.wav", qfalse);
+	cgs.media.multiKillSounds[5] = trap_S_RegisterSound("sound/multikill/ludicrouskill.wav", qfalse);
+	cgs.media.multiKillSounds[6] = trap_S_RegisterSound("sound/multikill/holyshit.wav", qfalse);
+
 	CG_RegisterGameSounds();
 
 	CG_PrecacheFXSounds();
@@ -909,6 +924,7 @@ void CG_RegisterFonts(void)
 	cgs.media.limboFont1_lo = cgDC.Assets.limboFont1_lo;
 	cgs.media.limboFont2    = cgDC.Assets.limboFont2;
 	cgs.media.limboFont2_lo = cgDC.Assets.limboFont2_lo;
+	cgs.media.impactFont    = cgDC.Assets.impactFont;
 
 	cgs.media.bg_loadscreenfont1 = cgDC.Assets.bg_loadscreenfont1;
 	cgs.media.bg_loadscreenfont2 = cgDC.Assets.bg_loadscreenfont2;
@@ -2171,6 +2187,9 @@ void CG_Init(int serverMessageNum, int serverCommandSequence, int clientNum, qbo
 	{
 		cg.artilleryRequestTime[i] = -99999;
 	}
+
+	// ETMan: Initialize multi-kill sound to no pending
+	cg.multiKillPendingSound = -1;
 
 	CG_InitStatsDebug();
 

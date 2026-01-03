@@ -248,8 +248,17 @@ Bye
 
 GreatShot
 {
-	sound/chat/axis/56a.wav	"Great shot!"
-	sound/chat/axis/56b.wav	"Great shot!"
+	sound/chat/greatshot/amazingshot.wav	"Amazing shot!"
+	sound/chat/greatshot/bangingshot.wav	"Banging shot!"
+	sound/chat/greatshot/beautifulshot.wav	"Beautiful shot!"
+	sound/chat/greatshot/excellentshot.wav	"Excellent shot!"
+	sound/chat/greatshot/goodshotfella.wav	"Good shot, fella!"
+	sound/chat/greatshot/greatshot01.wav	"Oh, great shot, buddy!"
+	sound/chat/greatshot/impressive.wav		"Impressive!"
+	sound/chat/greatshot/niceshot.wav		"Nice shot!"
+	sound/chat/greatshot/verynice01.wav		"Well that was very nice, indeed!"
+	sound/chat/greatshot/verynice02.wav		"Very nice!"
+	sound/chat/greatshot/wonderfulshot.wav	"Wonderful shot!"
 }
 
 Cheer

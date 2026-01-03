@@ -1294,6 +1294,31 @@ typedef struct
 	// kill timers for carnage reward
 	int lastKillTime;
 
+	// ETMan: Killing spree tracking (per-life consecutive kills)
+	int killSpreeCount[MAX_CLIENTS];        ///< Per-client spree count (resets on death)
+
+	// ETMan: Killing spree HUD display
+	int killSpreeDisplayTime;                ///< Time when spree was triggered (for fade)
+	int killSpreeDisplayKills;               ///< Kill count to display
+	int killSpreeDisplayLevel;               ///< Spree level (0-5 for thresholds)
+	char killSpreeDisplayName[MAX_NAME_LENGTH]; ///< Player name to display
+
+	// ETMan: Confetti for 100 kill spree
+	int confettiStartTime;                   ///< When confetti started (0 = not active)
+	#define MAX_CONFETTI 20
+	struct {
+		float x, y;                          ///< Position
+		float velX, velY;                    ///< Velocity
+		vec4_t color;                        ///< Color
+		float size;                          ///< Size
+	} confetti[MAX_CONFETTI];
+
+	// ETMan: Multi-kill tracking (rapid kills within time window)
+	int multiKillCount;                      ///< Current rapid kill combo count
+	int multiKillLastTime;                   ///< Time of last kill for combo window
+	int multiKillPendingSound;               ///< Sound index to play after delay (-1 = none)
+	int multiKillSoundTime;                  ///< Time when sound should play
+
 	// crosshair
 	centity_t *crosshairEntsToScan[MAX_ENTITIES_IN_SNAPSHOT];
 	int crosshairEntsToScanCount;
@@ -1922,6 +1947,12 @@ typedef struct
 
 	sfxHandle_t shoveSound;
 
+	// ETMan: Killing spree sounds
+	sfxHandle_t killingSpreeSounds[6];       ///< killspree1-6.wav
+
+	// ETMan: Multi-kill sounds
+	sfxHandle_t multiKillSounds[7];          ///< double, triple, multi, ultra, monster, ludicrous, holyshit
+
 	sfxHandle_t itemPickUpSounds[ITEM_MAX_ITEMS];
 
 	qhandle_t ccStamps[2];
@@ -1975,6 +2006,7 @@ typedef struct
 	fontHelper_t limboFont1_lo;
 	fontHelper_t limboFont2;
 	fontHelper_t limboFont2_lo;
+	fontHelper_t impactFont;          ///< Impact font for kill announcements
 
 	// loadscreen fonts
 	fontHelper_t bg_loadscreenfont1;
@@ -4109,6 +4141,12 @@ void CG_DrawRocketMode(void);
 // Panzerfest/Survival bonus HUD
 void CG_PanzerfestBonus_Update(void);
 void CG_DrawPanzerfestBonus(void);
+
+// Killing spree HUD
+void CG_DrawKillingSpree(void);
+
+// Multi-kill sound processing
+void CG_ProcessMultiKillSound(void);
 
 extern qboolean resetmaxspeed; // CG_DrawSpeed
 
