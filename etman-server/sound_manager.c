@@ -134,6 +134,9 @@ extern void updateClientAddress(uint32_t clientId, struct sockaddr_in *addr);
 extern void setCurrentPacketAddress(struct sockaddr_in *addr);
 extern void sendBinaryToClient(uint32_t clientId, uint8_t respType,
                                const uint8_t *data, int dataLen);
+/* For quick command responses to qagame (not voice clients) */
+extern void setQagameQuickAddress(struct sockaddr_in *addr);
+extern void sendBinaryToQagame(uint8_t respType, const uint8_t *data, int dataLen);
 extern void broadcastOpusPacket(uint8_t fromClient, uint8_t channel,
                                 uint32_t sequence, const uint8_t *opus, int opusLen);
 extern void resetSoundPlaybackTiming(void);
@@ -1796,22 +1799,27 @@ void SoundMgr_HandlePacket(uint32_t clientId, struct sockaddr_in *clientAddr,
              * Quick command lookup from qagame (chat interception)
              * Payload: <slot:1><guid[32]><msgLen:1><message>
              * Response: VOICE_RESP_QUICK_FOUND or VOICE_RESP_QUICK_NOTFOUND
+             *
+             * IMPORTANT: Responses go back to qagame, not to a voice client!
+             * qagame sends this packet but isn't a registered voice client.
              */
+
+            /* Store qagame address for responses (separate from voice client routing) */
+            setQagameQuickAddress(clientAddr);
+
             if (!g_soundMgr.dbMode) {
                 /* Quick commands require database mode - send not found */
                 uint8_t resp[4];
-                resp[0] = VOICE_RESP_QUICK_NOTFOUND;
-                resp[1] = (uint8_t)clientId;
-                sendBinaryToClient(clientId, resp[0], resp + 1, 1);
+                resp[0] = (uint8_t)clientId;
+                sendBinaryToQagame(VOICE_RESP_QUICK_NOTFOUND, resp, 1);
                 break;
             }
 
             /* Parse packet - minimum: slot(1) + guid(32) + msgLen(1) + at least 1 char */
             if (payloadLen < 1 + SOUND_GUID_LEN + 2) {
                 uint8_t resp[4];
-                resp[0] = VOICE_RESP_QUICK_NOTFOUND;
-                resp[1] = (uint8_t)clientId;
-                sendBinaryToClient(clientId, resp[0], resp + 1, 1);
+                resp[0] = (uint8_t)clientId;
+                sendBinaryToQagame(VOICE_RESP_QUICK_NOTFOUND, resp, 1);
                 break;
             }
 
@@ -1826,9 +1834,8 @@ void SoundMgr_HandlePacket(uint32_t clientId, struct sockaddr_in *clientAddr,
             uint8_t msgLen = payload[pos++];
             if (payloadLen < pos + msgLen) {
                 uint8_t resp[4];
-                resp[0] = VOICE_RESP_QUICK_NOTFOUND;
-                resp[1] = slot;
-                sendBinaryToClient(slot, resp[0], resp + 1, 1);
+                resp[0] = slot;
+                sendBinaryToQagame(VOICE_RESP_QUICK_NOTFOUND, resp, 1);
                 break;
             }
 
@@ -1846,9 +1853,8 @@ void SoundMgr_HandlePacket(uint32_t clientId, struct sockaddr_in *clientAddr,
             if (strncmp(message, prefix, prefixLen) != 0) {
                 /* Not a quick command for this player */
                 uint8_t resp[4];
-                resp[0] = VOICE_RESP_QUICK_NOTFOUND;
-                resp[1] = slot;
-                sendBinaryToClient(slot, resp[0], resp + 1, 1);
+                resp[0] = slot;
+                sendBinaryToQagame(VOICE_RESP_QUICK_NOTFOUND, resp, 1);
                 break;
             }
 
@@ -1857,9 +1863,8 @@ void SoundMgr_HandlePacket(uint32_t clientId, struct sockaddr_in *clientAddr,
             if (!alias[0]) {
                 /* Empty alias - just the prefix with nothing after */
                 uint8_t resp[4];
-                resp[0] = VOICE_RESP_QUICK_NOTFOUND;
-                resp[1] = slot;
-                sendBinaryToClient(slot, resp[0], resp + 1, 1);
+                resp[0] = slot;
+                sendBinaryToQagame(VOICE_RESP_QUICK_NOTFOUND, resp, 1);
                 break;
             }
 
@@ -1922,12 +1927,15 @@ void SoundMgr_HandlePacket(uint32_t clientId, struct sockaddr_in *clientAddr,
                     respPos += chatLen;
                 }
 
-                sendBinaryToClient(slot, VOICE_RESP_QUICK_FOUND, resp, respPos);
+                printf("[QUICK] Sending QUICK_FOUND: slot=%d, chatLen=%d, chatText='%s'\n",
+                       slot, chatLen, chatLen > 0 ? chatText : "(none)");
+                sendBinaryToQagame(VOICE_RESP_QUICK_FOUND, resp, respPos);
             } else {
                 /* Not found - let original chat through */
                 uint8_t resp[4];
                 resp[0] = slot;
-                sendBinaryToClient(slot, VOICE_RESP_QUICK_NOTFOUND, resp, 1);
+                printf("[QUICK] Sending QUICK_NOTFOUND: slot=%d\n", slot);
+                sendBinaryToQagame(VOICE_RESP_QUICK_NOTFOUND, resp, 1);
             }
             break;
         }

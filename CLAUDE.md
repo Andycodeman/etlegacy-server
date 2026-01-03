@@ -236,6 +236,12 @@ The etman-server includes a custom sound management system allowing players to a
 | `etman-server/db_manager.c` | PostgreSQL integration for sounds |
 | `src/src/cgame/cg_etman.c` | Client-side /etman command handler |
 
+### Quick Sound Commands
+Type `@alias` in chat to trigger sounds (prefix configurable via ETPanel).
+- With chat_text set: plays sound + shows replacement text
+- Without chat_text: plays sound only (no chat)
+See `docs/FEATURE_QUICK_SOUND_COMMANDS.md` for details.
+
 ### In-Game Commands
 ```
 /etman add <url> <name>       - Download MP3 from URL

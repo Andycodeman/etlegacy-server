@@ -808,10 +808,25 @@ void updateClientAddress(uint32_t clientId, struct sockaddr_in *addr) {
 static struct sockaddr_in g_currentPacketAddr;
 static int g_hasCurrentPacketAddr = 0;
 
+/* Qagame address for quick command responses (separate from voice client routing) */
+static struct sockaddr_in g_qagameQuickAddr;
+static int g_hasQagameQuickAddr = 0;
+
 void setCurrentPacketAddress(struct sockaddr_in *addr) {
     if (addr) {
         g_currentPacketAddr = *addr;
         g_hasCurrentPacketAddr = 1;
+    }
+}
+
+/*
+ * Store qagame address for quick command responses.
+ * This is separate from voice client routing to avoid corruption.
+ */
+void setQagameQuickAddress(struct sockaddr_in *addr) {
+    if (addr) {
+        g_qagameQuickAddr = *addr;
+        g_hasQagameQuickAddr = 1;
     }
 }
 
@@ -872,6 +887,33 @@ void sendBinaryToClient(uint32_t clientId, uint8_t respType, const uint8_t *data
            (struct sockaddr *)&client->addr, sizeof(client->addr));
 
     printf("[SOUND] Binary response to client %u: type=0x%02x len=%d\n", clientId, respType, dataLen);
+}
+
+/*
+ * Send binary response to qagame for quick command responses.
+ * Uses the stored qagame address from setQagameQuickAddress().
+ */
+void sendBinaryToQagame(uint8_t respType, const uint8_t *data, int dataLen) {
+    if (!g_hasQagameQuickAddr) {
+        printf("[SOUND] WARNING: Cannot send quick response - qagame address not set!\n");
+        return;
+    }
+
+    uint8_t packet[2048];
+    if (dataLen > 2046) dataLen = 2046;
+
+    packet[0] = respType;
+    memcpy(packet + 1, data, dataLen);
+
+    int packetLen = 1 + dataLen;
+
+    int sent = sendto(g_socket, (char *)packet, packetLen, 0,
+           (struct sockaddr *)&g_qagameQuickAddr, sizeof(g_qagameQuickAddr));
+
+    char ipStr[INET_ADDRSTRLEN];
+    inet_ntop(AF_INET, &g_qagameQuickAddr.sin_addr, ipStr, sizeof(ipStr));
+    printf("[SOUND] Quick response to qagame at %s:%d: type=0x%02x len=%d (sent=%d)\n",
+           ipStr, ntohs(g_qagameQuickAddr.sin_port), respType, dataLen, sent);
 }
 
 /*
