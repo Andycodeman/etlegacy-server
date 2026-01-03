@@ -191,6 +191,7 @@ export default function MySounds() {
     soundAlias: string;
     quickAlias: string;
     chatText: string;
+    originalAlias: string; // Track original alias to detect renames
   } | null>(null);
 
   const handleSort = (field: SortField) => {
@@ -832,24 +833,36 @@ export default function MySounds() {
       soundAlias,
       quickAlias: existing?.alias || '',
       chatText: existing?.chatText || '',
+      originalAlias: existing?.alias || '', // Track original for rename detection
     });
   };
 
-  const handleSaveQuickCmd = () => {
+  const handleSaveQuickCmd = async () => {
     if (!quickCmdModalData) return;
-    const { soundAlias, quickAlias, chatText } = quickCmdModalData;
-    if (!quickAlias.trim()) {
+    const { soundAlias, quickAlias, chatText, originalAlias } = quickCmdModalData;
+    const newAlias = quickAlias.trim().toLowerCase();
+
+    if (!newAlias) {
       // If no alias, remove the quick command
-      const existing = quickCmdMap.get(soundAlias);
-      if (existing) {
-        removeQuickAliasMutation.mutate(existing.alias);
+      if (originalAlias) {
+        removeQuickAliasMutation.mutate(originalAlias);
       } else {
         setQuickCmdModalData(null);
       }
       return;
     }
+
+    // If alias changed and there was an original, delete the old one first
+    if (originalAlias && originalAlias !== newAlias) {
+      try {
+        await settings.removeQuickAlias(originalAlias);
+      } catch {
+        // Ignore errors - old alias may not exist
+      }
+    }
+
     setQuickAliasMutation.mutate({
-      alias: quickAlias.trim().toLowerCase(),
+      alias: newAlias,
       soundAlias,
       chatText: chatText.trim() || null,
     });

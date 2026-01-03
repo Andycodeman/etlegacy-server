@@ -97,6 +97,13 @@ if [ -d "$PROJECT_DIR/omni-bot/et/scripts" ]; then
         "$REMOTE_HOST:$REMOTE_DIR/omni-bot/et/scripts/"
     echo "  - Custom omnibot scripts synced"
 fi
+# Sync omnibot user config (difficulty, moveskill, etc.)
+if [ -d "$PROJECT_DIR/omni-bot/et/user" ]; then
+    rsync -avz --progress \
+        "$PROJECT_DIR/omni-bot/et/user/" \
+        "$REMOTE_HOST:$REMOTE_DIR/omni-bot/et/user/"
+    echo "  - Omnibot user config synced"
+fi
 
 # Step 4c: Sync server-monitor.sh
 echo -e "${YELLOW}Step 4c: Syncing server-monitor.sh...${NC}"

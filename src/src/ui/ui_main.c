@@ -8990,7 +8990,16 @@ void UI_SetActiveMenu(uiMenuCommand_t menu)
 			UI_BuildPlayerList();
 			Menu_SetFeederSelection(NULL, FEEDER_PLAYER_LIST, 0, NULL);
 			Menus_CloseAll();
-			Menus_ActivateByName("ingame_main", qtrue);
+			/* Check if we should open etman_register directly */
+			if (DC->getCVarValue("etman_openregister") == 1.0f)
+			{
+				trap_Cvar_Set("etman_openregister", "0");
+				Menus_ActivateByName("etman_register", qtrue);
+			}
+			else
+			{
+				Menus_ActivateByName("ingame_main", qtrue);
+			}
 			return;
 
 		case UIMENU_WM_QUICKMESSAGE:

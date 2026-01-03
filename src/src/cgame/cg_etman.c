@@ -23,6 +23,15 @@ typedef enum {
 } etmanMenuType_t;
 
 /*
+ * Root menu state - shows Server/User Sounds choice before loading actual data
+ */
+typedef enum {
+	ETMAN_ROOT_CHOICE = 0,      /* At the root choice (Server Sounds / User Sounds) */
+	ETMAN_ROOT_SERVER = 1,      /* Viewing server sounds */
+	ETMAN_ROOT_USER = 2         /* Viewing user sounds */
+} etmanRootState_t;
+
+/*
  * Module state
  */
 static struct
@@ -41,6 +50,8 @@ static struct
 	qboolean        menuDataLoaded;      // Have we received menu data from server
 	int             menuRequestTime;     // When we last requested menus
 	etmanMenuType_t currentMenuType;     // Personal (0) or Server (1) menus
+	etmanRootState_t rootState;          // Root choice vs viewing sounds
+	qboolean        userHasSounds;       // Track if user has any sounds (for promo)
 
 	/* Hierarchical navigation state */
 	etmanMenu_t     currentMenu;         // Currently displayed menu
@@ -73,6 +84,9 @@ static void ETMan_ParseMenuData(const uint8_t *data, int dataLen);
 static void ETMan_ParseHierarchicalMenuData(const uint8_t *data, int dataLen);
 static void ETMan_PlayMenuSound(const char *soundAlias);
 static void ETMan_DrawMenu(void);
+static void ETMan_DrawRootMenu(void);
+static void ETMan_DrawUserPromo(void);
+static void ETMan_DrawServerSoundsHeader(void);
 
 /**
  * Initialize ETMan system
@@ -1634,6 +1648,13 @@ void ETMan_Frame(void)
 		return;
 	}
 
+	/* Close sound menu when intermission starts - otherwise cursor gets stuck hidden
+	 * because the debriefing screen expects to control the mouse */
+	if (etman.menuActive && cg.snap && cg.snap->ps.pm_type == PM_INTERMISSION)
+	{
+		ETMan_CloseMenu();
+	}
+
 	/* Key handling is now done in ETMan_SoundMenu_KeyHandling via CG_KeyEvent
 	 * when KEYCATCH_CGAME is active - this prevents weapon binds from firing */
 
@@ -1663,6 +1684,18 @@ void ETMan_Draw(void)
 	/* Draw sound menu if active */
 	if (etman.menuActive)
 	{
+		if (etman.rootState == ETMAN_ROOT_SERVER)
+		{
+			/* Draw header tip about quick commands for server sounds */
+			ETMan_DrawServerSoundsHeader();
+		}
+		else if (etman.rootState == ETMAN_ROOT_USER && !etman.userHasSounds && etman.menuDataLoaded)
+		{
+			/* Show registration promo if user has no sounds */
+			ETMan_DrawUserPromo();
+			return;  /* Don't draw menu, promo replaces it */
+		}
+
 		ETMan_DrawMenu();
 	}
 
@@ -1830,7 +1863,9 @@ void ETMan_CloseMenu(void)
 	etman.menuActive       = qfalse;
 	etman.currentMenuLevel = 0;
 	etman.selectedMenu     = 0;
+	etman.rootState        = ETMAN_ROOT_CHOICE;
 	cgs.eventHandling = CGAME_EVENT_NONE;
+	cgDC.cursorVisible = qtrue;  /* Restore cursor visibility for intermission/other menus */
 	trap_Cvar_Set("cl_bypassmouseinput", "0");  /* Reset so other menus can capture mouse */
 	trap_Key_SetCatcher(trap_Key_GetCatcher() & ~KEYCATCH_CGAME);
 }
@@ -1844,6 +1879,16 @@ static void ETMan_OpenMenuWithType(etmanMenuType_t menuType)
 	etman.currentMenuLevel = 0;
 	etman.selectedMenu     = 0;
 	etman.currentMenuType  = menuType;  /* Set the menu type before requesting */
+
+	/* Set root state based on menu type */
+	if (menuType == ETMAN_MENU_SERVER)
+	{
+		etman.rootState = ETMAN_ROOT_SERVER;
+	}
+	else
+	{
+		etman.rootState = ETMAN_ROOT_USER;
+	}
 
 	/* Reset navigation stack and force data reload */
 	etman.navStack.depth = 0;
@@ -1863,7 +1908,7 @@ static void ETMan_OpenMenuWithType(etmanMenuType_t menuType)
 }
 
 /**
- * Open the sound menu (personal menus by default)
+ * Open the sound menu (user's personal sounds)
  */
 void ETMan_OpenMenu(void)
 {
@@ -1871,7 +1916,7 @@ void ETMan_OpenMenu(void)
 }
 
 /**
- * Open the server sound menu
+ * Open the server sound menu (direct, skips root choice)
  */
 void ETMan_OpenServerMenu(void)
 {
@@ -1924,6 +1969,21 @@ qboolean ETMan_MenuKeyEvent(int key)
 	if (!etman.menuActive)
 	{
 		return qfalse;
+	}
+
+	/* Handle user promo screen - press 1 to open register menu */
+	if (etman.rootState == ETMAN_ROOT_USER && !etman.userHasSounds && etman.menuDataLoaded)
+	{
+		if (key == 1)
+		{
+			/* Close HUD menu, set cvar flag, open ingame UI which will check the cvar */
+			ETMan_CloseMenu();
+			trap_Cvar_Set("etman_openregister", "1");
+			trap_UI_Popup(UIMENU_INGAME);
+			return qtrue;
+		}
+		/* Other number keys do nothing (backspace handled elsewhere) */
+		return qtrue;  /* Consume the key */
 	}
 
 	/* 0 = show next page (pagination) */
@@ -2108,17 +2168,22 @@ static void ETMan_DrawMenu_Classic(void)
 
 	if (totalPages > 1)
 	{
-		/* Show pagination: "0=more (1/3)  BKSP=back" */
-		Com_sprintf(itemText, sizeof(itemText), "^30^7=more (%d/%d)  ^3BKSP^7=back", currentPage, totalPages);
+		/* Show pagination with back/close depending on depth */
+		if (etman.navStack.depth > 0)
+		{
+			Com_sprintf(itemText, sizeof(itemText), "^30^7=more (%d/%d)  ^3BKSP^7=back", currentPage, totalPages);
+		}
+		else
+		{
+			Com_sprintf(itemText, sizeof(itemText), "^30^7=more (%d/%d)  ^3BKSP^7=close", currentPage, totalPages);
+		}
 	}
 	else if (etman.navStack.depth > 0)
 	{
-		/* No pagination, but nested: "BKSP=back" */
 		Q_strncpyz(itemText, "^3BKSP^7=back", sizeof(itemText));
 	}
 	else
 	{
-		/* Root level, single page: "BKSP=close" */
 		Q_strncpyz(itemText, "^3BKSP^7=close", sizeof(itemText));
 	}
 
@@ -2233,7 +2298,14 @@ static void ETMan_DrawMenu_Vsay(void)
 
 	if (totalPages > 1)
 	{
-		Com_sprintf(itemText, sizeof(itemText), "0. More (%d/%d)  Bksp. Back", currentPage, totalPages);
+		if (etman.navStack.depth > 0)
+		{
+			Com_sprintf(itemText, sizeof(itemText), "0. More (%d/%d)  Bksp. Back", currentPage, totalPages);
+		}
+		else
+		{
+			Com_sprintf(itemText, sizeof(itemText), "0. More (%d/%d)  Bksp. Close", currentPage, totalPages);
+		}
 	}
 	else if (etman.navStack.depth > 0)
 	{
@@ -2276,6 +2348,156 @@ static void ETMan_DrawMenu(void)
 	{
 		ETMan_DrawMenu_Vsay();
 	}
+}
+
+/**
+ * Draw the root menu (Server Sounds / User Sounds choice)
+ * This is shown first when opening the sound menu, before loading any data.
+ */
+static void ETMan_DrawRootMenu(void)
+{
+	float   x, y, w, h;
+	float   lineHeight   = 12;
+	float   titleHeight  = 14;
+	vec4_t  bgColor      = { 0.0f, 0.0f, 0.0f, 0.75f };
+	vec4_t  borderColor  = { 0.5f, 0.5f, 0.5f, 0.5f };
+	vec4_t  titleBgColor = { 0.16f, 0.2f, 0.17f, 0.8f };
+	vec4_t  titleFgColor = { 0.6f, 0.6f, 0.6f, 1.0f };
+	vec4_t  itemColor    = { 0.6f, 0.6f, 0.6f, 1.0f };
+	float   textY;
+
+	/* Position matches vsay style */
+	x = 10;
+	y = 100 + 10 + 19;
+	w = 204;
+	h = titleHeight + 4 + (lineHeight * 2) + lineHeight + 8;
+
+	/* Draw main background */
+	CG_FillRect(x, y, w, h, bgColor);
+	CG_DrawRect_FixedBorder(x, y, w, h, 1, borderColor);
+
+	/* Draw title bar background */
+	CG_FillRect(x + 2, y + 2, w - 4, titleHeight, titleBgColor);
+
+	/* Title */
+	CG_Text_Paint_Ext(x + 5, y + 2 + 10, 0.19f, 0.19f, titleFgColor, "ETMAN SOUNDS", 0, 0, 0, &cgs.media.limboFont1);
+
+	textY = y + titleHeight + 6;
+
+	/* Option 1: Server Sounds */
+	CG_Text_Paint_Ext(x + 6, textY + 8, 0.2f, 0.2f, itemColor, "1. Server Sounds", 0, 0, 0, &cgs.media.limboFont2);
+	textY += lineHeight;
+
+	/* Option 2: User Sounds */
+	CG_Text_Paint_Ext(x + 6, textY + 8, 0.2f, 0.2f, itemColor, "2. User Sounds", 0, 0, 0, &cgs.media.limboFont2);
+	textY += lineHeight;
+
+	/* Footer */
+	textY += 4;
+	CG_Text_Paint_Ext(x + 6, textY + 8, 0.18f, 0.18f, itemColor, "Bksp. Close", 0, 0, 0, &cgs.media.limboFont2);
+}
+
+/**
+ * Draw the user registration promo when user has no sounds.
+ * Shows info about registering at etpanel.etman.dev for custom sounds.
+ */
+static void ETMan_DrawUserPromo(void)
+{
+	float   x, y, w, h;
+	float   lineHeight   = 11;
+	float   titleHeight  = 14;
+	vec4_t  bgColor      = { 0.0f, 0.0f, 0.0f, 0.85f };
+	vec4_t  borderColor  = { 0.5f, 0.5f, 0.5f, 0.5f };
+	vec4_t  titleBgColor = { 0.16f, 0.2f, 0.17f, 0.8f };
+	vec4_t  titleFgColor = { 0.6f, 0.6f, 0.6f, 1.0f };
+	vec4_t  textColor    = { 0.7f, 0.7f, 0.7f, 1.0f };
+	vec4_t  highlightColor = { 1.0f, 0.8f, 0.2f, 1.0f };
+	vec4_t  cyanColor    = { 0.4f, 0.9f, 1.0f, 1.0f };
+	float   textY;
+
+	x = 10;
+	y = 100 + 10 + 19;
+	w = 260;
+	h = titleHeight + 4 + (lineHeight * 9) + 16;
+
+	/* Draw background */
+	CG_FillRect(x, y, w, h, bgColor);
+	CG_DrawRect_FixedBorder(x, y, w, h, 1, borderColor);
+
+	/* Title bar */
+	CG_FillRect(x + 2, y + 2, w - 4, titleHeight, titleBgColor);
+	CG_Text_Paint_Ext(x + 5, y + 2 + 10, 0.19f, 0.19f, titleFgColor, "USER SOUNDS", 0, 0, 0, &cgs.media.limboFont1);
+
+	textY = y + titleHeight + 8;
+
+	/* Promo text */
+	CG_Text_Paint_Ext(x + 6, textY + 8, 0.17f, 0.17f, highlightColor, "No sounds yet? Register to unlock:", 0, 0, 0, &cgs.media.limboFont2);
+	textY += lineHeight + 4;
+
+	CG_Text_Paint_Ext(x + 10, textY + 8, 0.16f, 0.16f, cyanColor, "* Upload your own MP3 sound clips", 0, 0, 0, &cgs.media.limboFont2);
+	textY += lineHeight;
+
+	CG_Text_Paint_Ext(x + 10, textY + 8, 0.16f, 0.16f, cyanColor, "* Create custom sound menus", 0, 0, 0, &cgs.media.limboFont2);
+	textY += lineHeight;
+
+	CG_Text_Paint_Ext(x + 10, textY + 8, 0.16f, 0.16f, cyanColor, "* Share sounds with other players", 0, 0, 0, &cgs.media.limboFont2);
+	textY += lineHeight;
+
+	CG_Text_Paint_Ext(x + 10, textY + 8, 0.16f, 0.16f, cyanColor, "* Quick commands: type @alias in chat", 0, 0, 0, &cgs.media.limboFont2);
+	textY += lineHeight;
+
+	CG_Text_Paint_Ext(x + 10, textY + 8, 0.16f, 0.16f, cyanColor, "* Organize sounds into playlists", 0, 0, 0, &cgs.media.limboFont2);
+	textY += lineHeight + 6;
+
+	/* Register now option */
+	CG_Text_Paint_Ext(x + 6, textY + 8, 0.18f, 0.18f, highlightColor, "1. Register Now", 0, 0, 0, &cgs.media.limboFont2);
+	textY += lineHeight + 4;
+
+	/* Footer */
+	CG_Text_Paint_Ext(x + 6, textY + 8, 0.16f, 0.16f, textColor, "Bksp. Close", 0, 0, 0, &cgs.media.limboFont2);
+}
+
+/**
+ * Draw a header info box above the server sounds menu explaining quick commands.
+ * Called from the menu drawing functions when in server sounds view.
+ */
+static void ETMan_DrawServerSoundsHeader(void)
+{
+	float   x, y, w, h;
+	float   lineHeight = 10;
+	vec4_t  bgColor    = { 0.1f, 0.15f, 0.2f, 0.9f };
+	vec4_t  borderColor = { 0.3f, 0.5f, 0.7f, 0.8f };
+	vec4_t  textColor  = { 0.8f, 0.9f, 1.0f, 1.0f };
+	vec4_t  tipColor   = { 1.0f, 0.9f, 0.5f, 1.0f };
+	char    prefixBuf[8];
+	float   textY;
+
+	/* Get user's quick command prefix (default @) */
+	trap_Cvar_VariableStringBuffer("etman_quickprefix", prefixBuf, sizeof(prefixBuf));
+	if (prefixBuf[0] == '\0')
+	{
+		Q_strncpyz(prefixBuf, "@", sizeof(prefixBuf));
+	}
+
+	/* Position above the main menu - menu starts at y=129, so put tip above that */
+	x = 10;
+	y = 100;  /* Position tip box starting at y=100, ends before menu at y=129 */
+	w = 220;
+	h = lineHeight * 2 + 6;  /* Smaller height to fit above menu */
+
+	/* Draw background */
+	CG_FillRect(x, y, w, h, bgColor);
+	CG_DrawRect_FixedBorder(x, y, w, h, 1, borderColor);
+
+	textY = y + 2;
+
+	/* Quick command tip */
+	CG_Text_Paint_Ext(x + 4, textY + 8, 0.14f, 0.14f, tipColor, "TIP: Quick play sounds in chat!", 0, 0, 0, &cgs.media.limboFont2);
+	textY += lineHeight;
+
+	CG_Text_Paint_Ext(x + 4, textY + 8, 0.13f, 0.13f, textColor,
+	                  va("Type %s<alias> (e.g. %slol) to play", prefixBuf, prefixBuf),
+	                  0, 0, 0, &cgs.media.limboFont2);
 }
 
 /**
@@ -2403,16 +2625,23 @@ void ETMan_NavigateToMenu(int menuId, int pageOffset)
 }
 
 /**
- * Navigate back to parent menu
+ * Navigate back to parent menu or close
  */
 qboolean ETMan_NavigateBack(void)
 {
 	int parentMenuId;
 	int parentOffset;
 
+	/* If we're viewing user promo (no sounds), just close */
+	if (etman.rootState == ETMAN_ROOT_USER && !etman.userHasSounds && etman.menuDataLoaded)
+	{
+		ETMan_CloseMenu();
+		return qfalse;
+	}
+
+	/* If nav stack is empty, close the menu */
 	if (etman.navStack.depth <= 0)
 	{
-		/* Already at root, close menu */
 		ETMan_CloseMenu();
 		return qfalse;
 	}
@@ -2615,6 +2844,13 @@ static void ETMan_ParseHierarchicalMenuData(const uint8_t *data, int dataLen)
 	}
 
 	etman.menuDataLoaded = qtrue;
+
+	/* Track if user has sounds (for promo display on user sounds menu) */
+	if (etman.rootState == ETMAN_ROOT_USER && etman.currentMenu.menuId == 0)
+	{
+		etman.userHasSounds = (etman.currentMenu.totalItems > 0);
+	}
+
 	CG_Printf("^2ETMan: Loaded menu (id=%d, items=%d/%d, page=%d)\n",
 	          etman.currentMenu.menuId, etman.currentMenu.itemCount,
 	          etman.currentMenu.totalItems, etman.currentMenu.pageOffset / ETMAN_ITEMS_PER_PAGE + 1);

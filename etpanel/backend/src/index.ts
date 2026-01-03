@@ -56,6 +56,16 @@ async function start() {
       },
     });
 
+    // Disable browser caching for all API responses
+    fastify.addHook('onSend', async (request, reply) => {
+      // Only add no-cache headers for API routes
+      if (request.url.startsWith('/api/')) {
+        reply.header('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+        reply.header('Pragma', 'no-cache');
+        reply.header('Expires', '0');
+      }
+    });
+
     // Health check
     fastify.get('/health', async () => {
       return { status: 'ok', timestamp: new Date().toISOString() };

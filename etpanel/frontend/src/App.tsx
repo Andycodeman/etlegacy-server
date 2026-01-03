@@ -25,7 +25,9 @@ import Settings from './pages/Settings';
 const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
-      staleTime: 5000,
+      staleTime: 0, // Always refetch - site is low-traffic, prefer fresh data
+      gcTime: 1000 * 60 * 5, // Keep unused data in cache for 5 min (for back navigation)
+      refetchOnWindowFocus: true,
       retry: 1,
     },
   },

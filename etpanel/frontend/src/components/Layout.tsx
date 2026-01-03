@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { Link, Outlet, useNavigate, useLocation } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { useAuthStore } from '../stores/auth';
-import { auth, sounds } from '../api/client';
+import { auth, sounds, users } from '../api/client';
 
 const navItems = [
   { path: '/', label: 'Dashboard', icon: '📊' },
@@ -50,7 +50,16 @@ export default function Layout() {
     staleTime: 30000,
   });
 
+  // Fetch users count for admin badge
+  const { data: usersData } = useQuery({
+    queryKey: ['users'],
+    queryFn: users.list,
+    staleTime: 30000,
+    enabled: user?.role === 'admin', // Only fetch for admins
+  });
+
   const mySoundsCount = mySoundsData?.sounds?.length || 0;
+  const usersCount = usersData?.users?.length || 0;
   const playlistsCount = playlistsData?.playlists?.length || 0;
   const publicLibraryCount = publicLibraryData?.sounds?.length || 0;
 
@@ -133,20 +142,35 @@ export default function Layout() {
               if (item.modOnly) return user?.role === 'admin' || user?.role === 'moderator';
               return true;
             })
-            .map((item) => (
-              <Link
-                key={item.path}
-                to={item.path}
-                className={`flex items-center gap-3 px-4 py-3 md:py-2 rounded-lg transition-colors ${
-                  location.pathname === item.path
-                    ? 'bg-orange-600 text-white'
-                    : 'text-gray-300 hover:bg-gray-700'
-                }`}
-              >
-                <span className="text-lg md:text-base">{item.icon}</span>
-                <span>{item.label}</span>
-              </Link>
-            ))}
+            .map((item) => {
+              // Get badge count for specific items
+              let badgeCount = 0;
+              if (item.path === '/users') badgeCount = usersCount;
+
+              return (
+                <Link
+                  key={item.path}
+                  to={item.path}
+                  className={`flex items-center gap-3 px-4 py-3 md:py-2 rounded-lg transition-colors ${
+                    location.pathname === item.path
+                      ? 'bg-orange-600 text-white'
+                      : 'text-gray-300 hover:bg-gray-700'
+                  }`}
+                >
+                  <span className="text-lg md:text-base">{item.icon}</span>
+                  <span className="flex-1">{item.label}</span>
+                  {badgeCount > 0 && (
+                    <span className={`px-1.5 py-0.5 text-xs rounded-full ${
+                      location.pathname === item.path
+                        ? 'bg-orange-700 text-white'
+                        : 'bg-gray-600 text-gray-300'
+                    }`}>
+                      {badgeCount}
+                    </span>
+                  )}
+                </Link>
+              );
+            })}
 
           {/* Sounds Section */}
           <div className="pt-4 mt-4 border-t border-gray-700">
