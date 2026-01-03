@@ -687,14 +687,25 @@ bool DB_GetPublicSoundByName(const char *name, char *outFilePath, int outLen) {
         return false;
     }
 
-    /* Try exact match first, then with .mp3 suffix */
+    /*
+     * A sound is considered "public" if:
+     * 1. sound_files.is_public = true, OR
+     * 2. It's in a public playlist (sound_playlists.is_public = true)
+     *
+     * Search by exact match on original_name or user_sounds.alias
+     */
     char nameWithExt[128];
     snprintf(nameWithExt, sizeof(nameWithExt), "%s.mp3", name);
 
     const char *params[2] = { name, nameWithExt };
     PGresult *res = PQexecParams(g_db.conn,
-        "SELECT file_path FROM sound_files "
-        "WHERE is_public = true AND (original_name = $1 OR original_name = $2) "
+        "SELECT DISTINCT sf.file_path FROM sound_files sf "
+        "LEFT JOIN user_sounds us ON us.sound_file_id = sf.id "
+        "LEFT JOIN sound_playlist_items spi ON spi.user_sound_id = us.id "
+        "LEFT JOIN sound_playlists sp ON spi.playlist_id = sp.id "
+        "WHERE (sf.is_public = true OR sp.is_public = true) "
+        "  AND (sf.original_name = $1 OR sf.original_name = $2 "
+        "       OR LOWER(us.alias) = LOWER($1)) "
         "LIMIT 1",
         2, NULL, params, NULL, NULL, 0);
 
@@ -2642,11 +2653,26 @@ bool DB_FuzzySearchPublicSound(const char *alias, char *outFilePath, int outLen,
         return false;
     }
 
-    /* Step 1: Exact match on public sounds by original_name (case-insensitive) */
+    /*
+     * A sound is considered "public" if:
+     * 1. sound_files.is_public = true, OR
+     * 2. It's in a public playlist (sound_playlists.is_public = true)
+     *
+     * We search by:
+     * - user_sounds.alias (the alias the owner gave it)
+     * - sound_files.original_name (the original filename)
+     */
+
+    /* Step 1: Exact match on alias or original_name (case-insensitive) */
     const char *params[1] = { alias };
     PGresult *res = PQexecParams(g_db.conn,
-        "SELECT file_path, id FROM sound_files "
-        "WHERE is_public = true AND LOWER(REPLACE(original_name, '.mp3', '')) = LOWER($1) "
+        "SELECT DISTINCT sf.file_path, sf.id FROM sound_files sf "
+        "LEFT JOIN user_sounds us ON us.sound_file_id = sf.id "
+        "LEFT JOIN sound_playlist_items spi ON spi.user_sound_id = us.id "
+        "LEFT JOIN sound_playlists sp ON spi.playlist_id = sp.id "
+        "WHERE (sf.is_public = true OR sp.is_public = true) "
+        "  AND (LOWER(REPLACE(sf.original_name, '.mp3', '')) = LOWER($1) "
+        "       OR LOWER(us.alias) = LOWER($1)) "
         "LIMIT 1",
         1, NULL, params, NULL, NULL, 0);
 
@@ -2661,15 +2687,22 @@ bool DB_FuzzySearchPublicSound(const char *alias, char *outFilePath, int outLen,
     }
     PQclear(res);
 
-    /* Step 2: Prefix match on public sounds (find shortest match) */
+    /* Step 2: Prefix/fuzzy match on alias or original_name (find shortest match) */
     char likePattern[64];
     snprintf(likePattern, sizeof(likePattern), "%s%%", alias);
     const char *fuzzyParams[1] = { likePattern };
 
     res = PQexecParams(g_db.conn,
-        "SELECT file_path, id FROM sound_files "
-        "WHERE is_public = true AND LOWER(original_name) LIKE LOWER($1) "
-        "ORDER BY LENGTH(original_name) ASC LIMIT 1",
+        "SELECT DISTINCT sf.file_path, sf.id, "
+        "  LEAST(LENGTH(COALESCE(us.alias, '')), LENGTH(sf.original_name)) as match_len "
+        "FROM sound_files sf "
+        "LEFT JOIN user_sounds us ON us.sound_file_id = sf.id "
+        "LEFT JOIN sound_playlist_items spi ON spi.user_sound_id = us.id "
+        "LEFT JOIN sound_playlists sp ON spi.playlist_id = sp.id "
+        "WHERE (sf.is_public = true OR sp.is_public = true) "
+        "  AND (LOWER(sf.original_name) LIKE LOWER($1) "
+        "       OR LOWER(us.alias) LIKE LOWER($1)) "
+        "ORDER BY match_len ASC LIMIT 1",
         1, NULL, fuzzyParams, NULL, NULL, 0);
 
     if (checkResult(res, PGRES_TUPLES_OK) && PQntuples(res) > 0) {
