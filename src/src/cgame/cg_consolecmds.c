@@ -706,6 +706,17 @@ static void CG_MessageSend_f(void)
 		return;
 	}
 
+	// Check for /register command - opens ETMan register menu
+	// Handles: "/register", "register", or with trailing text
+	if (!Q_stricmp(messageText, "/register") || !Q_stricmp(messageText, "register"))
+	{
+		// Set cvar flag and open ingame UI - ui_main.c will check and open etman_register
+		trap_Cvar_Set("etman_openregister", "1");
+		trap_UI_Popup(UIMENU_INGAME);
+		CG_Printf("^3ETMan: Opening registration menu...\n");
+		return;
+	}
+
 	Q_EscapeUnicodeInPlace(messageText, MAX_SAY_TEXT);
 
 	if (messageType == 2) // team say
@@ -3489,6 +3500,7 @@ static consoleCommand_t commands[] =
 	{ "+soundmenu",             CG_SoundMenuDown_f        },
 	{ "-soundmenu",             CG_SoundMenuUp_f          },
 	{ "soundmenu_server",       CG_SoundMenuServer_f      },
+	{ "register",               CG_Register_f             },
 #endif
 
 	{ NULL,                     NULL                      }

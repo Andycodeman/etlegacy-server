@@ -2556,6 +2556,19 @@ void CG_SoundMenuServer_f(void)
 	}
 }
 
+/**
+ * Console command: register
+ * Opens the ETMan registration menu directly
+ * Works from console: /register
+ */
+void CG_Register_f(void)
+{
+	// Set cvar flag and open ingame UI - ui_main.c will check and open etman_register
+	trap_Cvar_Set("etman_openregister", "1");
+	trap_UI_Popup(UIMENU_INGAME);
+	CG_Printf("^3ETMan: Opening registration menu...\n");
+}
+
 /*
  * ============================================================================
  * Hierarchical Menu Navigation Implementation

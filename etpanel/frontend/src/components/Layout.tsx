@@ -23,6 +23,7 @@ const soundNavItems = [
   { path: '/sounds', label: 'My Sounds', icon: '🎵' },
   { path: '/sounds/playlists', label: 'Playlists', icon: '📁' },
   { path: '/sounds/public', label: 'Public Library', icon: '🌐' },
+  { path: '/sounds/private', label: 'Private Library', icon: '🔒', adminOnly: true },
 ];
 
 export default function Layout() {
@@ -177,7 +178,12 @@ export default function Layout() {
             <div className="px-4 py-2 text-xs font-semibold text-gray-500 uppercase tracking-wider">
               Sounds
             </div>
-            {soundNavItems.map((item) => {
+            {soundNavItems
+              .filter((item) => {
+                if (item.adminOnly) return user?.role === 'admin';
+                return true;
+              })
+              .map((item) => {
               // Get the count for each item
               let count = 0;
               if (item.path === '/sounds') count = mySoundsCount;

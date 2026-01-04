@@ -17,6 +17,7 @@ import ServerBrowser from './pages/ServerBrowser';
 import MySounds from './pages/MySounds';
 import Playlists from './pages/Playlists';
 import PublicSounds from './pages/PublicSounds';
+import PrivateSounds from './pages/PrivateSounds';
 import GameRegister from './pages/GameRegister';
 import Admin from './pages/Admin';
 import Commands from './pages/Commands';
@@ -75,6 +76,7 @@ function App() {
             <Route path="sounds" element={<MySounds />} />
             <Route path="sounds/playlists" element={<Playlists />} />
             <Route path="sounds/public" element={<PublicSounds />} />
+            <Route path="sounds/private" element={<PrivateSounds />} />
             <Route path="admin" element={<Admin />} />
             <Route path="commands" element={<Commands />} />
             <Route path="settings" element={<Settings />} />

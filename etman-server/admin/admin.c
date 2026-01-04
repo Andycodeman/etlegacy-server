@@ -72,6 +72,10 @@ static const AdminCommand g_commands[] = {
     { "kickbots",   Cmd_KickBots,   3, "!kickbots",                    "Remove all bots" },
     { "putbots",    Cmd_PutBots,    3, "!putbots [count]",             "Add bots (default: 12)" },
     { "timeleft",   Cmd_TimeLeft,   3, "!timeleft <mm:ss>",            "Set remaining map time" },
+    { "survival",   Cmd_Survival,   3, "!survival <on|off>",           "Toggle survival mode (speed bonus)" },
+    { "killstreak", Cmd_KillStreak, 3, "!killstreak <on|off>",         "Toggle kill streak mode (fire rate)" },
+    { "panzerfest", Cmd_Panzerfest, 3, "!panzerfest <on|off>",         "Toggle panzerfest mode (30 kills)" },
+    { "crazy",      Cmd_Crazy,      3, "!crazy <on|off>",              "Toggle ALL crazy modes at once" },
 
     { NULL, NULL, 0, NULL, NULL }  /* Terminator */
 };

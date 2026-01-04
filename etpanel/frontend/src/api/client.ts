@@ -590,6 +590,25 @@ export const sounds = {
       body: { isPublic },
     }),
 
+  // Admin: Private library operations
+  adminPrivateLibrary: (page = 0, search?: string, owner?: string, visibility?: 'all' | 'public' | 'private') => {
+    const params = new URLSearchParams();
+    params.set('page', page.toString());
+    if (search) params.set('search', search);
+    if (owner) params.set('owner', owner);
+    if (visibility) params.set('visibility', visibility);
+    return apiRequest<PrivateLibraryResponse>(`/sounds/admin/private/library?${params.toString()}`);
+  },
+  adminSetSoundVisibility: (soundFileId: number, isPublic: boolean) =>
+    apiRequest<{ success: boolean; isPublic: boolean }>(`/sounds/admin/private/${soundFileId}/visibility`, {
+      method: 'PATCH',
+      body: { isPublic },
+    }),
+  adminDeletePrivate: (soundFileId: number) =>
+    apiRequest<{ success: boolean; message: string }>(`/sounds/admin/private/${soundFileId}`, {
+      method: 'DELETE',
+    }),
+
   // Upload operations
   uploadFile: async (file: File, alias: string): Promise<UploadResponse> => {
     const formData = new FormData();
@@ -1086,6 +1105,28 @@ export interface PublicLibraryResponse {
   page: number;
   totalPages: number;
   totalCount: number;
+}
+
+export interface PrivateSound {
+  soundFileId: number;
+  userSoundId: number;
+  alias: string;
+  originalName: string;
+  fileSize: number;
+  durationSeconds?: number;
+  ownerGuid: string;
+  ownerName: string;
+  createdAt: string;
+  visibility: string;
+  isPublic: boolean;
+}
+
+export interface PrivateLibraryResponse {
+  sounds: PrivateSound[];
+  page: number;
+  totalPages: number;
+  totalCount: number;
+  owners: { guid: string; name: string }[];
 }
 
 export interface PendingShare {

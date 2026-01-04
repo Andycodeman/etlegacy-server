@@ -1024,6 +1024,107 @@ export const adminRoutes: FastifyPluginAsync = async (fastify) => {
         break;
       }
 
+      // ETMan Crazy Mode toggles
+      case 'survival': {
+        if (!args) {
+          // Query current value
+          const result = await sendRcon('g_survivalEnabled');
+          const match = result.response?.match(/g_survivalEnabled.*?"(\d+)"/i);
+          const current = match ? (match[1] === '1' ? 'ON' : 'OFF') : 'unknown';
+          rconResponse = `Survival mode (speed bonus every 30s alive)\nCurrent: ${current}\nUsage: !survival on or !survival off`;
+          rconSuccess = true;
+        } else if (!['on', 'off', '0', '1'].includes(args.toLowerCase())) {
+          rconResponse = 'Usage: !survival on or !survival off';
+          rconSuccess = false;
+        } else {
+          const enabled = args.toLowerCase() === 'on' || args === '1' ? '1' : '0';
+          const result = await sendRcon(`g_survivalEnabled ${enabled}`);
+          rconResponse = result.success
+            ? `Survival mode ${enabled === '1' ? 'enabled' : 'disabled'} (speed bonus every 30s alive)`
+            : (result.error || 'Failed to set survival mode');
+          rconSuccess = result.success;
+        }
+        break;
+      }
+
+      case 'killstreak': {
+        if (!args) {
+          // Query current value
+          const result = await sendRcon('g_killStreakEnabled');
+          const match = result.response?.match(/g_killStreakEnabled.*?"(\d+)"/i);
+          const current = match ? (match[1] === '1' ? 'ON' : 'OFF') : 'unknown';
+          rconResponse = `Kill streak mode (fire rate bonus per 5 kills)\nCurrent: ${current}\nUsage: !killstreak on or !killstreak off`;
+          rconSuccess = true;
+        } else if (!['on', 'off', '0', '1'].includes(args.toLowerCase())) {
+          rconResponse = 'Usage: !killstreak on or !killstreak off';
+          rconSuccess = false;
+        } else {
+          const enabled = args.toLowerCase() === 'on' || args === '1' ? '1' : '0';
+          const result = await sendRcon(`g_killStreakEnabled ${enabled}`);
+          rconResponse = result.success
+            ? `Kill streak mode ${enabled === '1' ? 'enabled' : 'disabled'} (fire rate bonus per 5 kills)`
+            : (result.error || 'Failed to set kill streak mode');
+          rconSuccess = result.success;
+        }
+        break;
+      }
+
+      case 'panzerfest': {
+        if (!args) {
+          // Query current value
+          const result = await sendRcon('g_panzerfestEnabled');
+          const match = result.response?.match(/g_panzerfestEnabled.*?"(\d+)"/i);
+          const current = match ? (match[1] === '1' ? 'ON' : 'OFF') : 'unknown';
+          rconResponse = `Panzerfest mode (everyone vs you at 30 kills)\nCurrent: ${current}\nUsage: !panzerfest on or !panzerfest off`;
+          rconSuccess = true;
+        } else if (!['on', 'off', '0', '1'].includes(args.toLowerCase())) {
+          rconResponse = 'Usage: !panzerfest on or !panzerfest off';
+          rconSuccess = false;
+        } else {
+          const enabled = args.toLowerCase() === 'on' || args === '1' ? '1' : '0';
+          const result = await sendRcon(`g_panzerfestEnabled ${enabled}`);
+          rconResponse = result.success
+            ? `Panzerfest mode ${enabled === '1' ? 'enabled' : 'disabled'} (everyone vs you at 30 kills)`
+            : (result.error || 'Failed to set panzerfest mode');
+          rconSuccess = result.success;
+        }
+        break;
+      }
+
+      case 'crazy': {
+        if (!args) {
+          // Query all three current values
+          const [surv, kill, panz] = await Promise.all([
+            sendRcon('g_survivalEnabled'),
+            sendRcon('g_killStreakEnabled'),
+            sendRcon('g_panzerfestEnabled')
+          ]);
+          const survMatch = surv.response?.match(/g_survivalEnabled.*?"(\d+)"/i);
+          const killMatch = kill.response?.match(/g_killStreakEnabled.*?"(\d+)"/i);
+          const panzMatch = panz.response?.match(/g_panzerfestEnabled.*?"(\d+)"/i);
+          const survStatus = survMatch ? (survMatch[1] === '1' ? 'ON' : 'OFF') : '?';
+          const killStatus = killMatch ? (killMatch[1] === '1' ? 'ON' : 'OFF') : '?';
+          const panzStatus = panzMatch ? (panzMatch[1] === '1' ? 'ON' : 'OFF') : '?';
+          rconResponse = `CRAZY MODE - Toggle all modes at once\nSurvival: ${survStatus} | Kill Streak: ${killStatus} | Panzerfest: ${panzStatus}\nUsage: !crazy on or !crazy off`;
+          rconSuccess = true;
+        } else if (!['on', 'off', '0', '1'].includes(args.toLowerCase())) {
+          rconResponse = 'Usage: !crazy on or !crazy off';
+          rconSuccess = false;
+        } else {
+          const enabled = args.toLowerCase() === 'on' || args === '1' ? '1' : '0';
+          const result = await sendRconMultiple([
+            `g_survivalEnabled ${enabled}`,
+            `g_killStreakEnabled ${enabled}`,
+            `g_panzerfestEnabled ${enabled}`
+          ]);
+          rconResponse = result.success
+            ? `CRAZY MODE ${enabled === '1' ? 'enabled' : 'disabled'} (survival + killstreak + panzerfest)`
+            : (result.error || 'Failed to set crazy mode');
+          rconSuccess = result.success;
+        }
+        break;
+      }
+
       // Commands that need the full admin system (DB access, complex logic)
       case 'stats':
       case 'finger':

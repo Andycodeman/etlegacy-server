@@ -201,6 +201,7 @@ void CG_SoundMenu_f(void);        /* Toggle menu on/off (personal menus) */
 void CG_SoundMenuDown_f(void);    /* +soundmenu (open menu) */
 void CG_SoundMenuUp_f(void);      /* -soundmenu (currently does nothing) */
 void CG_SoundMenuServer_f(void);  /* soundmenu_server - server-wide sound menus */
+void CG_Register_f(void);         /* register - opens ETMan registration menu */
 
 /**
  * Open the server-wide sound menu (same for all players).

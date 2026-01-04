@@ -280,6 +280,11 @@ vmCvar_t skill_lightweapons;
 
 vmCvar_t g_misc;
 
+// ETMan: Crazy mode feature toggles (can be changed at runtime via !commands)
+vmCvar_t g_killStreakEnabled;    // Kill streak fire rate bonus (0=off, 1=on)
+vmCvar_t g_survivalEnabled;      // Survival speed bonus (0=off, 1=on)
+vmCvar_t g_panzerfestEnabled;    // Panzerfest mode at 30 kills (0=off, 1=on)
+
 // ETMan: Crazy mode weapon CVARs
 vmCvar_t g_adrenalineAdd;      // Time added per shot in ms (default 10000 = 10s)
 vmCvar_t g_adrenalineMax;      // Maximum adrenaline time in ms (default 999000 = 999s)
@@ -639,6 +644,10 @@ cvarTable_t gameCvarTable[] =
 	{ &skill_battlesense,                 "skill_battlesense",                 "20 50 90 140",               CVAR_ARCHIVE,                                    0, qfalse, qfalse },
 	{ &skill_lightweapons,                "skill_lightweapons",                "20 50 90 140",               CVAR_ARCHIVE,                                    0, qfalse, qfalse },
 	{ &g_misc,                            "g_misc",                            "0",                          CVAR_SERVERINFO,                                 0, qfalse, qfalse },
+	// ETMan: Crazy mode feature toggles (runtime via !commands)
+	{ &g_killStreakEnabled,               "g_killStreakEnabled",               "1",                          0,                                               0, qfalse, qfalse },  // 1=on, 0=off - fire rate bonus per 5 kills
+	{ &g_survivalEnabled,                 "g_survivalEnabled",                 "1",                          0,                                               0, qfalse, qfalse },  // 1=on, 0=off - speed bonus per 30s alive
+	{ &g_panzerfestEnabled,               "g_panzerfestEnabled",               "1",                          0,                                               0, qfalse, qfalse },  // 1=on, 0=off - panzerfest at 30 kills
 	// ETMan: Crazy mode weapon CVARs
 	{ &g_adrenalineAdd,                   "g_adrenalineAdd",                   "10000",                      0,                                               0, qfalse, qfalse },  // ms per shot (default 10s)
 	{ &g_adrenalineMax,                   "g_adrenalineMax",                   "999000",                     0,                                               0, qfalse, qfalse },  // max ms (default 999s)

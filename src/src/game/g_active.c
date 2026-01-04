@@ -1398,6 +1398,12 @@ void G_PanzerfestStart(gentity_t *target)
 		return;
 	}
 
+	// ETMan: Check if panzerfest is disabled via CVAR
+	if (!g_panzerfestEnabled.integer)
+	{
+		return;
+	}
+
 	// Check cooldown
 	if (level.time < level.panzerfest.cooldownEndTime)
 	{
@@ -1563,7 +1569,11 @@ void G_PanzerfestEnd(qboolean targetDied)
 		ent->client->survivalSpeedLevel   = 0;
 
 		// Send HUD reset to this client (all zeros)
-		trap_SendServerCommand(i, va("panzerfest_bonus 0 0 0 0 0 0 %d 100", PANZERFEST_KILLS));
+		trap_SendServerCommand(i, va("panzerfest_bonus 0 0 0 0 0 0 %d 100 %d %d %d",
+			PANZERFEST_KILLS,
+			g_killStreakEnabled.integer,
+			g_survivalEnabled.integer,
+			g_panzerfestEnabled.integer));
 	}
 
 	// Start cooldown
@@ -1811,7 +1821,7 @@ void G_PanzerfestThink(void)
 				}
 
 				trap_SendServerCommand(level.panzerfest.targetClientNum,
-					va("panzerfest_bonus %d %d %d %d %d %d %d %d",
+					va("panzerfest_bonus %d %d %d %d %d %d %d %d %d %d %d",
 						fireRateLevel,  // calculated from current multiplier (shows bar decreasing)
 						survivalLevel,  // calculated from current speed
 						level.panzerfest.phase,
@@ -1819,7 +1829,10 @@ void G_PanzerfestThink(void)
 						1,  // isTarget
 						targetEnt->client->killStreakCount,
 						PANZERFEST_KILLS,
-						fireRateMultiplier));
+						fireRateMultiplier,
+						g_killStreakEnabled.integer,
+						g_survivalEnabled.integer,
+						g_panzerfestEnabled.integer));
 			}
 		}
 	}
@@ -1943,6 +1956,21 @@ float G_BonusGetFireRateMultiplier(int clientNum)
 		return 1.0f;
 	}
 
+	// ETMan: Check if kill streak is disabled via CVAR
+	if (!g_killStreakEnabled.integer)
+	{
+		// Still need to check panzerfest even if kill streak is disabled
+		if (level.panzerfest.active && clientNum == level.panzerfest.targetClientNum)
+		{
+			if (level.panzerfest.currentMultiplier > 1.0f)
+			{
+				return 1.0f / level.panzerfest.currentMultiplier;
+			}
+			return 1.0f;
+		}
+		return 1.0f;
+	}
+
 	// During panzerfest: target uses panzerfest fire rate ONLY (no kill streak bonus)
 	if (level.panzerfest.active && clientNum == level.panzerfest.targetClientNum)
 	{
@@ -2006,7 +2034,7 @@ void G_BonusPlayerKill(gentity_t *attacker)
 			int timeLeft           = (totalDuration - totalElapsed) / 1000;
 			if (timeLeft < 0) timeLeft = 0;
 
-			trap_SendServerCommand(clientNum, va("panzerfest_bonus %d %d %d %d %d %d %d %d",
+			trap_SendServerCommand(clientNum, va("panzerfest_bonus %d %d %d %d %d %d %d %d %d %d %d",
 				attacker->client->killStreakBonusLevel,  // frozen at panzerfest start
 				attacker->client->survivalSpeedLevel,    // frozen at panzerfest start
 				level.panzerfest.phase,
@@ -2014,7 +2042,10 @@ void G_BonusPlayerKill(gentity_t *attacker)
 				1,  // isTarget
 				attacker->client->killStreakCount,  // still show their kill count
 				PANZERFEST_KILLS,
-				fireRateMultiplier));
+				fireRateMultiplier,
+				g_killStreakEnabled.integer,
+				g_survivalEnabled.integer,
+				g_panzerfestEnabled.integer));
 		}
 		return;  // Don't update any bonus levels during panzerfest
 	}
@@ -2071,7 +2102,7 @@ void G_BonusPlayerKill(gentity_t *attacker)
 			fireRateMultiplier = (int)(level.panzerfest.currentMultiplier * 100);
 		}
 
-		trap_SendServerCommand(clientNum, va("panzerfest_bonus %d %d %d %d %d %d %d %d",
+		trap_SendServerCommand(clientNum, va("panzerfest_bonus %d %d %d %d %d %d %d %d %d %d %d",
 			attacker->client->killStreakBonusLevel,
 			attacker->client->survivalSpeedLevel,  // Now implemented in C!
 			panzerfestPhase,
@@ -2079,7 +2110,10 @@ void G_BonusPlayerKill(gentity_t *attacker)
 			isTarget,
 			attacker->client->killStreakCount,
 			PANZERFEST_KILLS,
-			fireRateMultiplier));
+			fireRateMultiplier,
+			g_killStreakEnabled.integer,
+			g_survivalEnabled.integer,
+			g_panzerfestEnabled.integer));
 	}
 
 	// Check for panzerfest trigger
@@ -2149,7 +2183,11 @@ void G_BonusPlayerDeath(gentity_t *ent)
 	ent->client->survivalSpeedLevel = 0;
 
 	// Send HUD reset to client (all zeros, fire rate back to normal 100)
-	trap_SendServerCommand(clientNum, va("panzerfest_bonus 0 0 0 0 0 0 %d 100", PANZERFEST_KILLS));
+	trap_SendServerCommand(clientNum, va("panzerfest_bonus 0 0 0 0 0 0 %d 100 %d %d %d",
+		PANZERFEST_KILLS,
+		g_killStreakEnabled.integer,
+		g_survivalEnabled.integer,
+		g_panzerfestEnabled.integer));
 
 	// Check if panzerfest target died
 	G_PanzerfestCheckDeath(ent);
@@ -2172,6 +2210,12 @@ float G_SurvivalGetSpeedMultiplier(int clientNum)
 	gclient_t *cl;
 
 	if (clientNum < 0 || clientNum >= MAX_CLIENTS)
+	{
+		return 1.0f;
+	}
+
+	// ETMan: Check if survival mode is disabled via CVAR
+	if (!g_survivalEnabled.integer)
 	{
 		return 1.0f;
 	}
@@ -2200,6 +2244,12 @@ void G_SurvivalThink(gentity_t *ent)
 	gclient_t *cl;
 
 	if (!ent || !ent->client)
+	{
+		return;
+	}
+
+	// ETMan: Check if survival mode is disabled via CVAR
+	if (!g_survivalEnabled.integer)
 	{
 		return;
 	}
@@ -2285,7 +2335,7 @@ void G_SurvivalThink(gentity_t *ent)
 				fireRateMultiplier = (int)(level.panzerfest.currentMultiplier * 100);
 			}
 
-			trap_SendServerCommand(clientNum, va("panzerfest_bonus %d %d %d %d %d %d %d %d",
+			trap_SendServerCommand(clientNum, va("panzerfest_bonus %d %d %d %d %d %d %d %d %d %d %d",
 				cl->killStreakBonusLevel,
 				cl->survivalSpeedLevel,
 				panzerfestPhase,
@@ -2293,7 +2343,10 @@ void G_SurvivalThink(gentity_t *ent)
 				isTarget,
 				cl->killStreakCount,
 				PANZERFEST_KILLS,
-				fireRateMultiplier));
+				fireRateMultiplier,
+				g_killStreakEnabled.integer,
+				g_survivalEnabled.integer,
+				g_panzerfestEnabled.integer));
 		}
 	}
 }

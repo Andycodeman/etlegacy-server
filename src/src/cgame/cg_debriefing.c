@@ -3655,6 +3655,17 @@ void CG_Debriefing_ChatEditFinish(panel_button_t *button)
 	char buffer[MAX_EDITFIELD];
 	trap_Cvar_VariableStringBuffer(button->text, buffer, MAX_EDITFIELD);
 
+	// Check for /register command - opens ETMan register menu
+	if (!Q_stricmp(buffer, "/register") || !Q_stricmp(buffer, "register"))
+	{
+		trap_Cvar_Set(button->text, "");
+		button->data[2] = 0;
+		trap_Cvar_Set("etman_openregister", "1");
+		trap_UI_Popup(UIMENU_INGAME);
+		CG_Printf("^3ETMan: Opening registration menu...\n");
+		return;
+	}
+
 	Q_EscapeUnicodeInPlace(buffer, MAX_EDITFIELD);
 
 	switch (cgs.dbChatMode)

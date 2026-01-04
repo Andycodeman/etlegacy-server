@@ -1244,3 +1244,128 @@ void Cmd_TimeLeft(int slot, AdminPlayer *caller, const char *args) {
                        caller->name, minutes, seconds);
     Admin_SendAction(ADMIN_ACTION_RCON, 0, cmd);
 }
+
+/*
+ * !survival [on|off] - Toggle survival mode (speed bonus for staying alive)
+ */
+void Cmd_Survival(int slot, AdminPlayer *caller, const char *args) {
+    char cmd[64];
+    const char *state;
+
+    if (args && args[0]) {
+        /* Explicit on/off */
+        if (strcasecmp(args, "on") == 0 || strcmp(args, "1") == 0) {
+            state = "1";
+        } else if (strcasecmp(args, "off") == 0 || strcmp(args, "0") == 0) {
+            state = "0";
+        } else {
+            Admin_SendResponse(slot, "^1Usage: ^3!survival [on|off]");
+            return;
+        }
+    } else {
+        Admin_SendResponse(slot, "^3!survival ^7- Speed bonus every 30 seconds alive");
+        Admin_SendResponse(slot, "^7Usage: ^3!survival on ^7or ^3!survival off");
+        Admin_SendResponse(slot, "^7Check current: ^3/rcon g_survivalEnabled");
+        return;
+    }
+
+    snprintf(cmd, sizeof(cmd), "g_survivalEnabled %s", state);
+    Admin_SendResponse(255, "^3%s ^7set survival mode ^3%s",
+                       caller->name, strcmp(state, "1") == 0 ? "ON" : "OFF");
+    Admin_SendAction(ADMIN_ACTION_RCON, 0, cmd);
+}
+
+/*
+ * !killstreak [on|off] - Toggle kill streak mode (fire rate bonus per kills)
+ */
+void Cmd_KillStreak(int slot, AdminPlayer *caller, const char *args) {
+    char cmd[64];
+    const char *state;
+
+    if (args && args[0]) {
+        /* Explicit on/off */
+        if (strcasecmp(args, "on") == 0 || strcmp(args, "1") == 0) {
+            state = "1";
+        } else if (strcasecmp(args, "off") == 0 || strcmp(args, "0") == 0) {
+            state = "0";
+        } else {
+            Admin_SendResponse(slot, "^1Usage: ^3!killstreak [on|off]");
+            return;
+        }
+    } else {
+        Admin_SendResponse(slot, "^3!killstreak ^7- Fire rate bonus every 5 kills");
+        Admin_SendResponse(slot, "^7Usage: ^3!killstreak on ^7or ^3!killstreak off");
+        Admin_SendResponse(slot, "^7Check current: ^3/rcon g_killStreakEnabled");
+        return;
+    }
+
+    snprintf(cmd, sizeof(cmd), "g_killStreakEnabled %s", state);
+    Admin_SendResponse(255, "^3%s ^7set kill streak mode ^3%s",
+                       caller->name, strcmp(state, "1") == 0 ? "ON" : "OFF");
+    Admin_SendAction(ADMIN_ACTION_RCON, 0, cmd);
+}
+
+/*
+ * !panzerfest [on|off] - Toggle panzerfest mode (everyone vs you at 30 kills)
+ */
+void Cmd_Panzerfest(int slot, AdminPlayer *caller, const char *args) {
+    char cmd[64];
+    const char *state;
+
+    if (args && args[0]) {
+        /* Explicit on/off */
+        if (strcasecmp(args, "on") == 0 || strcmp(args, "1") == 0) {
+            state = "1";
+        } else if (strcasecmp(args, "off") == 0 || strcmp(args, "0") == 0) {
+            state = "0";
+        } else {
+            Admin_SendResponse(slot, "^1Usage: ^3!panzerfest [on|off]");
+            return;
+        }
+    } else {
+        Admin_SendResponse(slot, "^3!panzerfest ^7- Everyone vs you at 30 kills!");
+        Admin_SendResponse(slot, "^7Usage: ^3!panzerfest on ^7or ^3!panzerfest off");
+        Admin_SendResponse(slot, "^7Check current: ^3/rcon g_panzerfestEnabled");
+        return;
+    }
+
+    snprintf(cmd, sizeof(cmd), "g_panzerfestEnabled %s", state);
+    Admin_SendResponse(255, "^3%s ^7set panzerfest mode ^3%s",
+                       caller->name, strcmp(state, "1") == 0 ? "ON" : "OFF");
+    Admin_SendAction(ADMIN_ACTION_RCON, 0, cmd);
+}
+
+/*
+ * !crazy [on|off] - Toggle ALL crazy mode features (survival + killstreak + panzerfest)
+ */
+void Cmd_Crazy(int slot, AdminPlayer *caller, const char *args) {
+    char cmd[256];
+    const char *state;
+    const char *stateStr;
+
+    if (args && args[0]) {
+        /* Explicit on/off */
+        if (strcasecmp(args, "on") == 0 || strcmp(args, "1") == 0) {
+            state = "1";
+            stateStr = "ON";
+        } else if (strcasecmp(args, "off") == 0 || strcmp(args, "0") == 0) {
+            state = "0";
+            stateStr = "OFF";
+        } else {
+            Admin_SendResponse(slot, "^1Usage: ^3!crazy [on|off]");
+            return;
+        }
+    } else {
+        Admin_SendResponse(slot, "^3!crazy ^7- Toggle ALL modes at once");
+        Admin_SendResponse(slot, "^7Usage: ^3!crazy on ^7or ^3!crazy off");
+        Admin_SendResponse(slot, "^7Toggles: survival, killstreak, panzerfest");
+        return;
+    }
+
+    /* Set all three CVARs at once */
+    snprintf(cmd, sizeof(cmd), "g_survivalEnabled %s; g_killStreakEnabled %s; g_panzerfestEnabled %s",
+             state, state, state);
+    Admin_SendResponse(255, "^3%s ^7set ^6CRAZY MODE ^3%s ^7(survival + killstreak + panzerfest)",
+                       caller->name, stateStr);
+    Admin_SendAction(ADMIN_ACTION_RCON, 0, cmd);
+}

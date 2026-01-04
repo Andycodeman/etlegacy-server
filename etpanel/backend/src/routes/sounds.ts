@@ -2047,6 +2047,58 @@ export const soundsRoutes: FastifyPluginAsync = async (fastify) => {
     return reply.send(createReadStream(filePath));
   });
 
+  // Admin: Stream any sound file (regardless of public/private status)
+  fastify.get('/stream/admin/:soundFileId', { preHandler: requireAdmin }, async (request, reply) => {
+    const { soundFileId } = request.params as { soundFileId: string };
+    const fileId = parseInt(soundFileId, 10);
+
+    // Get sound file path - no public/private check, admin can stream anything
+    const [sound] = await db
+      .select({
+        filePath: schema.soundFiles.filePath,
+        fileSize: schema.soundFiles.fileSize,
+      })
+      .from(schema.soundFiles)
+      .where(eq(schema.soundFiles.id, fileId))
+      .limit(1);
+
+    if (!sound) {
+      return reply.status(404).send({ error: 'Sound not found' });
+    }
+
+    const filePath = sound.filePath.startsWith('/') ? sound.filePath : join(SOUNDS_DIR, sound.filePath);
+    if (!existsSync(filePath)) {
+      return reply.status(404).send({ error: 'Sound file not found on disk' });
+    }
+
+    // Determine content type based on extension
+    const contentType = filePath.toLowerCase().endsWith('.wav') ? 'audio/wav' : 'audio/mpeg';
+
+    const stats = statSync(filePath);
+    const range = request.headers.range;
+
+    if (range) {
+      const parts = range.replace(/bytes=/, '').split('-');
+      const start = parseInt(parts[0], 10);
+      const end = parts[1] ? parseInt(parts[1], 10) : stats.size - 1;
+      const chunkSize = end - start + 1;
+
+      reply.code(206);
+      reply.header('Content-Range', `bytes ${start}-${end}/${stats.size}`);
+      reply.header('Accept-Ranges', 'bytes');
+      reply.header('Content-Length', chunkSize);
+      reply.header('Content-Type', contentType);
+
+      return reply.send(createReadStream(filePath, { start, end }));
+    }
+
+    reply.header('Content-Length', stats.size);
+    reply.header('Content-Type', contentType);
+    reply.header('Accept-Ranges', 'bytes');
+
+    return reply.send(createReadStream(filePath));
+  });
+
   // ============================================================================
   // Admin Routes
   // ============================================================================
@@ -2209,6 +2261,158 @@ export const soundsRoutes: FastifyPluginAsync = async (fastify) => {
       .where(eq(schema.soundFiles.id, fileId));
 
     return { success: true, isPublic };
+  });
+
+  // Admin: List ALL sounds (for admin sound library view)
+  // Shows all sounds with their public/private status for admin management
+  fastify.get('/admin/private/library', { preHandler: requireAdmin }, async (request, reply) => {
+    const { page = '0', search, owner, visibility } = request.query as { page?: string; search?: string; owner?: string; visibility?: string };
+    const pageNum = parseInt(page, 10) || 0;
+    const limit = 100;
+    const offset = pageNum * limit;
+
+    // Build conditions for search, owner, and visibility filter
+    const searchCondition = search
+      ? `AND (us.alias ILIKE '%${search.replace(/'/g, "''")}%' OR sf.original_name ILIKE '%${search.replace(/'/g, "''")}%')`
+      : '';
+    const ownerCondition = owner
+      ? `AND us.guid = '${owner.replace(/'/g, "''")}'`
+      : '';
+    // Visibility filter: 'public', 'private', or 'all' (default)
+    let visibilityCondition = '';
+    if (visibility === 'public') {
+      visibilityCondition = 'AND sf.is_public = true';
+    } else if (visibility === 'private') {
+      visibilityCondition = 'AND sf.is_public = false';
+    }
+
+    // Get ALL sounds with their public status
+    const query = sql`
+      SELECT DISTINCT ON (sf.id)
+        sf.id as "soundFileId",
+        us.id as "userSoundId",
+        us.alias as "alias",
+        sf.original_name as "originalName",
+        sf.file_size as "fileSize",
+        sf.duration_seconds as "durationSeconds",
+        us.guid as "ownerGuid",
+        sf.created_at as "createdAt",
+        us.visibility as "visibility",
+        sf.is_public as "isPublic",
+        COALESCE(ps.display_name, ps.name, u.display_name, 'Unknown') as "ownerName"
+      FROM sound_files sf
+      INNER JOIN user_sounds us ON us.sound_file_id = sf.id
+      LEFT JOIN player_stats ps ON ps.guid = us.guid
+      LEFT JOIN users u ON u.guid = us.guid
+      WHERE 1=1
+      ${sql.raw(searchCondition)}
+      ${sql.raw(ownerCondition)}
+      ${sql.raw(visibilityCondition)}
+      ORDER BY sf.id, sf.created_at DESC
+    `;
+
+    const allSounds = await db.execute(query);
+
+    // Sort by createdAt DESC and apply pagination
+    const sortedSounds = (allSounds.rows as any[]).sort((a, b) =>
+      new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+    );
+
+    const totalCount = sortedSounds.length;
+    const paginatedSounds = sortedSounds.slice(offset, offset + limit);
+
+    // Get unique owners for filter dropdown (from all sounds)
+    const ownersQuery = sql`
+      SELECT DISTINCT us.guid, COALESCE(ps.display_name, ps.name, u.display_name, 'Unknown') as name
+      FROM user_sounds us
+      INNER JOIN sound_files sf ON sf.id = us.sound_file_id
+      LEFT JOIN player_stats ps ON ps.guid = us.guid
+      LEFT JOIN users u ON u.guid = us.guid
+      ORDER BY name
+    `;
+    const ownersResult = await db.execute(ownersQuery);
+    const owners = ownersResult.rows as { guid: string; name: string }[];
+
+    return {
+      sounds: paginatedSounds,
+      page: pageNum,
+      totalPages: Math.ceil(totalCount / limit),
+      totalCount,
+      owners,
+    };
+  });
+
+  // Admin: Toggle sound public/private status
+  fastify.patch('/admin/private/:soundFileId/visibility', { preHandler: requireAdmin }, async (request, reply) => {
+    const { soundFileId } = request.params as { soundFileId: string };
+    const { isPublic } = request.body as { isPublic: boolean };
+    const fileId = parseInt(soundFileId, 10);
+
+    if (typeof isPublic !== 'boolean') {
+      return reply.status(400).send({ error: 'isPublic must be a boolean' });
+    }
+
+    // Check sound exists
+    const [existing] = await db
+      .select({ id: schema.soundFiles.id })
+      .from(schema.soundFiles)
+      .where(eq(schema.soundFiles.id, fileId))
+      .limit(1);
+
+    if (!existing) {
+      return reply.status(404).send({ error: 'Sound not found' });
+    }
+
+    // Set sound visibility
+    await db
+      .update(schema.soundFiles)
+      .set({ isPublic })
+      .where(eq(schema.soundFiles.id, fileId));
+
+    return { success: true, isPublic };
+  });
+
+  // Admin: Delete a private sound file entirely (removes from all users)
+  fastify.delete('/admin/private/:soundFileId', { preHandler: requireAdmin }, async (request, reply) => {
+    const { soundFileId } = request.params as { soundFileId: string };
+    const fileId = parseInt(soundFileId, 10);
+
+    // Get sound file info
+    const [soundFile] = await db
+      .select({
+        id: schema.soundFiles.id,
+        filePath: schema.soundFiles.filePath,
+      })
+      .from(schema.soundFiles)
+      .where(eq(schema.soundFiles.id, fileId))
+      .limit(1);
+
+    if (!soundFile) {
+      return reply.status(404).send({ error: 'Sound not found' });
+    }
+
+    // Delete all user_sounds references first
+    await db
+      .delete(schema.userSounds)
+      .where(eq(schema.userSounds.soundFileId, fileId));
+
+    // Delete the sound file record
+    await db
+      .delete(schema.soundFiles)
+      .where(eq(schema.soundFiles.id, fileId));
+
+    // Delete the actual file from disk
+    try {
+      const fullPath = join(SOUNDS_DIR, soundFile.filePath);
+      if (existsSync(fullPath)) {
+        unlinkSync(fullPath);
+      }
+    } catch (err) {
+      // Log but don't fail - file might already be gone
+      console.error('Failed to delete sound file from disk:', err);
+    }
+
+    return { success: true, message: 'Sound deleted from all users and disk' };
   });
 
   // ============================================================================

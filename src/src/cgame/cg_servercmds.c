@@ -1075,8 +1075,19 @@ static void CG_ConfigStringModified(void)
 		Q_strncpyz(cgs.voteString, CG_ConfigString(num), sizeof(cgs.voteString));
 		break;
 	case CS_INTERMISSION:
+	{
+		qboolean wasIntermission = cg.intermissionStarted;
 		cg.intermissionStarted = (qboolean)(atoi(CG_ConfigString(num)));
+
+		// Show registration reminder when intermission starts
+		if (!wasIntermission && cg.intermissionStarted)
+		{
+			CG_AddToTeamChat("^3=== ETMAN CUSTOM SOUNDS ===", -1);
+			CG_AddToTeamChat("^7Upload & play your own sounds! Type ^2/register", -1);
+			CG_AddToTeamChat("^7or open ^5Limbo > ETMan > Register", -1);
+		}
 		break;
+	}
 	case CS_SCREENFADE:
 		CG_ParseScreenFade();
 		break;

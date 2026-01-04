@@ -90,7 +90,7 @@ menuDef {
 	itemDef {
 		name		"voiceinfo3"
 		rect		$evalfloat(LEFT_X+10) $evalfloat(PANEL_Y+72) $evalfloat(LEFT_WIDTH-20) 10
-		text		"^7Rebind in ESC > Options > Controls > Chat"
+		text		"^7Settings: ESC > Options > Voice"
 		textfont	UI_FONT_COURBD_21
 		textscale	.16
 		forecolor	0.6 0.6 0.6 1
@@ -98,10 +98,130 @@ menuDef {
 		decoration
 	}
 
+	// ETMan Sound Menu Section
+	itemDef {
+		name		"soundheader"
+		rect		$evalfloat(LEFT_X+10) $evalfloat(PANEL_Y+90) $evalfloat(LEFT_WIDTH-20) 12
+		text		"^6>>> ETMAN SOUND MENU <<<"
+		textfont	UI_FONT_ARIBLK_16
+		textscale	.22
+		textalign	ITEM_ALIGN_CENTER
+		textalignx	$evalfloat((LEFT_WIDTH-20)/2)
+		forecolor	1 0.5 1 1
+		visible		1
+		decoration
+	}
+	itemDef {
+		name		"soundinfo1"
+		rect		$evalfloat(LEFT_X+10) $evalfloat(PANEL_Y+106) $evalfloat(LEFT_WIDTH-20) 10
+		text		"^7Access via ^3ESC > ETMan Menu"
+		textfont	UI_FONT_COURBD_21
+		textscale	.18
+		forecolor	0.8 0.8 0.8 1
+		visible		1
+		decoration
+	}
+	itemDef {
+		name		"soundinfo2"
+		rect		$evalfloat(LEFT_X+10) $evalfloat(PANEL_Y+118) $evalfloat(LEFT_WIDTH-20) 10
+		text		"^7- Server-wide sounds for everyone"
+		textfont	UI_FONT_COURBD_21
+		textscale	.17
+		forecolor	0.7 0.7 0.7 1
+		visible		1
+		decoration
+	}
+	itemDef {
+		name		"soundinfo3"
+		rect		$evalfloat(LEFT_X+10) $evalfloat(PANEL_Y+130) $evalfloat(LEFT_WIDTH-20) 10
+		text		"^7- Your custom uploaded sounds"
+		textfont	UI_FONT_COURBD_21
+		textscale	.17
+		forecolor	0.7 0.7 0.7 1
+		visible		1
+		decoration
+	}
+	itemDef {
+		name		"soundinfo4"
+		rect		$evalfloat(LEFT_X+10) $evalfloat(PANEL_Y+142) $evalfloat(LEFT_WIDTH-20) 10
+		text		"^7Type ^3/register ^7in chat to link account"
+		textfont	UI_FONT_COURBD_21
+		textscale	.17
+		forecolor	0.7 0.7 0.7 1
+		visible		1
+		decoration
+	}
+
+	// ETPanel Section
+	itemDef {
+		name		"panelheader"
+		rect		$evalfloat(LEFT_X+10) $evalfloat(PANEL_Y+160) $evalfloat(LEFT_WIDTH-20) 12
+		text		"^5>>> ETPANEL WEB APP <<<"
+		textfont	UI_FONT_ARIBLK_16
+		textscale	.22
+		textalign	ITEM_ALIGN_CENTER
+		textalignx	$evalfloat((LEFT_WIDTH-20)/2)
+		forecolor	0.4 0.8 1 1
+		visible		1
+		decoration
+	}
+	itemDef {
+		name		"panelurl"
+		rect		$evalfloat(LEFT_X+10) $evalfloat(PANEL_Y+176) $evalfloat(LEFT_WIDTH-20) 10
+		text		"^3etpanel.etman.dev"
+		textfont	UI_FONT_COURBD_21
+		textscale	.19
+		textalign	ITEM_ALIGN_CENTER
+		textalignx	$evalfloat((LEFT_WIDTH-20)/2)
+		forecolor	1 0.8 0.2 1
+		visible		1
+		decoration
+	}
+	itemDef {
+		name		"panelinfo1"
+		rect		$evalfloat(LEFT_X+10) $evalfloat(PANEL_Y+190) $evalfloat(LEFT_WIDTH-20) 10
+		text		"^7- Upload & create custom MP3 clips"
+		textfont	UI_FONT_COURBD_21
+		textscale	.17
+		forecolor	0.7 0.7 0.7 1
+		visible		1
+		decoration
+	}
+	itemDef {
+		name		"panelinfo2"
+		rect		$evalfloat(LEFT_X+10) $evalfloat(PANEL_Y+202) $evalfloat(LEFT_WIDTH-20) 10
+		text		"^7- Share sounds publicly with others"
+		textfont	UI_FONT_COURBD_21
+		textscale	.17
+		forecolor	0.7 0.7 0.7 1
+		visible		1
+		decoration
+	}
+	itemDef {
+		name		"panelinfo3"
+		rect		$evalfloat(LEFT_X+10) $evalfloat(PANEL_Y+214) $evalfloat(LEFT_WIDTH-20) 10
+		text		"^7- See your sound list update live in-game"
+		textfont	UI_FONT_COURBD_21
+		textscale	.17
+		forecolor	0.7 0.7 0.7 1
+		visible		1
+		decoration
+	}
+	itemDef {
+		name		"panelinfo4"
+		rect		$evalfloat(LEFT_X+10) $evalfloat(PANEL_Y+226) $evalfloat(LEFT_WIDTH-20) 10
+		text		"^7- Create playlists & custom vsay menus"
+		textfont	UI_FONT_COURBD_21
+		textscale	.17
+		forecolor	0.7 0.7 0.7 1
+		visible		1
+		decoration
+	}
+
 	// Rocket Modes Section
 	itemDef {
 		name		"rocketheader"
-		rect		$evalfloat(LEFT_X+10) $evalfloat(PANEL_Y+92) $evalfloat(LEFT_WIDTH-20) 12
+		rect		$evalfloat(LEFT_X+10) $evalfloat(PANEL_Y+244) $evalfloat(LEFT_WIDTH-20) 12
 		text		"^5>>> CUSTOM ROCKET MODES <<<"
 		textfont	UI_FONT_ARIBLK_16
 		textscale	.22
@@ -113,7 +233,7 @@ menuDef {
 	}
 	itemDef {
 		name		"rocketinfo1"
-		rect		$evalfloat(LEFT_X+10) $evalfloat(PANEL_Y+108) $evalfloat(LEFT_WIDTH-20) 10
+		rect		$evalfloat(LEFT_X+10) $evalfloat(PANEL_Y+260) $evalfloat(LEFT_WIDTH-20) 10
 		text		"^7Select Panzer again to cycle modes:"
 		textfont	UI_FONT_COURBD_21
 		textscale	.17
@@ -123,38 +243,8 @@ menuDef {
 	}
 	itemDef {
 		name		"rocketinfo2"
-		rect		$evalfloat(LEFT_X+10) $evalfloat(PANEL_Y+122) $evalfloat(LEFT_WIDTH-20) 10
-		text		"^3Normal ^7- Standard rockets"
-		textfont	UI_FONT_COURBD_21
-		textscale	.17
-		forecolor	0.7 0.7 0.7 1
-		visible		1
-		decoration
-	}
-	itemDef {
-		name		"rocketinfo3"
-		rect		$evalfloat(LEFT_X+10) $evalfloat(PANEL_Y+134) $evalfloat(LEFT_WIDTH-20) 10
-		text		"^3Homing ^7- Rockets track enemies"
-		textfont	UI_FONT_COURBD_21
-		textscale	.17
-		forecolor	0.7 0.7 0.7 1
-		visible		1
-		decoration
-	}
-	itemDef {
-		name		"rocketinfo4"
-		rect		$evalfloat(LEFT_X+10) $evalfloat(PANEL_Y+146) $evalfloat(LEFT_WIDTH-20) 10
-		text		"^3Freeze ^7- Freeze enemies on hit"
-		textfont	UI_FONT_COURBD_21
-		textscale	.17
-		forecolor	0.7 0.7 0.7 1
-		visible		1
-		decoration
-	}
-	itemDef {
-		name		"rocketinfo5"
-		rect		$evalfloat(LEFT_X+10) $evalfloat(PANEL_Y+158) $evalfloat(LEFT_WIDTH-20) 10
-		text		"^3Freeze+Homing ^7- Both combined!"
+		rect		$evalfloat(LEFT_X+10) $evalfloat(PANEL_Y+272) $evalfloat(LEFT_WIDTH-20) 10
+		text		"^3Normal ^7| ^3Homing ^7| ^3Freeze ^7| ^3Freeze+Homing"
 		textfont	UI_FONT_COURBD_21
 		textscale	.17
 		forecolor	0.7 0.7 0.7 1
@@ -165,7 +255,7 @@ menuDef {
 	// Survival/Panzerfest Section
 	itemDef {
 		name		"survivalheader"
-		rect		$evalfloat(LEFT_X+10) $evalfloat(PANEL_Y+178) $evalfloat(LEFT_WIDTH-20) 12
+		rect		$evalfloat(LEFT_X+10) $evalfloat(PANEL_Y+290) $evalfloat(LEFT_WIDTH-20) 12
 		text		"^6>>> SURVIVAL & PANZERFEST <<<"
 		textfont	UI_FONT_ARIBLK_16
 		textscale	.22
@@ -177,50 +267,18 @@ menuDef {
 	}
 	itemDef {
 		name		"survivalinfo1"
-		rect		$evalfloat(LEFT_X+10) $evalfloat(PANEL_Y+194) $evalfloat(LEFT_WIDTH-20) 10
-		text		"^7Kill enemies to earn ^3POWER-UPS^7:"
+		rect		$evalfloat(LEFT_X+10) $evalfloat(PANEL_Y+306) $evalfloat(LEFT_WIDTH-20) 10
+		text		"^2+5 Kills ^7= ^3Firing Rate ^7| ^2+30s Alive ^7= ^3Speed"
 		textfont	UI_FONT_COURBD_21
 		textscale	.17
-		forecolor	0.8 0.8 0.8 1
+		forecolor	0.7 0.7 0.7 1
 		visible		1
 		decoration
 	}
 	itemDef {
 		name		"survivalinfo2"
-		rect		$evalfloat(LEFT_X+10) $evalfloat(PANEL_Y+208) $evalfloat(LEFT_WIDTH-20) 10
-		text		"^2+5 Kills ^7= Level up ^3FIRING RATE"
-		textfont	UI_FONT_COURBD_21
-		textscale	.17
-		forecolor	0.7 0.7 0.7 1
-		visible		1
-		decoration
-	}
-	itemDef {
-		name		"survivalinfo3"
-		rect		$evalfloat(LEFT_X+10) $evalfloat(PANEL_Y+222) $evalfloat(LEFT_WIDTH-20) 10
-		text		"^2+30 Sec Alive ^7= Level up ^3MOVEMENT SPEED"
-		textfont	UI_FONT_COURBD_21
-		textscale	.17
-		forecolor	0.7 0.7 0.7 1
-		visible		1
-		decoration
-	}
-	itemDef {
-		name		"survivalinfo4"
-		rect		$evalfloat(LEFT_X+10) $evalfloat(PANEL_Y+240) $evalfloat(LEFT_WIDTH-20) 10
-		text		"^6>>> PANZERFEST MODE <<<"
-		textfont	UI_FONT_COURBD_21
-		textscale	.18
-		textalign	ITEM_ALIGN_CENTER
-		textalignx	$evalfloat((LEFT_WIDTH-20)/2)
-		forecolor	1 0.6 0.2 1
-		visible		1
-		decoration
-	}
-	itemDef {
-		name		"survivalinfo5"
-		rect		$evalfloat(LEFT_X+10) $evalfloat(PANEL_Y+256) $evalfloat(LEFT_WIDTH-20) 10
-		text		"^330 KILLS ^7= PANZERFEST ACTIVATED!"
+		rect		$evalfloat(LEFT_X+10) $evalfloat(PANEL_Y+318) $evalfloat(LEFT_WIDTH-20) 10
+		text		"^330 KILLS ^7= PANZERFEST! (You vs everyone)"
 		textfont	UI_FONT_COURBD_21
 		textscale	.17
 		forecolor	0.8 0.8 0.8 1
@@ -228,18 +286,8 @@ menuDef {
 		decoration
 	}
 	itemDef {
-		name		"survivalinfo6"
-		rect		$evalfloat(LEFT_X+10) $evalfloat(PANEL_Y+270) $evalfloat(LEFT_WIDTH-20) 10
-		text		"^7You vs EVERYONE - panzer only!"
-		textfont	UI_FONT_COURBD_21
-		textscale	.17
-		forecolor	0.7 0.7 0.7 1
-		visible		1
-		decoration
-	}
-	itemDef {
-		name		"survivalinfo7"
-		rect		$evalfloat(LEFT_X+10) $evalfloat(PANEL_Y+286) $evalfloat(LEFT_WIDTH-20) 10
+		name		"survivalinfo3"
+		rect		$evalfloat(LEFT_X+10) $evalfloat(PANEL_Y+330) $evalfloat(LEFT_WIDTH-20) 10
 		text		"^1Die = lose all power-ups!"
 		textfont	UI_FONT_COURBD_21
 		textscale	.17
@@ -251,8 +299,8 @@ menuDef {
 	// Gameplay Features Section
 	itemDef {
 		name		"gameplayheader"
-		rect		$evalfloat(LEFT_X+10) $evalfloat(PANEL_Y+306) $evalfloat(LEFT_WIDTH-20) 12
-		text		"^3>>> GAMEPLAY FEATURES <<<"
+		rect		$evalfloat(LEFT_X+10) $evalfloat(PANEL_Y+348) $evalfloat(LEFT_WIDTH-20) 12
+		text		"^3>>> GAMEPLAY <<<"
 		textfont	UI_FONT_ARIBLK_16
 		textscale	.22
 		textalign	ITEM_ALIGN_CENTER
@@ -263,28 +311,8 @@ menuDef {
 	}
 	itemDef {
 		name		"gameplay1"
-		rect		$evalfloat(LEFT_X+10) $evalfloat(PANEL_Y+322) $evalfloat(LEFT_WIDTH-20) 10
-		text		"^7- Double jump enabled"
-		textfont	UI_FONT_COURBD_21
-		textscale	.17
-		forecolor	0.7 0.7 0.7 1
-		visible		1
-		decoration
-	}
-	itemDef {
-		name		"gameplay2"
-		rect		$evalfloat(LEFT_X+10) $evalfloat(PANEL_Y+334) $evalfloat(LEFT_WIDTH-20) 10
-		text		"^7- Low gravity, high knockback"
-		textfont	UI_FONT_COURBD_21
-		textscale	.17
-		forecolor	0.7 0.7 0.7 1
-		visible		1
-		decoration
-	}
-	itemDef {
-		name		"gameplay3"
-		rect		$evalfloat(LEFT_X+10) $evalfloat(PANEL_Y+346) $evalfloat(LEFT_WIDTH-20) 10
-		text		"^7- Fast weapon switch"
+		rect		$evalfloat(LEFT_X+10) $evalfloat(PANEL_Y+364) $evalfloat(LEFT_WIDTH-20) 10
+		text		"^7Double jump | Low gravity | High knockback"
 		textfont	UI_FONT_COURBD_21
 		textscale	.17
 		forecolor	0.7 0.7 0.7 1
@@ -292,10 +320,10 @@ menuDef {
 		decoration
 	}
 
-	// Website/Discord
+	// Footer
 	itemDef {
 		name		"footer"
-		rect		$evalfloat(LEFT_X+10) $evalfloat(PANEL_Y+370) $evalfloat(LEFT_WIDTH-20) 10
+		rect		$evalfloat(LEFT_X+10) $evalfloat(PANEL_Y+382) $evalfloat(LEFT_WIDTH-20) 10
 		text		"^7Questions? Ask in voice chat!"
 		textfont	UI_FONT_COURBD_21
 		textscale	.18

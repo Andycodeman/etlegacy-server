@@ -1651,6 +1651,11 @@ typedef struct
 	int panzerfestKillCount;                          ///< Current kill count toward panzerfest
 	int panzerfestKillsNeeded;                        ///< Kills needed to trigger panzerfest (default 30)
 	int fireRateMultiplier;                           ///< Fire rate multiplier (100 = normal, 200 = 2x faster)
+
+	// ETMan: Mode enabled flags (sent from server, controls HUD visibility)
+	qboolean killStreakEnabled;                       ///< g_killStreakEnabled CVAR value
+	qboolean survivalEnabled;                         ///< g_survivalEnabled CVAR value
+	qboolean panzerfestEnabled;                       ///< g_panzerfestEnabled CVAR value
 } cg_t;
 
 #define MAX_LOCKER_DEBRIS 5

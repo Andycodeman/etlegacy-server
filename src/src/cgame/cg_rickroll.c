@@ -1249,7 +1249,7 @@ void CG_DrawRocketMode(void) {
 
 /**
  * @brief Handle panzerfest_bonus command from server
- * Format: panzerfest_bonus <killStreakLevel> <survivalLevel> <panzerfestPhase> <timeLeft> <isTarget> <killCount> <killsNeeded> <fireRateMultiplier>
+ * Format: panzerfest_bonus <killStreakLevel> <survivalLevel> <panzerfestPhase> <timeLeft> <isTarget> <killCount> <killsNeeded> <fireRateMultiplier> <killStreakEnabled> <survivalEnabled> <panzerfestEnabled>
  */
 void CG_PanzerfestBonus_Update(void) {
 	int oldFireRate = cg.fireRateMultiplier;
@@ -1263,6 +1263,11 @@ void CG_PanzerfestBonus_Update(void) {
 	cg.panzerfestKillsNeeded = atoi(CG_Argv(7));
 	cg.fireRateMultiplier = atoi(CG_Argv(8));
 
+	// ETMan: Mode enabled flags (new in Jan 2026)
+	cg.killStreakEnabled = atoi(CG_Argv(9)) ? qtrue : qfalse;
+	cg.survivalEnabled = atoi(CG_Argv(10)) ? qtrue : qfalse;
+	cg.panzerfestEnabled = atoi(CG_Argv(11)) ? qtrue : qfalse;
+
 	// Default kills needed if not sent (backwards compatibility)
 	if (cg.panzerfestKillsNeeded <= 0) {
 		cg.panzerfestKillsNeeded = 30;
@@ -1271,6 +1276,14 @@ void CG_PanzerfestBonus_Update(void) {
 	// Default fire rate if not sent (backwards compatibility)
 	if (cg.fireRateMultiplier <= 0) {
 		cg.fireRateMultiplier = 100;
+	}
+
+	// Default enabled flags to true for backwards compatibility with old servers
+	// (If argc < 12, the atoi returns 0, so we default to enabled)
+	if (trap_Argc() < 12) {
+		cg.killStreakEnabled = qtrue;
+		cg.survivalEnabled = qtrue;
+		cg.panzerfestEnabled = qtrue;
 	}
 
 	// ETMan: Fire rate is now handled server-authoritatively.
@@ -1302,6 +1315,11 @@ void CG_DrawPanzerfestBonus(void) {
 		return;
 	}
 
+	// Don't draw anything if ALL modes are disabled
+	if (!cg.killStreakEnabled && !cg.survivalEnabled && !cg.panzerfestEnabled) {
+		return;
+	}
+
 	// Position in bottom-right, just above the charge/stamina bar
 	// Bar fits 6 segments perfectly: 6 segments * 10px + 5 gaps * 2px + 2px border = 72px
 	// Layout from bottom to top: Kill Streak bar, Survival bar, then Panzerfest text
@@ -1320,7 +1338,8 @@ void CG_DrawPanzerfestBonus(void) {
 	float textX;  // For multiplier text on left
 
 	// === KILL STREAK (Fire Rate) Bar - BOTTOM ===
-	if (cg.killStreakLevel > 0 || cg.panzerfestPhase > 0) {
+	// Only show if killstreak is enabled AND (has level OR in panzerfest)
+	if (cg.killStreakEnabled && (cg.killStreakLevel > 0 || cg.panzerfestPhase > 0)) {
 		y = baseY;
 
 		// Bar first
@@ -1361,7 +1380,8 @@ void CG_DrawPanzerfestBonus(void) {
 	}
 
 	// === SURVIVAL (Speed) Bar - ABOVE KILL STREAK ===
-	if (cg.survivalLevel > 0 || cg.panzerfestPhase > 0) {
+	// Only show if survival is enabled AND (has level OR in panzerfest)
+	if (cg.survivalEnabled && (cg.survivalLevel > 0 || cg.panzerfestPhase > 0)) {
 		y = baseY - barSpacing;
 
 		// Bar first
@@ -1406,7 +1426,8 @@ void CG_DrawPanzerfestBonus(void) {
 	y = baseY - (barSpacing * 2) + 5.0f;
 
 	// === PANZERFEST Indicator ===
-	if (cg.panzerfestPhase > 0) {
+	// Only show if panzerfest is enabled (and active)
+	if (cg.panzerfestEnabled && cg.panzerfestPhase > 0) {
 		const char *phaseText;
 		int mins, secs;
 
@@ -1471,7 +1492,8 @@ void CG_DrawPanzerfestBonus(void) {
 	}
 
 	// === PANZERFEST PROGRESS (always show kill count if > 0 and not in panzerfest) ===
-	if (cg.panzerfestKillCount > 0 && cg.panzerfestPhase == 0 && cg.panzerfestKillsNeeded > 0) {
+	// Only show if panzerfest is enabled
+	if (cg.panzerfestEnabled && cg.panzerfestKillCount > 0 && cg.panzerfestPhase == 0 && cg.panzerfestKillsNeeded > 0) {
 		vec4_t progressColor;
 		float percentage = (float)cg.panzerfestKillCount / (float)cg.panzerfestKillsNeeded;
 

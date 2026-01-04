@@ -5,10 +5,11 @@ const API_BASE = import.meta.env.PROD ? '/api' : 'http://localhost:3000/api';
 interface AudioPlayerProps {
   alias?: string; // For user's own sounds
   soundFileId?: number; // For public sounds
+  adminMode?: boolean; // For admin to stream any sound (private or public)
   onEnd?: () => void;
 }
 
-export default function AudioPlayer({ alias, soundFileId, onEnd }: AudioPlayerProps) {
+export default function AudioPlayer({ alias, soundFileId, adminMode, onEnd }: AudioPlayerProps) {
   const audioRef = useRef<HTMLAudioElement>(new Audio());
   const blobUrlRef = useRef<string | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
@@ -23,6 +24,10 @@ export default function AudioPlayer({ alias, soundFileId, onEnd }: AudioPlayerPr
     if (alias) {
       return `${API_BASE}/sounds/stream/${encodeURIComponent(alias)}`;
     } else if (soundFileId) {
+      // Use admin endpoint for private sounds, public endpoint otherwise
+      if (adminMode) {
+        return `${API_BASE}/sounds/stream/admin/${soundFileId}`;
+      }
       return `${API_BASE}/sounds/stream/public/${soundFileId}`;
     }
     return null;

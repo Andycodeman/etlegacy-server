@@ -271,6 +271,11 @@ extern vmCvar_t skill_lightweapons;
 
 extern vmCvar_t g_misc;
 
+// ETMan: Crazy mode feature toggles (can be changed at runtime via !commands)
+extern vmCvar_t g_killStreakEnabled;    // Kill streak fire rate bonus (0=off, 1=on)
+extern vmCvar_t g_survivalEnabled;      // Survival speed bonus (0=off, 1=on)
+extern vmCvar_t g_panzerfestEnabled;    // Panzerfest mode at 30 kills (0=off, 1=on)
+
 // ETMan: Crazy mode weapon CVARs
 extern vmCvar_t g_adrenalineAdd;
 extern vmCvar_t g_adrenalineMax;

@@ -323,5 +323,9 @@ void Cmd_Up(int slot, AdminPlayer *caller, const char *args);
 void Cmd_KickBots(int slot, AdminPlayer *caller, const char *args);
 void Cmd_PutBots(int slot, AdminPlayer *caller, const char *args);
 void Cmd_TimeLeft(int slot, AdminPlayer *caller, const char *args);
+void Cmd_Survival(int slot, AdminPlayer *caller, const char *args);
+void Cmd_KillStreak(int slot, AdminPlayer *caller, const char *args);
+void Cmd_Panzerfest(int slot, AdminPlayer *caller, const char *args);
+void Cmd_Crazy(int slot, AdminPlayer *caller, const char *args);
 
 #endif /* ETMAN_ADMIN_H */

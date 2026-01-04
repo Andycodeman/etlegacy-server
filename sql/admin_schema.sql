@@ -69,6 +69,14 @@ INSERT INTO admin_commands (name, description, usage, default_level) VALUES
     ('setlevel', 'Set player admin level', '!setlevel <player> <level>', 4),
     ('shuffle', 'Shuffle teams', '!shuffle', 4),
     ('timeleft', 'Set remaining map time', '!timeleft <mm:ss> or <seconds>', 4),
+    ('kickbots', 'Remove all bots from server', '!kickbots', 3),
+    ('putbots', 'Add bots to server', '!putbots [count]', 3),
+
+    -- ETMan Crazy Mode toggles (Level 3)
+    ('survival', 'Toggle survival mode (speed bonus)', '!survival <on|off>', 3),
+    ('killstreak', 'Toggle kill streak mode (fire rate bonus)', '!killstreak <on|off>', 3),
+    ('panzerfest', 'Toggle panzerfest mode (30 kills)', '!panzerfest <on|off>', 3),
+    ('crazy', 'Toggle ALL crazy modes at once', '!crazy <on|off>', 3),
 
     -- Level 5 (Owner) commands
     ('rcon', 'Execute rcon command', '!rcon <command>', 5),
